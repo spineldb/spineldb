@@ -53,3 +53,7 @@ Now, we use `CACHE.PROXY` to execute and cache the `ZREVRANGE` command.
 *   **After 60 seconds**: The cache will expire. The next call will again execute the original command and store the result back in the cache.
 
 With `CACHE.PROXY`, you get the benefits of high-performance caching without having to write complex `if/else` logic in your application code.
+
+---
+
+➡️ **Next Chapter: [4c. Tag-Based Invalidation](./04c-tag-based-invalidation.md)**

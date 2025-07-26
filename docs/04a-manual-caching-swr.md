@@ -14,9 +14,6 @@ In a traditional cache, an item is either fresh (valid) or expired (invalid). Sp
 2.  **Stale (`SWR`):** The "Stale-While-Revalidate" period. After the TTL expires, the content enters the SWR phase. During this time, SpinelDB will still serve the stale (expired) content to the user immediately, but it will *simultaneously* trigger a background, asynchronous request to the origin to fetch a fresh version. This means the user gets a fast response, and the cache updates itself without making the user wait.
 3.  **Grace (`GRACE`):** The "Grace Period". If the SWR period also expires and the origin server is down or responding with an error, the cache enters the grace period. During this final window, SpinelDB will *continue* to serve the stale content to prevent users from seeing an error. It's a last line of defense for maximum availability.
 
-![Cache Lifecycle Diagram](https://your-image-host.com/cache-lifecycle.png)
-*(Self-note: You'll want to create and host a simple diagram illustrating TTL -> SWR -> GRACE)*
-
 ---
 
 ## 1. Storing Items with `CACHE.SET`

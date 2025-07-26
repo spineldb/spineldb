@@ -52,3 +52,7 @@ Now, if user `123` updates their profile, you can invalidate all related cache e
 This command will invalidate the cached results for both `GET user:123` and `LGET orders:user:123`, ensuring that the next time they are requested, fresh data will be fetched.
 
 Tag-based invalidation simplifies cache management and reduces the risk of stale data.
+
+---
+
+➡️ **Next Chapter: [4d. On-Disk Caching](./04d-on-disk-caching.md)**
