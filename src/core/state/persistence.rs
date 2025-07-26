@@ -28,6 +28,8 @@ pub struct PersistenceState {
     pub aof_rewrite_state: Arc<Mutex<AofRewriteState>>,
     /// A handle to the spawned AOF rewrite task, if any.
     pub aof_rewrite_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// A handle to the spawned BGSAVE task, if any.
+    pub bgsave_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     /// A counter for the number of keys dirtied since the last save.
     pub dirty_keys_counter: Arc<AtomicU64>,
     /// The timestamp of the last successful SPLDB save.
@@ -58,6 +60,7 @@ impl PersistenceState {
             is_saving_spldb: Arc::new(AtomicBool::new(false)),
             aof_rewrite_state: Arc::new(Mutex::new(AofRewriteState::default())),
             aof_rewrite_handle: Arc::new(Mutex::new(None)),
+            bgsave_handle: Arc::new(Mutex::new(None)),
             dirty_keys_counter: Arc::new(AtomicU64::new(0)),
             last_save_success_time: Arc::new(Mutex::new(None)),
             last_save_failure_time: Arc::new(Mutex::new(None)),

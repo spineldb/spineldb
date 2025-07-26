@@ -11,6 +11,7 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::sync::atomic::Ordering;
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Default)]
 pub struct BgSave;
@@ -26,8 +27,6 @@ impl ExecutableCommand for BgSave {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        // SpinelDB does not allow BGSAVE if BGREWRITEAOF is in progress.
-        // This is a safety measure to avoid excessive disk I/O contention.
         if ctx
             .state
             .persistence
@@ -41,8 +40,6 @@ impl ExecutableCommand for BgSave {
             ));
         }
 
-        // Atomically check and set the `is_saving_spldb` flag to prevent concurrent saves.
-        // `compare_exchange` ensures that only one task can start the save process.
         if ctx
             .state
             .persistence
@@ -55,9 +52,8 @@ impl ExecutableCommand for BgSave {
             ));
         }
 
-        // Spawn the save task in the background to avoid blocking the client.
         let state_clone = ctx.state.clone();
-        tokio::spawn(async move {
+        let handle: JoinHandle<()> = tokio::spawn(async move {
             if let Err(e) =
                 crate::core::persistence::spldb_saver::SpldbSaverTask::perform_save_logic(
                     &state_clone,
@@ -68,12 +64,14 @@ impl ExecutableCommand for BgSave {
             } else {
                 tracing::info!("Background SPLDB save completed successfully.");
             }
-            // Ensure the flag is reset regardless of the outcome.
             state_clone
                 .persistence
                 .is_saving_spldb
                 .store(false, Ordering::SeqCst);
+            *state_clone.persistence.bgsave_handle.lock().await = None;
         });
+
+        *ctx.state.persistence.bgsave_handle.lock().await = Some(handle);
 
         Ok((
             RespValue::SimpleString("Background saving started".to_string()),

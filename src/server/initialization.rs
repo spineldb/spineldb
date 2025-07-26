@@ -7,11 +7,13 @@ use super::context::ServerContext;
 use crate::config::Config;
 use crate::core::persistence::{AofLoader, spldb::SpldbLoader};
 use crate::core::state::ServerState;
-use crate::core::tasks::cache_gc::garbage_collect_on_disk_cache;
+use crate::core::tasks::cache_gc::garbage_collect_from_manifest;
 use anyhow::{Result, anyhow};
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
+use tokio::fs::OpenOptions;
+use tokio::io::BufWriter;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
@@ -29,9 +31,11 @@ pub async fn setup(
 
     let acceptor = setup_tls(&config).await?;
 
-    let server_init = ServerState::initialize(config, log_reload_handle)?;
+    let server_init = ServerState::initialize(config.clone(), log_reload_handle)?;
     let server_state = server_init.state.clone();
     info!("Server state initialized.");
+
+    setup_cache_manifest(&server_state).await?;
 
     if server_state.config.lock().await.cluster.enabled {
         info!(
@@ -55,8 +59,7 @@ pub async fn setup(
 
     load_persistence_data(&server_state).await?;
 
-    // Garbage collect any orphaned on-disk cache files after loading state.
-    if let Err(e) = garbage_collect_on_disk_cache(&server_state).await {
+    if let Err(e) = garbage_collect_from_manifest(&server_state).await {
         warn!(
             "On-disk cache garbage collection failed: {}. This may lead to wasted disk space.",
             e
@@ -79,6 +82,26 @@ pub async fn setup(
         background_tasks: JoinSet::new(),
         acceptor,
     })
+}
+
+async fn setup_cache_manifest(server_state: &Arc<ServerState>) -> Result<()> {
+    let cache_path_str = server_state.config.lock().await.cache.on_disk_path.clone();
+    if !cache_path_str.is_empty() {
+        let cache_path = std::path::Path::new(&cache_path_str);
+        tokio::fs::create_dir_all(cache_path).await?;
+        let manifest_path = cache_path.join("spineldb-cache.manifest");
+
+        let manifest_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(manifest_path)
+            .await?;
+
+        let writer = BufWriter::new(manifest_file);
+        *server_state.cache.manifest_writer.lock().await = Some(writer);
+        info!("On-disk cache manifest is ready.");
+    }
+    Ok(())
 }
 
 /// Sets up the TLS acceptor if TLS is enabled in the configuration.
@@ -134,7 +157,6 @@ fn log_startup_info(config: &Config) {
 async fn load_persistence_data(server_state: &Arc<ServerState>) -> Result<()> {
     let config = server_state.config.lock().await;
 
-    // Sanity check for leftover temporary AOF files from a previous crashed rewrite.
     let aof_path_str = &config.persistence.aof_path;
     let aof_path = std::path::Path::new(aof_path_str);
     if let Some(parent_dir) = aof_path.parent() {

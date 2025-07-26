@@ -7,15 +7,20 @@ use crate::core::commands::cache::cache_set::CacheSet;
 use crate::core::commands::command_trait::WriteOutcome;
 use crate::core::metrics;
 use crate::core::state::ServerState;
-use crate::core::storage::cache_types::{CacheBody, CachePolicy, VariantMap};
+use crate::core::storage::cache_types::{
+    CacheBody, CachePolicy, ManifestEntry, ManifestState, VariantMap,
+};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{Command, SpinelDBError};
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::fs::File as TokioFile;
+use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, warn};
 
@@ -64,6 +69,8 @@ pub struct CacheState {
     /// Manually applied locks from `CACHE.LOCK`.
     /// Key: Cache key, Value: Expiry time of the lock.
     pub manual_locks: Arc<DashMap<Bytes, Instant>>,
+    /// A synchronized writer for the on-disk cache manifest file.
+    pub manifest_writer: Arc<Mutex<Option<BufWriter<TokioFile>>>>,
 }
 
 impl CacheState {
@@ -83,7 +90,32 @@ impl CacheState {
             tag_purge_epochs: Arc::new(DashMap::new()),
             purge_patterns: Arc::new(DashMap::new()),
             manual_locks: Arc::new(DashMap::new()),
+            manifest_writer: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Logs an entry to the on-disk cache manifest file.
+    pub async fn log_manifest(
+        &self,
+        state: ManifestState,
+        path: PathBuf,
+    ) -> Result<(), SpinelDBError> {
+        let mut writer_guard = self.manifest_writer.lock().await;
+        if let Some(writer) = writer_guard.as_mut() {
+            let entry = ManifestEntry {
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                state,
+                path,
+            };
+            let mut line = serde_json::to_vec(&entry)?;
+            line.push(b'\n');
+            writer.write_all(&line).await?;
+            writer.flush().await?;
+        }
+        Ok(())
     }
 
     /// Atomically increments the counter for cache hits.
@@ -141,7 +173,6 @@ impl CacheState {
             .await
             .map_err(|e| SpinelDBError::Internal(format!("Failed to read response body: {e}")))?;
 
-        // Security check: do not store private content in the shared cache.
         if headers
             .get(reqwest::header::CACHE_CONTROL)
             .and_then(|v| v.to_str().ok())
@@ -185,7 +216,7 @@ impl CacheState {
             locks: db.determine_locks_for_command(&set_command_for_lock).await,
             db: &db,
             command: Some(set_command_for_lock),
-            session_id: 0, // session_id is not relevant for this internal call
+            session_id: 0,
             authenticated_user: None,
         };
         let (_, write_outcome) = set_cmd_internal
@@ -202,7 +233,6 @@ impl CacheState {
         let jobs_to_queue: Vec<_> = variants
             .into_iter()
             .filter_map(|(hash, variant)| {
-                // Only revalidate popular variants (accessed within the hot window).
                 if now.saturating_duration_since(variant.last_accessed)
                     <= CACHE_REVALIDATOR_HOT_VARIANT_WINDOW
                 {
@@ -229,8 +259,6 @@ impl CacheState {
             );
 
             for job in jobs_to_queue {
-                // Use try_send to avoid blocking if the worker is busy.
-                // Dropping a revalidation request under heavy load is acceptable.
                 if let Err(e) = self.revalidation_tx.try_send(job) {
                     warn!(
                         "Failed to queue cache revalidation job, worker may be busy: {}",

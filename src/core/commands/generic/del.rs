@@ -12,6 +12,7 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use tracing::error;
 
 #[derive(Debug, Clone, Default)]
@@ -83,8 +84,6 @@ impl ExecutableCommand for Del {
                     if !popped_value.is_expired() {
                         count += 1;
 
-                        // Send to lazy-free if it's a large value OR if it's a cache item
-                        // that might have a file on disk to delete.
                         let should_unlink = (auto_unlink_threshold > 0
                             && popped_value.size > auto_unlink_threshold)
                             || matches!(popped_value.data, DataValue::HttpCache { .. });
@@ -100,16 +99,19 @@ impl ExecutableCommand for Del {
         if !values_to_unlink.is_empty() {
             let state_clone = ctx.state.clone();
             tokio::spawn(async move {
-                if state_clone
-                    .persistence
-                    .lazy_free_tx
-                    .send(values_to_unlink)
-                    .await
-                    .is_err()
+                let send_timeout = Duration::from_secs(5);
+                if tokio::time::timeout(
+                    send_timeout,
+                    state_clone.persistence.lazy_free_tx.send(values_to_unlink),
+                )
+                .await
+                .is_err()
                 {
-                    error!("Lazy-free channel closed during DEL. The task may have panicked.");
+                    error!(
+                        "Failed to send to lazy-free channel within 5 seconds. The task may be unresponsive or have panicked."
+                    );
                     state_clone.persistence.increment_lazy_free_errors();
-                    state_clone.set_read_only(true, "Lazy-free task has failed.");
+                    state_clone.set_read_only(true, "Lazy-free task is unresponsive.");
                 }
             });
         }
