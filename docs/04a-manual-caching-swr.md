@@ -105,10 +105,12 @@ This powerful combination of `TTL`, `SWR`, and `GRACE` gives you a robust defens
 
 ---
 
-### Manual Control vs. Automation
+### A Note on Manual vs. Declarative Caching
 
-While these commands give you precise control, managing revalidation URLs and caching logic for every key can become tedious. SpinelDB's real power comes from automating this process.
+The `CACHE.SET` and `CACHE.GET` commands provide fine-grained, manual control over the caching process. This is useful for specific scenarios where you need to manage the cache on a per-key basis.
 
-In the next guide, we'll explore **Declarative Caching with Policies and `CACHE.PROXY`**, a much simpler and more powerful way to manage your entire caching strategy.
+However, for most applications, we recommend using the **Declarative Caching** approach with `CACHE.PROXY` and policies. This approach simplifies your application logic by offloading the caching decisions to SpinelDB, leading to cleaner, more maintainable code.
+
+You can learn more about this in the next chapter.
 
 ➡️ **Next Chapter: [4b. Declarative Caching with Policies & `CACHE.PROXY`](./04b-declarative-caching-proxy.md)**
