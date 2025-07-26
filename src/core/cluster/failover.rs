@@ -48,6 +48,12 @@ const FAILOVER_BASE_DELAY_MS: u64 = 500;
 /// This function is called periodically by the cluster cron job (`probe_tick` in gossip.rs).
 /// It checks if this node is a replica and if its master is in a failure state.
 pub async fn handle_failover_cron(state: &Arc<ServerState>, socket: &Arc<UdpSocket>) {
+    // Check if the replica-initiated failover feature is enabled in the configuration.
+    // If not, this function does nothing, making Warden the only failover mechanism.
+    if !state.config.lock().await.cluster.replica_initiated_failover {
+        return;
+    }
+
     let cluster = state
         .cluster
         .as_ref()
@@ -303,7 +309,7 @@ async fn promote_to_master(state: &Arc<ServerState>) {
 
     // Signal the replication worker to reconfigure.
     // The worker should see the new config and terminate, allowing the main
-    // server task spawner to start the backlog feeder on next cycle (or requires restart).
+    // server task spawner to start the backlog feeder.
     if state.replication_reconfigure_tx.send(()).is_err() {
         warn!("Could not send reconfigure signal to replication worker after promotion.");
     }
