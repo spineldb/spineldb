@@ -7,7 +7,7 @@ use crate::core::cluster::NodeFlags;
 use crate::core::commands::command_trait::WriteOutcome;
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Executes the `CLUSTER REPLICATE <master-id>` command.
 /// This command reconfigures a replica node to follow a new master.
@@ -94,7 +94,11 @@ pub async fn execute(
 
     // 5. Signal the replication worker to disconnect from the old master and
     //    reconnect to the new one using the updated config.
-    let _ = ctx.state.replication_reconfigure_tx.send(());
+    if ctx.state.replication_reconfigure_tx.send(()).is_err() {
+        warn!(
+            "Could not send reconfigure signal to replication worker. It may not be running or the channel is full."
+        );
+    }
 
     info!(
         "This node is now configured as a replica of {} and reconfiguration has been triggered.",

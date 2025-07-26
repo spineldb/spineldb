@@ -111,6 +111,8 @@ pub struct ReplicaWorker {
     is_in_transaction: bool,
     /// A queue for commands received between `MULTI` and `EXEC`.
     queued_tx_commands: Vec<Command>,
+    /// Tracks the last known primary to detect configuration changes from failovers.
+    last_known_primary: Mutex<Option<(String, u16)>>,
 }
 
 impl ReplicaWorker {
@@ -121,6 +123,7 @@ impl ReplicaWorker {
             current_db_index: 0,
             is_in_transaction: false,
             queued_tx_commands: Vec::new(),
+            last_known_primary: Mutex::new(None),
         }
     }
 
@@ -135,20 +138,41 @@ impl ReplicaWorker {
         let mut current_delay = INITIAL_RECONNECT_DELAY;
 
         loop {
-            // State-driven check: Before any action, verify the server's role.
-            if !matches!(
-                self.state.config.lock().await.replication,
-                ReplicationConfig::Replica { .. }
-            ) {
-                info!("Server role is no longer REPLICA. Shutting down replication worker.");
-                return;
+            // Proactively check the current replication configuration at the start of each cycle.
+            // This makes the worker self-correcting if a reconfiguration signal is missed.
+            let (current_primary_host, current_primary_port) = {
+                let config_guard = self.state.config.lock().await;
+                match &config_guard.replication {
+                    ReplicationConfig::Replica {
+                        primary_host,
+                        primary_port,
+                        ..
+                    } => (primary_host.clone(), *primary_port),
+                    _ => {
+                        info!(
+                            "Server role is no longer REPLICA. Shutting down replication worker."
+                        );
+                        return;
+                    }
+                }
+            };
+
+            let mut last_known = self.last_known_primary.lock().await;
+            if last_known.as_ref() != Some(&(current_primary_host.clone(), current_primary_port)) {
+                info!(
+                    "Replication target changed to {}:{}. Resetting reconnect delay.",
+                    current_primary_host, current_primary_port
+                );
+                *last_known = Some((current_primary_host, current_primary_port));
+                current_delay = INITIAL_RECONNECT_DELAY; // Immediately try to connect to the new primary.
             }
+            drop(last_known);
 
             tokio::select! {
                 _ = reconfigure_rx.recv() => {
                     info!("Received replication reconfigure signal. Restarting connection cycle immediately.");
                     current_delay = INITIAL_RECONNECT_DELAY;
-                    continue; // Immediately re-enter the loop to start a new connection cycle.
+                    continue; // Re-enter the loop to check the new config and start a new connection cycle.
                 }
                 result = self.handle_connection_cycle() => {
                     if let Err(e) = result {

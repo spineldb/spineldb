@@ -563,7 +563,7 @@ impl ClusterState {
         // 5. Signal the replication worker to restart and connect to the new master.
         if state.replication_reconfigure_tx.send(()).is_err() {
             warn!(
-                "Could not send reconfigure signal to replication worker; it may not be running."
+                "Could not send reconfigure signal to replication worker; it may not be running or the channel is full."
             );
         }
 
