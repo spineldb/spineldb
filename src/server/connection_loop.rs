@@ -21,7 +21,6 @@ pub async fn run(mut ctx: ServerContext) {
     let mut session_id_counter: u64 = 0;
     let mut client_tasks = tokio::task::JoinSet::new();
 
-    // Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM.
     let mut sigint = signal(SignalKind::interrupt())
         .map_err(|e| anyhow!("Failed to register SIGINT handler: {}", e))
         .expect("Failed to create SIGINT stream");
@@ -33,7 +32,6 @@ pub async fn run(mut ctx: ServerContext) {
         tokio::select! {
             biased;
 
-            // Prioritize shutdown signals over other events.
             _ = sigint.recv() => {
                 info!("SIGINT received, initiating graceful shutdown.");
                 break;
@@ -43,7 +41,6 @@ pub async fn run(mut ctx: ServerContext) {
                 break;
             }
 
-            // Monitor background tasks for unexpected termination.
             Some(res) = ctx.background_tasks.join_next() => {
                 match res {
                     Ok(Ok(())) => warn!("A background task finished unexpectedly without an error."),
@@ -52,7 +49,6 @@ pub async fn run(mut ctx: ServerContext) {
                 }
             },
 
-            // Accept new incoming TCP connections.
             res = ctx.listener.accept() => {
                 if let Ok((socket, addr)) = res {
                     info!("Accepted new connection from: {}", addr);
@@ -67,7 +63,6 @@ pub async fn run(mut ctx: ServerContext) {
                     let (conn_shutdown_tx, conn_shutdown_rx) = broadcast::channel(1);
                     let global_shutdown_rx = ctx.shutdown_tx.subscribe();
 
-                    // Create and register the client's state information.
                     let client_info = Arc::new(Mutex::new(ClientInfo {
                         addr,
                         session_id,
@@ -78,7 +73,6 @@ pub async fn run(mut ctx: ServerContext) {
                     }));
                     state_clone.clients.insert(session_id, (client_info, conn_shutdown_tx));
 
-                    // Spawn a new task to handle the client connection, optionally performing a TLS handshake.
                     if let Some(acceptor) = ctx.acceptor.clone() {
                         client_tasks.spawn(async move {
                             match acceptor.accept(socket).await {
@@ -105,7 +99,6 @@ pub async fn run(mut ctx: ServerContext) {
                 }
             },
 
-            // Monitor client tasks for panics.
             Some(res) = client_tasks.join_next() => {
                 if let Err(e) = res {
                     if e.is_panic() {
@@ -116,17 +109,14 @@ pub async fn run(mut ctx: ServerContext) {
         }
     }
 
-    // --- Graceful Shutdown Sequence ---
     info!("Shutting down. Sending signal to all tasks.");
     if ctx.shutdown_tx.send(()).is_err() {
         error!("Failed to send shutdown signal. Some tasks may not terminate gracefully.");
     }
 
-    // Wait for all client connections to close.
     client_tasks.shutdown().await;
     info!("All client connections closed.");
 
-    // Perform a final, blocking save if persistence is enabled and there are dirty keys.
     let (spldb_enabled, aof_enabled, dirty_keys) = {
         let config = ctx.state.config.lock().await;
         (
@@ -139,12 +129,10 @@ pub async fn run(mut ctx: ServerContext) {
         )
     };
 
-    // Only perform final save if SPLDB is the primary persistence method and there are unsaved changes.
     if spldb_enabled && !aof_enabled && dirty_keys > 0 {
-        // Wait for any currently running BGSAVE to finish to avoid conflicts.
-        while ctx.state.persistence.is_saving_spldb.load(Ordering::SeqCst) {
+        if let Some(handle) = ctx.state.persistence.bgsave_handle.lock().await.take() {
             info!("Waiting for in-progress BGSAVE to finish before final save...");
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = handle.await;
         }
 
         info!(
@@ -158,7 +146,6 @@ pub async fn run(mut ctx: ServerContext) {
         }
     }
 
-    // Wait for a potentially long-running AOF rewrite to finish.
     if let Some(handle) = ctx.state.persistence.aof_rewrite_handle.lock().await.take() {
         info!("Waiting for AOF rewrite to complete...");
         if let Err(e) = handle.await {
@@ -168,7 +155,6 @@ pub async fn run(mut ctx: ServerContext) {
         }
     }
 
-    // Wait for critical operations like CLUSTER RESHARD to finish.
     info!("Waiting for critical background operations (e.g., resharding) to finish...");
     if tokio::time::timeout(Duration::from_secs(30), async {
         ctx.state.critical_tasks.lock().await.shutdown().await;
@@ -182,7 +168,6 @@ pub async fn run(mut ctx: ServerContext) {
     }
     info!("Critical operations finished.");
 
-    // Wait for all other background tasks to finish, with a timeout.
     info!("Waiting for background tasks to finish...");
     if tokio::time::timeout(Duration::from_secs(10), async {
         while ctx.background_tasks.join_next().await.is_some() {}
