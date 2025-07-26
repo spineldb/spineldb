@@ -1,13 +1,17 @@
 // src/core/tasks/lazy_free.rs
 
+use crate::core::state::ServerState;
+use crate::core::storage::cache_types::ManifestState;
+use crate::core::storage::data_types::{CacheBody, DataValue, StoredValue};
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
-
-use crate::core::storage::data_types::{CacheBody, DataValue, StoredValue};
 
 /// A task responsible for asynchronous value deallocation, triggered by `UNLINK`
 /// or `DEL` on large items. It also handles deleting on-disk cache files.
 pub struct LazyFreeManager {
+    /// A shared reference to the server state.
+    pub state: Arc<ServerState>,
     /// Receives vectors of `StoredValue`s that have been removed from the
     /// keyspace and now need their memory to be reclaimed.
     pub rx: mpsc::Receiver<Vec<StoredValue>>,
@@ -20,19 +24,15 @@ impl LazyFreeManager {
         loop {
             tokio::select! {
                 Some(mut values_to_free) = self.rx.recv() => {
-                    // Asynchronously handle on-disk file deletions for HttpCache values.
                     for value in &mut values_to_free {
                         if let DataValue::HttpCache { variants, .. } = &mut value.data {
                             for variant in variants.values_mut() {
                                 if let CacheBody::OnDisk { path, .. } = &variant.body {
-                                    let path_clone = path.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = tokio::fs::remove_file(&path_clone).await {
-                                            warn!("LazyFreeManager failed to delete on-disk cache file {:?}: {}", path_clone, e);
-                                        } else {
-                                            debug!("LazyFreeManager deleted on-disk cache file {:?}", path_clone);
-                                        }
-                                    });
+                                    if let Err(e) = self.state.cache.log_manifest(ManifestState::PendingDelete, path.clone()).await {
+                                        warn!("LazyFreeManager failed to log pending deletion for {:?}: {}", path, e);
+                                    } else {
+                                        debug!("LazyFreeManager logged {:?} for deletion.", path);
+                                    }
                                 }
                             }
                         }
@@ -48,12 +48,9 @@ impl LazyFreeManager {
                              if let DataValue::HttpCache { variants, .. } = &mut value.data {
                                  for variant in variants.values_mut() {
                                      if let CacheBody::OnDisk { path, .. } = &variant.body {
-                                         let path_clone = path.clone();
-                                         tokio::spawn(async move {
-                                             if let Err(e) = tokio::fs::remove_file(&path_clone).await {
-                                                 warn!("LazyFreeManager (shutdown) failed to delete on-disk cache file {:?}: {}", path_clone, e);
-                                             }
-                                         });
+                                         if let Err(e) = self.state.cache.log_manifest(ManifestState::PendingDelete, path.clone()).await {
+                                             warn!("LazyFreeManager (shutdown) failed to log pending deletion for {:?}: {}", path, e);
+                                         }
                                      }
                                  }
                              }

@@ -12,7 +12,7 @@ use crate::core::commands::command_trait::{
 use crate::core::commands::helpers::{ArgParser, extract_bytes, validate_fetch_url};
 use crate::core::handler::command_router::RouteResponse;
 use crate::core::protocol::RespFrame;
-use crate::core::storage::cache_types::CacheBody;
+use crate::core::storage::cache_types::{CacheBody, ManifestState};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
@@ -113,7 +113,6 @@ impl ExecutableCommand for CacheFetch {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        // --- Security Pre-check: Validate URL against the allowlist and check for forbidden IPs ---
         let (allowed_domains, allow_private) = {
             let config = ctx.state.config.lock().await;
             (
@@ -123,7 +122,6 @@ impl ExecutableCommand for CacheFetch {
         };
         validate_fetch_url(&self.url, &allowed_domains, allow_private).await?;
 
-        // --- Security Pre-check: Bypass cache store for authorized requests ---
         if self
             .headers
             .iter()
@@ -138,7 +136,6 @@ impl ExecutableCommand for CacheFetch {
             return Ok((RespValue::BulkString(body), WriteOutcome::DidNotWrite));
         }
 
-        // --- Step 1: First, try a non-blocking read ---
         let get_cmd = CacheGet {
             key: self.key.clone(),
             revalidate_url: None,
@@ -148,8 +145,6 @@ impl ExecutableCommand for CacheFetch {
 
         let initial_response = get_cmd.execute_and_stream(ctx).await?;
         if !matches!(initial_response, RouteResponse::NoOp) {
-            // This path must buffer a streaming response to conform to the ExecutableCommand trait.
-            // The router handles the direct streaming path for optimal performance.
             return match initial_response {
                 RouteResponse::Single(val) => Ok((val, WriteOutcome::DidNotWrite)),
                 RouteResponse::StreamBody { mut file, .. } => {
@@ -164,7 +159,6 @@ impl ExecutableCommand for CacheFetch {
             };
         }
 
-        // --- Step 2: Cache Miss - Acquire the fetch lock to prevent stampede ---
         let fetch_lock = ctx
             .state
             .cache
@@ -174,11 +168,9 @@ impl ExecutableCommand for CacheFetch {
             .clone();
         let _lock_guard = fetch_lock.lock().await;
 
-        // --- Step 3: Double-check cache after acquiring the lock ---
         let double_check_response = get_cmd.execute_and_stream(ctx).await?;
         if !matches!(double_check_response, RouteResponse::NoOp) {
             ctx.state.cache.fetch_locks.remove(&self.key);
-            // This path must buffer a streaming response to conform to the ExecutableCommand trait.
             return match double_check_response {
                 RouteResponse::Single(val) => Ok((val, WriteOutcome::DidNotWrite)),
                 RouteResponse::StreamBody { mut file, .. } => {
@@ -198,7 +190,6 @@ impl ExecutableCommand for CacheFetch {
             String::from_utf8_lossy(&self.key)
         );
 
-        // --- Step 4: This client is the "leader". Fetch from origin. ---
         let fetch_result = self.fetch_from_origin(ctx, false).await;
         ctx.state.cache.fetch_locks.remove(&self.key);
 
@@ -233,29 +224,24 @@ impl CacheFetch {
             .await
             .map_err(|e| SpinelDBError::HttpClientError(e.to_string()))?;
 
-        // --- NEGATIVE CACHING LOGIC ---
         if res.status() != reqwest::StatusCode::OK {
             let status = res.status();
             let error_message = format!("Origin server responded with status {status}");
 
-            // If negative caching is enabled, store the failure.
             if !bypass_store && negative_cache_ttl > 0 {
                 let set_cmd_internal = CacheSet {
                     key: self.key.clone(),
-                    // Store status code in body for identification by CACHE.GET
                     body_data: Bytes::from(status.as_u16().to_string()),
-                    ttl: Some(negative_cache_ttl), // Use the short negative TTL
+                    ttl: Some(negative_cache_ttl),
                     swr: Some(0),
                     grace: Some(0),
                     tags: self.tags.clone(),
                     vary: self.vary.clone(),
                     headers: self.headers.clone(),
-                    // Use a special marker in the etag to identify this as a negative cache entry.
                     etag: Some(Bytes::from_static(b"__NEGATIVE_CACHE__")),
                     ..Default::default()
                 };
 
-                // We don't care about the result, just that we tried to cache the failure.
                 let _ = set_cmd_internal
                     .execute_internal(ctx, CacheBody::InMemory(set_cmd_internal.body_data.clone()))
                     .await;
@@ -272,7 +258,6 @@ impl CacheFetch {
 
         let headers = res.headers().clone();
 
-        // --- VARY: * HANDLING ---
         if headers
             .get(reqwest::header::VARY)
             .and_then(|v| v.to_str().ok())
@@ -292,46 +277,20 @@ impl CacheFetch {
         let final_body_for_client;
 
         if !bypass_store && content_length >= streaming_threshold {
-            // --- STREAMING TO DISK ---
-
-            // A simple guard to ensure the temp file is cleaned up on failure.
-            struct TempFileGuard {
-                path: PathBuf,
-                armed: bool,
-            }
-            impl TempFileGuard {
-                fn new(path: PathBuf) -> Self {
-                    Self { path, armed: true }
-                }
-                fn disarm(&mut self) {
-                    self.armed = false;
-                }
-            }
-            impl Drop for TempFileGuard {
-                fn drop(&mut self) {
-                    if self.armed {
-                        if let Err(e) = std::fs::remove_file(&self.path) {
-                            warn!(
-                                "Failed to clean up temporary cache file {:?}: {}",
-                                self.path, e
-                            );
-                        }
-                    }
-                }
-            }
-
             tokio::fs::create_dir_all(&cache_path).await?;
-            let temp_filename = format!("{}.tmp", Uuid::new_v4());
-            let temp_path = PathBuf::from(&cache_path).join(&temp_filename);
+            let final_filename = Uuid::new_v4().to_string();
+            let final_path = PathBuf::from(&cache_path).join(&final_filename);
 
-            // Create the guard. It will delete the file on drop unless disarmed.
-            let mut temp_file_guard = TempFileGuard::new(temp_path.clone());
+            ctx.state
+                .cache
+                .log_manifest(ManifestState::Pending, final_path.clone())
+                .await?;
 
             let mut temp_file = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
-                .open(&temp_path)
+                .open(&final_path)
                 .await?;
 
             let mut total_size = 0;
@@ -340,14 +299,7 @@ impl CacheFetch {
                 total_size += chunk.len();
             }
             temp_file.sync_all().await?;
-            drop(temp_file); // Close the file handle before renaming.
-
-            let final_filename = Uuid::new_v4().to_string();
-            let final_path = PathBuf::from(&cache_path).join(&final_filename);
-            tokio::fs::rename(&temp_path, &final_path).await?;
-
-            // Disarm the guard only after a successful rename.
-            temp_file_guard.disarm();
+            drop(temp_file);
 
             final_cache_body = CacheBody::OnDisk {
                 path: final_path.clone(),
@@ -355,7 +307,6 @@ impl CacheFetch {
             };
             final_body_for_client = tokio::fs::read(&final_path).await?.into();
         } else {
-            // --- BUFFERING IN MEMORY (for small files) ---
             let body_bytes = res.bytes().await?;
             final_cache_body = CacheBody::InMemory(body_bytes.clone());
             final_body_for_client = body_bytes;
@@ -367,7 +318,7 @@ impl CacheFetch {
 
         let set_cmd_internal = CacheSet {
             key: self.key.clone(),
-            body_data: Bytes::new(), // Not used, as execute_internal is called directly
+            body_data: Bytes::new(),
             ttl: self.ttl,
             swr: self.swr,
             grace: self.grace,
@@ -384,8 +335,15 @@ impl CacheFetch {
         };
 
         let (_, write_outcome) = set_cmd_internal
-            .execute_internal(ctx, final_cache_body)
+            .execute_internal(ctx, final_cache_body.clone())
             .await?;
+
+        if let CacheBody::OnDisk { path, .. } = final_cache_body {
+            ctx.state
+                .cache
+                .log_manifest(ManifestState::Committed, path)
+                .await?;
+        }
 
         Ok((final_body_for_client, write_outcome))
     }

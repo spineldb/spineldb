@@ -85,3 +85,19 @@ pub struct CachePolicy {
     /// The maximum size in bytes for an object to be cached under this policy.
     pub max_size_bytes: Option<u64>,
 }
+
+/// The persistent state of an on-disk cache file, logged in the manifest.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ManifestState {
+    Pending,
+    Committed,
+    PendingDelete,
+}
+
+/// A single entry in the on-disk cache manifest file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestEntry {
+    pub timestamp: u64,
+    pub state: ManifestState,
+    pub path: PathBuf,
+}

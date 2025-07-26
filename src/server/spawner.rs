@@ -74,6 +74,7 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
     });
 
     let lazy_free_manager = LazyFreeManager {
+        state: server_state.clone(),
         rx: server_init.lazy_free_rx,
     };
     let shutdown_rx_lazy = shutdown_tx.subscribe();
