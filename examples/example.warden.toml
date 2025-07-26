@@ -1,0 +1,21 @@
+# The port on which Ignis Warden will run and accept connections.
+# If omitted, it will default to 26379.
+port = 26379
+
+# Each monitored master is defined in a [[masters]] block.
+[[masters]]
+name = "ignis-master-01"
+ip = "127.0.0.1"
+port = 7878
+quorum = 1 # Only 1 Warden (itself) is needed to start a failover in a simple setup.
+down_after = "5s" # Considered S_DOWN after 5 seconds without a PING reply.
+failover_timeout = "60s" # Minimum time between failovers is 60 seconds.
+
+# You can add other masters here.
+# [[masters]]
+# name = "another-master"
+# ip = "192.168.1.100"
+# port = 6379
+# quorum = 2
+# down_after = "10s"
+# failover_timeout = "3m"

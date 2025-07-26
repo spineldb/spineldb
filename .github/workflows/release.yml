@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Zig for Cross-compilation
+        if: matrix.os == 'ubuntu-latest'
+        uses: mlugg/setup-zig@v2
+
+      - name: Cache cargo-zigbuild
+        if: matrix.os == 'ubuntu-latest'
+        id: cache-zigbuild
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-zigbuild
+          key: ${{ runner.os }}-cargo-zigbuild
+
+      - name: Install cargo-zigbuild if not cached
+        if: matrix.os == 'ubuntu-latest' && steps.cache-zigbuild.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Run GoReleaser to build Linux artifacts
+        if: matrix.os == 'ubuntu-latest'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: build --clean --id linux-build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run GoReleaser to build macOS artifacts
+        if: matrix.os == 'macos-latest'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: build --clean --id mac-build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload direktori 'dist' yang berisi biner mentah
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist
+
+  # Job ini akan mengunduh semua biner, lalu menjalankan proses rilis penuh
+  # (arsip, checksum, publish)
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust # Diperlukan untuk hook 'before' di goreleaser
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true # Menggabungkan semua 'dist' menjadi satu
+
+      - name: Run GoReleaser to publish
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          # 'release' akan menggunakan biner yang sudah ada di 'dist'
+          # kemudian membuat arsip, checksum, dan merilisnya.
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

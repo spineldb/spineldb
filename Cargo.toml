@@ -1,0 +1,67 @@
+[package]
+name = "spineldb"
+version = "4.3.1"
+edition = "2024"
+authors = ["SpinelDB <spineldb@gmail.com>"]
+description = "SpinelD is in-memory data store written in Rust."
+license = "MIT"
+repository = "https://github.com/spineldb/spineldb"
+readme = "README.md"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+bytes = { version = "1.0", features = ["serde"] }
+indexmap = { version = "2.9", features = ["serde"] }
+futures = "0.3"
+itoa = "1.0"
+async-trait = "0.1"
+dashmap = "6.1"
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+config = { version = "0.15", features = ["toml"] }
+rand = { version = "0.8", features = ["small_rng"] }
+toml = "0.9"
+async-stream = "0.3"
+once_cell = "1.19"
+strum = "0.27"
+strum_macros = "0.27"
+hex = "0.4"
+getrandom = "0.3"
+crc = "3.0"
+bitflags = "2.5"
+lru = "0.16"
+chrono = "0.4.41"
+sysinfo = "0.36"
+geohash = "0.13.1"
+parking_lot = "0.12.4"
+serde_json = { version = "1.0.140", features = ["indexmap", "preserve_order"] }
+bincode = "2.0.1"
+ryu = "1.0.20"
+ordered-float = "5.0.0"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+regex = "1.10.5"
+tokio-rustls = "0.26.2"
+rustls = "0.23.28"
+rustls-pemfile = "2.2.0"
+humantime-serde = "1.1.1"
+libc = "0.2.174"
+webpki-roots = "1.0.1"
+mlua = { version = "0.11", features = ["lua54", "vendored", "async", "send"] }
+sha1 = "0.10.6"
+argon2 = "0.5.3"
+reqwest = { version = "0.12", features = ["json"] }
+wildmatch = "2.4.0"
+url = { version = "2.5", features = ["serde"] }
+urlencoding = "2.1.3"
+prometheus = { version = "0.14", features = ["process"] }
+axum = "0.8.4"
+lazy_static = "1.5.0"
+uuid = { version = "1.17", features = ["v4"] }
+broadcast = "0.1.0"
+jsonpath_lib = "0.3.0"

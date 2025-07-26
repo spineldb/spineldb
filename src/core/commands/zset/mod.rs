@@ -1,0 +1,55 @@
+// src/core/commands/zset/mod.rs
+
+mod helpers;
+pub(crate) mod zpop_logic;
+mod zset_ops_logic;
+
+pub mod bzpopmax;
+pub mod bzpopmin;
+pub mod zadd;
+pub mod zcard;
+pub mod zcount;
+pub mod zincrby;
+pub mod zinterstore;
+pub mod zlexcount;
+pub mod zmscore;
+pub mod zpopmax;
+pub mod zpopmin;
+pub mod zrange;
+pub mod zrangebylex;
+pub mod zrangebyscore;
+pub mod zrangestore;
+pub mod zrank;
+pub mod zrem;
+pub mod zremrangebylex;
+pub mod zremrangebyrank;
+pub mod zremrangebyscore;
+pub mod zrevrange;
+pub mod zrevrank;
+pub mod zscore;
+pub mod zunionstore;
+
+pub use self::bzpopmax::BZPopMax;
+pub use self::bzpopmin::BZPopMin;
+pub use self::zadd::{Zadd, ZaddCondition, ZaddUpdateRule};
+pub use self::zcard::ZCard;
+pub use self::zcount::ZCount;
+pub use self::zincrby::ZIncrBy;
+pub use self::zinterstore::ZInterStore;
+pub use self::zlexcount::ZLexCount;
+pub use self::zmscore::ZMScore;
+pub use self::zpopmax::ZPopMax;
+pub use self::zpopmin::ZPopMin;
+pub use self::zrange::ZRange;
+pub use self::zrangebylex::ZRangeByLex;
+pub use self::zrangebyscore::{Limit, ZRangeByScore};
+pub use self::zrangestore::ZRangeStore;
+pub use self::zrank::ZRank;
+pub use self::zrem::ZRem;
+pub use self::zremrangebylex::ZRemRangeByLex;
+pub use self::zremrangebyrank::ZRemRangeByRank;
+pub use self::zremrangebyscore::ZRemRangeByScore;
+pub use self::zrevrange::ZRevRange;
+pub use self::zrevrank::ZRevRank;
+pub use self::zscore::ZScore;
+pub use self::zunionstore::ZUnionStore;
