@@ -12,10 +12,11 @@ use super::state::{FailoverState, MasterState, MasterStatus};
 use crate::core::protocol::RespFrame;
 use parking_lot::Mutex;
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::time::{Duration, sleep};
-use tracing::{error, info, warn};
+use tokio::time::{Duration, Instant, sleep};
+use tracing::{debug, error, info, warn};
 
 /// The main entry point for the failover process. This function orchestrates all steps.
 /// It is spawned as a new task by the `MasterMonitor` that won the leader election.
@@ -141,11 +142,11 @@ pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
     }
 
     // --- Step 5: Update the Warden's internal state with the new primary information ---
-    let other_replicas = {
+    let (other_replicas, failover_timeout) = {
         let mut state = state_arc.lock();
         state.status = MasterStatus::Ok;
         state.addr = candidate_addr;
-        state.run_id = new_master_runid;
+        state.run_id = new_master_runid.clone();
         state.primary_state.down_since = None;
         state.last_failover_time = std::time::Instant::now();
 
@@ -158,72 +159,23 @@ pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
 
         state.replicas.remove(&candidate_addr);
         state.reset_failover_state();
-        replicas
+        (replicas, state.config.failover_timeout)
     };
 
-    // --- Step 6: Reconfigure all other replicas and poison the old master's run ID ---
+    // --- Step 6: Spawn a persistent task to reconfigure all other replicas and poison the old master's run ID ---
     info!(
-        "Reconfiguring {} other replica(s) to follow new master at {}.",
+        "Spawning persistent task to reconfigure {} replica(s) and poison old master '{}'",
         other_replicas.len(),
-        candidate_addr
+        old_master_runid
     );
 
-    let new_master_ip = candidate_addr.ip().to_string();
-    let new_master_port = candidate_addr.port();
-
-    for replica_addr in other_replicas {
-        info!(
-            "Spawning task to reconfigure replica {} and poison old master '{}'",
-            replica_addr, old_master_runid
-        );
-
-        let ip_clone = new_master_ip.clone();
-        let old_runid_clone = old_master_runid.clone();
-
-        tokio::spawn(async move {
-            match WardenClient::connect(replica_addr).await {
-                Ok(mut client) => {
-                    let replicaof_cmd = RespFrame::Array(vec![
-                        RespFrame::BulkString("REPLICAOF".into()),
-                        RespFrame::BulkString(ip_clone.into()),
-                        RespFrame::BulkString(new_master_port.to_string().into()),
-                    ]);
-                    if let Err(e) = client.send_and_receive(replicaof_cmd).await {
-                        warn!(
-                            "Failed to send REPLICAOF to replica {}: {}",
-                            replica_addr, e
-                        );
-                    } else {
-                        info!("Successfully sent REPLICAOF to replica {}", replica_addr);
-                    }
-
-                    let poison_cmd = RespFrame::Array(vec![
-                        RespFrame::BulkString("FAILOVER".into()),
-                        RespFrame::BulkString("POISON".into()),
-                        RespFrame::BulkString(old_runid_clone.into()),
-                        RespFrame::BulkString("60".into()),
-                    ]);
-                    if let Err(e) = client.send_and_receive(poison_cmd).await {
-                        warn!(
-                            "Failed to send FAILOVER POISON to replica {}: {}",
-                            replica_addr, e
-                        );
-                    } else {
-                        info!(
-                            "Successfully poisoned old master on replica {}",
-                            replica_addr
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to connect to replica {} for reconfiguration: {}",
-                        replica_addr, e
-                    );
-                }
-            }
-        });
-    }
+    tokio::spawn(run_post_failover_reconfiguration(
+        other_replicas,
+        candidate_addr,
+        new_master_runid,
+        old_master_runid,
+        failover_timeout,
+    ));
 
     info!(
         "Failover for master '{}' completed successfully. New master is {}.",
@@ -275,4 +227,106 @@ fn select_best_replica(state: &MasterState) -> Option<SocketAddr> {
             }
         })
         .map(|entry| *entry.key())
+}
+
+/// A background task to ensure all replicas are eventually reconfigured after a failover.
+async fn run_post_failover_reconfiguration(
+    replicas: Vec<SocketAddr>,
+    new_master_addr: SocketAddr,
+    new_master_runid: String,
+    old_master_runid: String,
+    timeout: Duration,
+) {
+    if replicas.is_empty() {
+        return;
+    }
+
+    let mut replicas_to_process: BTreeSet<SocketAddr> = replicas.into_iter().collect();
+    let start_time = Instant::now();
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+
+    while !replicas_to_process.is_empty() {
+        if start_time.elapsed() > timeout {
+            warn!(
+                "Post-failover reconfiguration timed out. Could not reconfigure replicas: {:?}",
+                replicas_to_process
+            );
+            return;
+        }
+
+        interval.tick().await;
+
+        for replica_addr in replicas_to_process.clone() {
+            let res = reconfigure_and_verify_one_replica(
+                replica_addr,
+                new_master_addr,
+                &new_master_runid,
+                &old_master_runid,
+            )
+            .await;
+
+            match res {
+                Ok(true) => {
+                    info!(
+                        "Successfully verified reconfiguration for replica {}. Removing from processing queue.",
+                        replica_addr
+                    );
+                    replicas_to_process.remove(&replica_addr);
+                }
+                Ok(false) => {
+                    debug!(
+                        "Replica {} has been commanded but not yet verified. Will retry.",
+                        replica_addr
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        "Failed to reconfigure replica {}: {}. Will retry.",
+                        replica_addr, e
+                    );
+                }
+            }
+        }
+    }
+    info!("All replicas successfully reconfigured to follow the new master.");
+}
+
+/// Helper to handle the command-and-verify logic for a single replica.
+async fn reconfigure_and_verify_one_replica(
+    replica_addr: SocketAddr,
+    new_master_addr: SocketAddr,
+    new_master_runid: &str,
+    old_master_runid: &str,
+) -> anyhow::Result<bool> {
+    let mut client = WardenClient::connect(replica_addr).await?;
+
+    // 1. Send the REPLICAOF command
+    let replicaof_cmd = RespFrame::Array(vec![
+        RespFrame::BulkString("REPLICAOF".into()),
+        RespFrame::BulkString(new_master_addr.ip().to_string().into()),
+        RespFrame::BulkString(new_master_addr.port().to_string().into()),
+    ]);
+    client.send_and_receive(replicaof_cmd).await?;
+
+    // 2. Send the FAILOVER POISON command
+    let poison_cmd = RespFrame::Array(vec![
+        RespFrame::BulkString("FAILOVER".into()),
+        RespFrame::BulkString("POISON".into()),
+        RespFrame::BulkString(old_master_runid.to_string().into()),
+        RespFrame::BulkString("60".into()), // Poison TTL of 60 seconds
+    ]);
+    client.send_and_receive(poison_cmd).await?;
+    info!("Sent REPLICAOF and POISON commands to {}", replica_addr);
+
+    // 3. Verify with INFO REPLICATION
+    let info_str = client.info_replication().await?;
+    for line in info_str.lines() {
+        if let Some(val) = line.strip_prefix("master_replid:") {
+            if val.trim() == new_master_runid {
+                return Ok(true); // Verification successful
+            }
+        }
+    }
+
+    Ok(false) // Not yet verified
 }
