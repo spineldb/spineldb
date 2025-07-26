@@ -40,40 +40,48 @@ impl ExecutableCommand for Unlink {
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let mut count = 0u64;
         let mut values_to_reclaim: Vec<StoredValue> = Vec::new();
+        let mut post_lock_tasks: Vec<(Bytes, DataValue)> = Vec::new();
 
-        let guards = match &mut ctx.locks {
-            ExecutionLocks::Multi { guards } => guards,
-            _ => {
-                return Err(SpinelDBError::Internal(
-                    "UNLINK requires multi-key lock but was not provided.".into(),
-                ));
+        // --- Start of Locking Scope ---
+        {
+            let guards = match &mut ctx.locks {
+                ExecutionLocks::Multi { guards } => guards,
+                _ => {
+                    return Err(SpinelDBError::Internal(
+                        "UNLINK requires multi-key lock but was not provided.".into(),
+                    ));
+                }
+            };
+
+            for key in &self.keys {
+                let shard_index = ctx.db.get_shard_index(key);
+                if let Some(guard) = guards.get_mut(&shard_index) {
+                    if let Some(popped_value) = guard.pop(key) {
+                        if !popped_value.is_expired() {
+                            count += 1;
+                            // Defer notification and reclamation to avoid deadlocks.
+                            post_lock_tasks.push((key.clone(), popped_value.data.clone()));
+                            values_to_reclaim.push(popped_value);
+                        }
+                    }
+                }
             }
-        };
+        } // --- End of Locking Scope ---
 
-        for key in &self.keys {
-            let shard_index = ctx.db.get_shard_index(key);
-            if let Some(guard) = guards.get_mut(&shard_index) {
-                if let Some(entry) = guard.peek(key) {
-                    match &entry.data {
-                        DataValue::Stream(_) => {
-                            ctx.state.stream_blocker_manager.notify_and_remove_all(key);
-                        }
-                        DataValue::List(_) | DataValue::SortedSet(_) => {
-                            ctx.state.blocker_manager.notify_waiters(key, Bytes::new());
-                        }
-                        _ => {}
-                    }
+        // Execute post-lock notification tasks.
+        for (key, data_value) in post_lock_tasks {
+            match data_value {
+                DataValue::Stream(_) => {
+                    ctx.state.stream_blocker_manager.notify_and_remove_all(&key);
                 }
-
-                if let Some(popped_value) = guard.pop(key) {
-                    if !popped_value.is_expired() {
-                        count += 1;
-                        values_to_reclaim.push(popped_value);
-                    }
+                DataValue::List(_) | DataValue::SortedSet(_) => {
+                    ctx.state.blocker_manager.notify_waiters(&key, Bytes::new());
                 }
+                _ => {}
             }
         }
 
+        // Send the values to the lazy-free manager for background reclamation.
         if !values_to_reclaim.is_empty() {
             let state_clone = ctx.state.clone();
             tokio::spawn(async move {

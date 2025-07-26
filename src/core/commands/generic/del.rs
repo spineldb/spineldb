@@ -49,53 +49,66 @@ impl ExecutableCommand for Del {
             .safety
             .auto_unlink_on_del_threshold;
 
-        let mut guards = match std::mem::replace(&mut ctx.locks, ExecutionLocks::None) {
-            ExecutionLocks::Multi { guards } => guards,
-            ExecutionLocks::Single { shard_index, guard } => {
-                let mut map = BTreeMap::new();
-                map.insert(shard_index, guard);
-                map
-            }
-            _ => {
-                return Err(SpinelDBError::Internal(
-                    "DEL requires appropriate lock (Single or Multi)".into(),
-                ));
-            }
-        };
-
+        // Collect tasks to be performed after releasing the database locks
+        // to prevent deadlocks with other locking mechanisms (e.g., BlockerManager).
+        let mut post_lock_tasks: Vec<(Bytes, DataValue)> = Vec::new();
         let mut values_to_unlink: Vec<StoredValue> = Vec::new();
 
-        for key in &self.keys {
-            let shard_index = ctx.db.get_shard_index(key);
-            if let Some(guard) = guards.get_mut(&shard_index) {
-                if let Some(entry) = guard.peek(key) {
-                    match &entry.data {
-                        DataValue::Stream(_) => {
-                            ctx.state.stream_blocker_manager.notify_and_remove_all(key);
+        // --- Start of Locking Scope ---
+        {
+            let mut guards = match std::mem::replace(&mut ctx.locks, ExecutionLocks::None) {
+                ExecutionLocks::Multi { guards } => guards,
+                ExecutionLocks::Single { shard_index, guard } => {
+                    let mut map = BTreeMap::new();
+                    map.insert(shard_index, guard);
+                    map
+                }
+                _ => {
+                    return Err(SpinelDBError::Internal(
+                        "DEL requires appropriate lock (Single or Multi)".into(),
+                    ));
+                }
+            };
+
+            for key in &self.keys {
+                let shard_index = ctx.db.get_shard_index(key);
+                if let Some(guard) = guards.get_mut(&shard_index) {
+                    if let Some(popped_value) = guard.pop(key) {
+                        if !popped_value.is_expired() {
+                            count += 1;
+
+                            // Defer notification to avoid holding a shard lock while
+                            // acquiring a blocker lock.
+                            post_lock_tasks.push((key.clone(), popped_value.data.clone()));
+
+                            // Check if this value should be auto-unlinked.
+                            let should_unlink = (auto_unlink_threshold > 0
+                                && popped_value.size > auto_unlink_threshold)
+                                || matches!(popped_value.data, DataValue::HttpCache { .. });
+
+                            if should_unlink {
+                                values_to_unlink.push(popped_value);
+                            }
                         }
-                        DataValue::List(_) | DataValue::SortedSet(_) => {
-                            ctx.state.blocker_manager.notify_waiters(key, Bytes::new());
-                        }
-                        _ => {}
                     }
                 }
+            }
+        } // --- End of Locking Scope: All shard locks are released here. ---
 
-                if let Some(popped_value) = guard.pop(key) {
-                    if !popped_value.is_expired() {
-                        count += 1;
-
-                        let should_unlink = (auto_unlink_threshold > 0
-                            && popped_value.size > auto_unlink_threshold)
-                            || matches!(popped_value.data, DataValue::HttpCache { .. });
-
-                        if should_unlink {
-                            values_to_unlink.push(popped_value);
-                        }
-                    }
+        // Execute post-lock tasks now that locks are released.
+        for (key, data_value) in post_lock_tasks {
+            match data_value {
+                DataValue::Stream(_) => {
+                    ctx.state.stream_blocker_manager.notify_and_remove_all(&key);
                 }
+                DataValue::List(_) | DataValue::SortedSet(_) => {
+                    ctx.state.blocker_manager.notify_waiters(&key, Bytes::new());
+                }
+                _ => {}
             }
         }
 
+        // Dispatch values to the lazy-free thread if necessary.
         if !values_to_unlink.is_empty() {
             let state_clone = ctx.state.clone();
             tokio::spawn(async move {
