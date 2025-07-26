@@ -15,6 +15,7 @@ use crate::connection::SessionState;
 use crate::core::commands::cache::command::CacheSubcommand;
 use crate::core::commands::command_trait::{CommandExt, CommandFlags, WriteOutcome};
 use crate::core::commands::generic::Eval as EvalCmd;
+use crate::core::commands::generic::script::ScriptSubcommand;
 use crate::core::commands::key_extractor;
 use crate::core::events::UnitOfWork;
 use crate::core::metrics;
@@ -31,22 +32,17 @@ use tracing::error;
 use tracing::{Instrument, info_span};
 
 /// Represents the various types of responses a command can produce.
-/// This enum allows the `ConnectionHandler` to handle different response strategies,
-/// such as simple replies, multiple replies, or efficient file streaming.
 pub enum RouteResponse {
     /// A single RESP value. This is the most common response type.
     Single(RespValue),
     /// Multiple RESP values, sent sequentially. Used for commands like `SUBSCRIBE`.
     Multiple(Vec<RespValue>),
     /// Streams a file body directly to the socket for high performance.
-    /// The `resp_header` is the RESP Bulk String header (e.g., "$12345\r\n").
-    /// This is a key optimization for the Intelligent Caching feature.
     StreamBody {
         resp_header: Vec<u8>,
         file: TokioFile,
     },
-    /// No operation; no response should be sent to the client. This is used by
-    /// commands that do not have a reply, like a successful `CACHE.GET` with `if-none-match`.
+    /// No operation; no response should be sent to the client.
     NoOp,
 }
 
@@ -79,9 +75,7 @@ impl<'a> Router<'a> {
     pub async fn route(&mut self, command: Command) -> Result<RouteResponse, SpinelDBError> {
         let command_name = command.name();
 
-        // Reconstruct the full RespFrame. This is necessary for two reasons:
-        // 1. To provide the raw arguments to the ACL enforcer for condition evaluation.
-        // 2. To pass the full command to the latency monitor for `SLOWLOG`.
+        // Reconstruct the full RespFrame for ACL condition evaluation and latency monitoring.
         let resp_frame: RespFrame = command.clone().into();
         let (raw_cmd_name_frame, raw_args) = if let RespFrame::Array(mut arr) = resp_frame {
             (
@@ -96,8 +90,7 @@ impl<'a> Router<'a> {
 
         let command_args_for_log = command.get_resp_args();
 
-        // Instrument the entire command processing flow for better observability.
-        // The span includes key metadata about the command and client.
+        // Instrument the entire command processing flow for observability.
         let span = info_span!(
             "command",
             name = %command_name,
@@ -110,31 +103,22 @@ impl<'a> Router<'a> {
             self.state.stats.increment_total_commands();
             metrics::COMMANDS_PROCESSED_TOTAL.inc();
 
-            // --- COMMAND PROCESSING PIPELINE ---
-            // Each of the following functions acts as a gatekeeper. If a check fails,
-            // it returns an `Err`, immediately halting the command's execution and
-            // sending an appropriate error to the client.
-
-            // 1. Key Extraction: Determine which arguments are keys. This is a prerequisite
-            //    for cluster redirection and ACL checks.
+            // 1. Key Extraction: Determine which arguments are keys for cluster routing and ACLs.
             let keys_bytes = key_extractor::extract_keys_from_command(command_name, &raw_args)?;
 
-            // Handle the one-shot ASKING command immediately, as it modifies session state
-            // for the *next* command.
+            // Handle the one-shot ASKING command immediately.
             if let Command::Asking(_) = command {
                 self.session.is_asking = true;
                 return Ok(RouteResponse::Single(RespValue::SimpleString("OK".into())));
             }
 
-            // 2. Cluster Redirection Check: For cluster mode, determines if the command
-            //    targets a slot owned by another node and returns a MOVED or ASK error if so.
+            // 2. Cluster Redirection Check: Return MOVED/ASK errors if the key is on another node.
             cluster_redirect::check_redirection(&self.state, &keys_bytes, self.session).await?;
             if self.session.is_asking {
                 self.session.is_asking = false; // ASKING is a one-shot command.
             }
 
-            // 3. ACL Check: Verifies if the authenticated user has permission to execute
-            //    this command on the specified keys and channels.
+            // 3. ACL Check: Verify user permissions.
             acl_check::check_permissions(
                 &self.state,
                 self.session,
@@ -144,18 +128,14 @@ impl<'a> Router<'a> {
             )
             .await?;
 
-            // 4. Global State Check: Ensures the command is allowed in the current server
-            //    state (e.g., blocks writes if in read-only mode or if the min-replicas
-            //    policy is not met).
+            // 4. Global State Check: Enforce read-only mode, min-replicas policy, etc.
             state_check::check_server_state(&self.state, &command).await?;
 
-            // 5. Safety Guard Check: Prevents potentially dangerous commands that could
-            //    block the server, like `KEYS` on a huge database, if configured.
+            // 5. Safety Guard Check: Prevent dangerous commands (e.g., KEYS on large DBs).
             safety_guard::check_safety_limits(&self.state, &command, self.session.current_db_index)
                 .await?;
-            // --- END OF PIPELINE ---
 
-            // If all checks pass, dispatch the command for execution based on session state.
+            // Dispatch command based on authentication and transaction state.
             let result = if !self.session.is_authenticated {
                 self.handle_unauthenticated(command).await
             } else if self.session.is_in_transaction {
@@ -164,7 +144,7 @@ impl<'a> Router<'a> {
                 self.handle_normal_command(command).await
             };
 
-            // Record command latency for SLOWLOG and Prometheus metrics.
+            // Record command latency for SLOWLOG and metrics.
             let latency = start_time.elapsed();
             metrics::COMMAND_LATENCY_SECONDS.observe(latency.as_secs_f64());
             self.state
@@ -177,7 +157,7 @@ impl<'a> Router<'a> {
         .await
     }
 
-    /// Handles commands when the session is not yet authenticated. Only `AUTH` is allowed.
+    /// Handles commands when the session is not yet authenticated.
     async fn handle_unauthenticated(
         &mut self,
         command: Command,
@@ -190,12 +170,11 @@ impl<'a> Router<'a> {
     }
 
     /// Handles commands when the session is inside a `MULTI`/`EXEC` block.
-    /// Most commands are queued, while `EXEC`, `DISCARD`, and `UNWATCH` are handled immediately.
     async fn handle_transaction_mode(
         &mut self,
         command: Command,
     ) -> Result<RouteResponse, SpinelDBError> {
-        // These commands control the transaction itself and are handled by the normal flow.
+        // Transaction control commands are handled by the normal flow.
         if matches!(
             command,
             Command::Exec | Command::Discard | Command::Unwatch(_)
@@ -203,7 +182,6 @@ impl<'a> Router<'a> {
             return self.handle_normal_command(command).await;
         }
 
-        // WATCH is not allowed inside a MULTI block.
         if matches!(command, Command::Watch(_)) {
             return Err(SpinelDBError::InvalidState(
                 "WATCH inside MULTI is not allowed".to_string(),
@@ -222,8 +200,7 @@ impl<'a> Router<'a> {
         .map(RouteResponse::Single)
     }
 
-    /// Handles the normal command flow by dispatching to specialized action handlers
-    /// or the generic command executor.
+    /// Handles the normal command flow by dispatching to specialized handlers or the generic executor.
     async fn handle_normal_command(
         &mut self,
         command: Command,
@@ -238,8 +215,6 @@ impl<'a> Router<'a> {
                 match &cache_cmd.subcommand {
                     CacheSubcommand::Get(get_cmd) => get_cmd.execute_and_stream(&mut ctx).await,
                     CacheSubcommand::Proxy(proxy_cmd) => {
-                        // `CACHE.PROXY` orchestrates `GET` and `FETCH` and may result in
-                        // a streaming response from its internal `GET` call.
                         proxy_cmd.execute_and_stream(&mut ctx).await
                     }
                     _ => self.execute_command(command, &db).await,
@@ -328,6 +303,25 @@ impl<'a> Router<'a> {
         command: Command,
         db: &Arc<Db>,
     ) -> Result<RouteResponse, SpinelDBError> {
+        // Special guard for SCRIPT FLUSH to prevent race conditions with AOF rewrite.
+        if let Command::Script(ref script_cmd) = command {
+            if let ScriptSubcommand::Flush = script_cmd.subcommand {
+                if self
+                    .state
+                    .persistence
+                    .aof_rewrite_state
+                    .lock()
+                    .await
+                    .is_in_progress
+                {
+                    return Err(SpinelDBError::InvalidState(
+                        "ERR SCRIPT FLUSH is not allowed while an AOF rewrite is in progress."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
         // Proactively check for memory pressure before executing a write command.
         if command.get_flags().contains(CommandFlags::WRITE) {
             let (maxmemory, policy) = {
@@ -345,11 +339,10 @@ impl<'a> Router<'a> {
                             .map(|db| db.get_current_memory())
                             .sum();
                         if total_memory < maxmem {
-                            break; // Enough memory, proceed.
+                            break;
                         }
-                        // Attempt to evict a key to make space.
                         if !db.evict_one_key(&self.state).await {
-                            break; // No keys could be evicted.
+                            break;
                         }
                     }
                 }
@@ -379,8 +372,7 @@ impl<'a> Router<'a> {
 
             // Propagate the command to AOF/replicas unless flagged otherwise.
             if !command.get_flags().contains(CommandFlags::NO_PROPAGATE) {
-                // Transform EVALSHA to EVAL for safe propagation, ensuring replicas
-                // and AOF files are self-contained.
+                // Transform EVALSHA to EVAL for safe propagation.
                 let uow = if let Command::EvalSha(evalsha_cmd) = &command {
                     if let Some(script_body) = self.state.scripting.get(&evalsha_cmd.sha1) {
                         UnitOfWork::Command(Box::new(Command::Eval(EvalCmd {
@@ -390,7 +382,6 @@ impl<'a> Router<'a> {
                             args: evalsha_cmd.args.clone(),
                         })))
                     } else {
-                        // This indicates a critical state inconsistency.
                         error!(
                             "CRITICAL: Script for executed EVALSHA '{}' vanished before propagation.",
                             evalsha_cmd.sha1
