@@ -1,5 +1,9 @@
 // src/core/commands/cache/cache_proxy.rs
 
+//! Implements the `CACHE.PROXY` command, which provides a convenient
+//! get-or-fetch pattern. It attempts to retrieve a key, and if it's a
+//! cache miss, it automatically fetches from an origin and caches the result.
+
 use crate::core::commands::cache::cache_fetch::CacheFetch;
 use crate::core::commands::cache::cache_get::CacheGet;
 use crate::core::commands::command_spec::CommandSpec;
@@ -27,7 +31,7 @@ fn glob_to_regex(glob: &str) -> String {
         match c {
             '*' => regex.push_str("(.*)"), // Capture group for interpolation
             '?' => regex.push('.'),
-            '.' | '+' | '(' | ')' | '|' | '\\' | '{' | '}' | '[' | ']' | '^' | '$' => {
+            c if ".+()|\\{}[]^$".contains(c) => {
                 regex.push('\\');
                 regex.push(c);
             }
@@ -38,9 +42,7 @@ fn glob_to_regex(glob: &str) -> String {
     regex
 }
 
-/// Implements the `CACHE.PROXY` command, which provides a convenient
-/// get-or-fetch pattern. It attempts to retrieve a key, and if it's a
-/// cache miss, it automatically fetches from an origin and caches the result.
+/// Implements the `CACHE.PROXY` command.
 #[derive(Debug, Clone, Default)]
 pub struct CacheProxy {
     pub key: Bytes,
@@ -137,7 +139,7 @@ impl ParseCommand for CacheProxy {
 #[async_trait]
 impl ExecutableCommand for CacheProxy {
     /// Executes the `CACHE.PROXY` command.
-    /// This is a fallback for the standard execution path that buffers any streaming response.
+    /// This is a fallback that buffers any streaming response.
     /// The primary, stream-aware logic is in `execute_and_stream`.
     async fn execute<'a>(
         &self,
@@ -176,7 +178,7 @@ impl CacheProxy {
 
         let get_response = get_cmd.execute_and_stream(ctx).await?;
 
-        // If we got a hit (either in-memory or a file stream), return it directly.
+        // If we got a hit, return it directly.
         if !matches!(get_response, RouteResponse::NoOp) {
             return Ok(get_response);
         }
@@ -192,26 +194,24 @@ impl CacheProxy {
         let mut resolved_swr = self.swr;
         let mut resolved_grace = self.grace;
         let mut resolved_tags = self.tags.clone();
+        let mut resolved_vary_on: Option<Bytes> = self.vary.clone();
+        let mut relevant_headers = self.headers.clone();
 
-        if resolved_url.is_none() {
-            let key_str = String::from_utf8_lossy(&self.key);
+        let key_str = String::from_utf8_lossy(&self.key);
+        let policies_clone = ctx.state.cache.policies.read().await.clone();
 
-            // Minimize lock contention by cloning the policies list and releasing the lock immediately.
-            let policies_clone = {
-                let policies_guard = ctx.state.cache.policies.read().await;
-                policies_guard.clone()
-            };
+        let matched_policy = policies_clone
+            .iter()
+            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str));
 
-            let matched_policy = policies_clone
-                .iter()
-                .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str))
-                .cloned();
+        if let Some(policy) = matched_policy {
+            debug!(
+                "Matched cache policy '{}' for key '{}'",
+                policy.name, key_str
+            );
 
-            if let Some(policy) = matched_policy {
-                debug!(
-                    "Matched cache policy '{}' for key '{}'",
-                    policy.name, key_str
-                );
+            // Resolve URL template if not provided in the command.
+            if resolved_url.is_none() {
                 let mut url = policy.url_template.clone();
                 let regex_pattern = glob_to_regex(&policy.key_pattern);
                 if let Ok(re) = Regex::new(&regex_pattern) {
@@ -226,30 +226,67 @@ impl CacheProxy {
                     }
                 }
                 resolved_url = Some(url);
-                resolved_ttl = self.ttl.or(policy.ttl);
-                resolved_swr = self.swr.or(policy.swr);
-                resolved_grace = self.grace.or(policy.grace);
-                let policy_tags: Vec<Bytes> = policy.tags.into_iter().map(Bytes::from).collect();
-                resolved_tags.extend(policy_tags);
-            } else {
-                return Err(SpinelDBError::InvalidState(
-                    "No matching cache policy found and no URL provided".into(),
-                ));
+            }
+
+            // Inherit TTL/SWR/Grace from the policy if not specified in the command.
+            resolved_ttl = self.ttl.or(policy.ttl);
+            resolved_swr = self.swr.or(policy.swr);
+            resolved_grace = self.grace.or(policy.grace);
+
+            // If policy defines `vary_on`, use it to filter client headers.
+            if !policy.vary_on.is_empty() {
+                resolved_vary_on = Some(Bytes::from(policy.vary_on.join(",")));
+
+                if let Some(all_client_headers) = &self.headers {
+                    relevant_headers = Some(
+                        all_client_headers
+                            .iter()
+                            .filter(|(name, _)| {
+                                policy
+                                    .vary_on
+                                    .iter()
+                                    .any(|h| h.eq_ignore_ascii_case(&String::from_utf8_lossy(name)))
+                            })
+                            .cloned()
+                            .collect(),
+                    );
+                } else {
+                    relevant_headers = None;
+                }
+            }
+
+            // Generate dynamic tags from the policy's templates.
+            let regex_pattern = glob_to_regex(&policy.key_pattern);
+            if let Ok(re) = Regex::new(&regex_pattern) {
+                if let Some(caps) = re.captures(&key_str) {
+                    for tag_template in &policy.tags {
+                        let mut final_tag = tag_template.clone();
+                        for i in 1..caps.len() {
+                            if let Some(capture) = caps.get(i) {
+                                let placeholder = format!("{{{i}}}");
+                                final_tag = final_tag.replace(&placeholder, capture.as_str());
+                            }
+                        }
+                        resolved_tags.push(Bytes::from(final_tag));
+                    }
+                }
             }
         }
 
-        // Step 3: Delegate the entire fetch-and-set logic to CACHE.FETCH.
-        // This leverages its built-in cache stampede protection.
+        let final_url = resolved_url.ok_or_else(|| {
+            SpinelDBError::InvalidState("No matching cache policy found and no URL provided".into())
+        })?;
+
+        // Step 3: Delegate the fetch-and-set logic to CACHE.FETCH.
         let fetch_cmd = CacheFetch {
             key: self.key.clone(),
-            url: resolved_url
-                .ok_or_else(|| SpinelDBError::Internal("URL could not be resolved".into()))?,
+            url: final_url,
             ttl: resolved_ttl,
             swr: resolved_swr,
             grace: resolved_grace,
             tags: resolved_tags,
-            vary: self.vary.clone(),
-            headers: self.headers.clone(),
+            vary: resolved_vary_on,
+            headers: relevant_headers,
         };
 
         // This call will perform the fetch, store the result, and return the body.
@@ -268,7 +305,7 @@ impl CommandSpec for CacheProxy {
     }
 
     fn flags(&self) -> CommandFlags {
-        // This command can result in a write, so it's marked as such.
+        // This command can result in a write, so it is marked as such.
         CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::MOVABLEKEYS
     }
 
