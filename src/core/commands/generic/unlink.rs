@@ -11,6 +11,7 @@ use crate::core::storage::db::{ExecutionContext, ExecutionLocks};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::time::Duration;
 use tracing::error;
 
 #[derive(Debug, Clone, Default)]
@@ -52,7 +53,6 @@ impl ExecutableCommand for Unlink {
         for key in &self.keys {
             let shard_index = ctx.db.get_shard_index(key);
             if let Some(guard) = guards.get_mut(&shard_index) {
-                // Notify any clients blocked on the key before it's removed.
                 if let Some(entry) = guard.peek(key) {
                     match &entry.data {
                         DataValue::Stream(_) => {
@@ -68,27 +68,28 @@ impl ExecutableCommand for Unlink {
                 if let Some(popped_value) = guard.pop(key) {
                     if !popped_value.is_expired() {
                         count += 1;
-                        // For UNLINK, always send the value for asynchronous reclamation.
                         values_to_reclaim.push(popped_value);
                     }
                 }
             }
         }
 
-        // Send the reclaimed values to the lazy-free background task.
         if !values_to_reclaim.is_empty() {
             let state_clone = ctx.state.clone();
             tokio::spawn(async move {
-                if state_clone
-                    .persistence
-                    .lazy_free_tx
-                    .send(values_to_reclaim)
-                    .await
-                    .is_err()
+                let send_timeout = Duration::from_secs(5);
+                if tokio::time::timeout(
+                    send_timeout,
+                    state_clone.persistence.lazy_free_tx.send(values_to_reclaim),
+                )
+                .await
+                .is_err()
                 {
-                    error!("Lazy-free channel closed during UNLINK. The task may have panicked.");
+                    error!(
+                        "Failed to send to lazy-free channel within 5 seconds. The task may be unresponsive or have panicked."
+                    );
                     state_clone.persistence.increment_lazy_free_errors();
-                    state_clone.set_read_only(true, "Lazy-free task has failed.");
+                    state_clone.set_read_only(true, "Lazy-free task is unresponsive.");
                 }
             });
         }
