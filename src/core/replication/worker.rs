@@ -135,15 +135,21 @@ impl ReplicaWorker {
         let mut current_delay = INITIAL_RECONNECT_DELAY;
 
         loop {
+            // State-driven check: Before any action, verify the server's role.
+            if !matches!(
+                self.state.config.lock().await.replication,
+                ReplicationConfig::Replica { .. }
+            ) {
+                info!("Server role is no longer REPLICA. Shutting down replication worker.");
+                return;
+            }
+
             tokio::select! {
-                // A reconfigure signal (e.g., from `CLUSTER REPLICATE`) immediately
-                // restarts the connection cycle.
                 _ = reconfigure_rx.recv() => {
                     info!("Received replication reconfigure signal. Restarting connection cycle immediately.");
                     current_delay = INITIAL_RECONNECT_DELAY;
                     continue; // Immediately re-enter the loop to start a new connection cycle.
                 }
-                // The main connection logic.
                 result = self.handle_connection_cycle() => {
                     if let Err(e) = result {
                         warn!("Replication cycle failed: {e}. Reconnecting...");
