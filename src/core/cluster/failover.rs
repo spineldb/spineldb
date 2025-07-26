@@ -1,33 +1,5 @@
 // src/core/cluster/failover.rs
 
-//! Implements the replica-initiated failover logic for the cluster.
-//! This includes master failure detection, election requests, and voting.
-//!
-//! # WARNING: Risk of Split-Brain and Data Inconsistency
-//!
-//! This replica-initiated failover mechanism is provided for basic high-availability
-//! but is susceptible to "split-brain" scenarios during network partitions. If a
-//! partition isolates the master from the majority of the cluster, the majority
-//! may elect a new master while the old one continues to accept writes from a
-//! minority of clients. This leads to permanent data inconsistency.
-//!
-//! **For production environments, it is strongly recommended to use SpinelDB's
-//! Warden mode (`--warden`) instead.** Warden acts as an external sentinel,
-//! providing a more robust quorum and fencing mechanism to prevent split-brain.
-//!
-//! # Operational Requirements: Time Synchronization
-//!
-//! The failover mechanism relies on a monotonically increasing configuration epoch
-//! (`config_epoch`) to ensure that votes are cast for the most current election.
-//! While the system has measures to prevent rapid, successive elections, it
-//! fundamentally assumes that the system clocks (wall clocks) across all nodes
-//! in the cluster are reasonably synchronized.
-//!
-//! It is **strongly recommended** to use a time synchronization service like NTP
-//! (Network Time Protocol) on all nodes running SpinelDB in cluster mode.
-//! Significant clock skew between nodes could potentially lead to premature or
-//! unnecessary failover events.
-
 use crate::config::{ReplicationConfig, ReplicationPrimaryConfig};
 use crate::core::cluster::gossip::{GossipMessage, now_ms};
 use crate::core::cluster::secure_gossip::SecureGossipMessage;

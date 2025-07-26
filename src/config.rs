@@ -437,12 +437,22 @@ pub struct ReplicationPrimaryConfig {
     pub min_replicas_to_write: usize,
     #[serde(default = "default_min_replicas_max_lag")]
     pub min_replicas_max_lag: u64,
+    /// If true, the primary will self-fence (enter read-only mode) if it loses contact
+    /// with a quorum of its replicas. A strong defense against split-brain.
+    #[serde(default)]
+    pub fencing_on_replica_disconnect: bool,
+    /// The timeout in seconds for the replica quorum fencing mechanism.
+    #[serde(default = "default_replica_quorum_timeout")]
+    pub replica_quorum_timeout_secs: u64,
 }
 
 fn default_min_replicas_to_write() -> usize {
     0
 }
 fn default_min_replicas_max_lag() -> u64 {
+    10
+}
+fn default_replica_quorum_timeout() -> u64 {
     10
 }
 
@@ -486,7 +496,6 @@ fn default_aof_path() -> String {
 fn default_appendfsync() -> AppendFsync {
     AppendFsync::EverySec
 }
-
 fn default_spldb_path() -> String {
     "dump.spldb".to_string()
 }

@@ -7,3 +7,4 @@ pub mod cache_tag_validator;
 pub mod eviction;
 pub mod lazy_free;
 pub mod persistence;
+pub mod replica_quorum_validator;
