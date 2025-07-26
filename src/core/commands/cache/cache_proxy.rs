@@ -19,22 +19,7 @@ use tracing::debug;
 use urlencoding::encode;
 use wildmatch::WildMatch;
 
-/// Implements the `CACHE.PROXY` command, which provides a convenient
-/// get-or-fetch pattern. It attempts to retrieve a key, and if it's a
-/// cache miss, it automatically fetches from an origin and caches the result.
-#[derive(Debug, Clone, Default)]
-pub struct CacheProxy {
-    pub key: Bytes,
-    pub url: Option<String>,
-    pub ttl: Option<u64>,
-    pub swr: Option<u64>,
-    pub grace: Option<u64>,
-    pub tags: Vec<Bytes>,
-    pub vary: Option<Bytes>,
-    pub headers: Option<Vec<(Bytes, Bytes)>>,
-}
-
-/// A helper function to convert a simple glob pattern (`*`) to a regex pattern.
+/// Converts a simple glob pattern (`*`) to a regex pattern for URL interpolation.
 fn glob_to_regex(glob: &str) -> String {
     let mut regex = String::with_capacity(glob.len() * 2);
     regex.push('^');
@@ -51,6 +36,21 @@ fn glob_to_regex(glob: &str) -> String {
     }
     regex.push('$');
     regex
+}
+
+/// Implements the `CACHE.PROXY` command, which provides a convenient
+/// get-or-fetch pattern. It attempts to retrieve a key, and if it's a
+/// cache miss, it automatically fetches from an origin and caches the result.
+#[derive(Debug, Clone, Default)]
+pub struct CacheProxy {
+    pub key: Bytes,
+    pub url: Option<String>,
+    pub ttl: Option<u64>,
+    pub swr: Option<u64>,
+    pub grace: Option<u64>,
+    pub tags: Vec<Bytes>,
+    pub vary: Option<Bytes>,
+    pub headers: Option<Vec<(Bytes, Bytes)>>,
 }
 
 impl ParseCommand for CacheProxy {
@@ -136,12 +136,13 @@ impl ParseCommand for CacheProxy {
 
 #[async_trait]
 impl ExecutableCommand for CacheProxy {
+    /// Executes the `CACHE.PROXY` command.
+    /// This is a fallback for the standard execution path that buffers any streaming response.
+    /// The primary, stream-aware logic is in `execute_and_stream`.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        // This is a fallback for the standard execution path.
-        // The primary logic is in `execute_and_stream`.
         match self.execute_and_stream(ctx).await? {
             RouteResponse::Single(val) => Ok((val, WriteOutcome::DidNotWrite)),
             RouteResponse::NoOp => Ok((RespValue::Null, WriteOutcome::DidNotWrite)),
@@ -194,9 +195,14 @@ impl CacheProxy {
 
         if resolved_url.is_none() {
             let key_str = String::from_utf8_lossy(&self.key);
-            let policies = ctx.state.cache.policies.read().await;
 
-            let matched_policy = policies
+            // Minimize lock contention by cloning the policies list and releasing the lock immediately.
+            let policies_clone = {
+                let policies_guard = ctx.state.cache.policies.read().await;
+                policies_guard.clone()
+            };
+
+            let matched_policy = policies_clone
                 .iter()
                 .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str))
                 .cloned();
@@ -213,7 +219,6 @@ impl CacheProxy {
                         for i in 1..caps.len() {
                             if let Some(capture) = caps.get(i) {
                                 let placeholder = format!("{{{i}}}");
-                                // Sanitize the captured value to prevent path traversal
                                 let sanitized_capture = encode(capture.as_str());
                                 url = url.replace(&placeholder, &sanitized_capture);
                             }
@@ -234,7 +239,7 @@ impl CacheProxy {
         }
 
         // Step 3: Delegate the entire fetch-and-set logic to CACHE.FETCH.
-        // `CACHE.FETCH` already contains the necessary cache stampede protection.
+        // This leverages its built-in cache stampede protection.
         let fetch_cmd = CacheFetch {
             key: self.key.clone(),
             url: resolved_url
@@ -247,8 +252,7 @@ impl CacheProxy {
             headers: self.headers.clone(),
         };
 
-        // This call will perform the fetch, store the result (in-memory or on-disk),
-        // and return the body for this initial client.
+        // This call will perform the fetch, store the result, and return the body.
         let (body, _) = fetch_cmd.execute(ctx).await?;
         Ok(RouteResponse::Single(body))
     }
@@ -258,28 +262,35 @@ impl CommandSpec for CacheProxy {
     fn name(&self) -> &'static str {
         "cache.proxy"
     }
+
     fn arity(&self) -> i64 {
         -2
     }
+
     fn flags(&self) -> CommandFlags {
         // This command can result in a write, so it's marked as such.
         CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::MOVABLEKEYS
     }
+
     fn first_key(&self) -> i64 {
         1
     }
+
     fn last_key(&self) -> i64 {
         1
     }
+
     fn step(&self) -> i64 {
         1
     }
+
     fn get_keys(&self) -> Vec<Bytes> {
         vec![self.key.clone()]
     }
+
     fn to_resp_args(&self) -> Vec<Bytes> {
         // This command is not propagated directly. The underlying CACHE.SET
-        // generated by the fetch is propagated instead, making replication deterministic.
+        // generated by the fetch is propagated instead, ensuring replication is deterministic.
         vec![]
     }
 }

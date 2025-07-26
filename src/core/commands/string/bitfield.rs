@@ -154,9 +154,6 @@ impl ExecutableCommand for BitField {
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         // --- Pre-flight Check ---
-        // First, perform a pre-flight check to determine the maximum required memory allocation
-        // for all sub-operations combined. This prevents a single large offset from causing
-        // an OOM crash before the server can check against `maxmemory`.
         let mut max_required_len_bytes = 0;
         for op in &self.operations {
             if let Some((bt, offset)) = match op {
@@ -172,19 +169,16 @@ impl ExecutableCommand for BitField {
             }
         }
 
-        // Check against the absolute hardcoded limit.
         if max_required_len_bytes > MAX_BITFIELD_ALLOCATION {
             return Err(SpinelDBError::InvalidState(
                 "bitfield allocation exceeds maximum size".to_string(),
             ));
         }
 
-        // Check against the configurable `maxmemory` limit.
         if let Some(maxmem) = ctx.state.config.lock().await.maxmemory {
             let shard_index = ctx.db.get_shard_index(&self.key);
             let shard = ctx.db.get_shard(shard_index);
 
-            // Try to acquire the lock with a short timeout for a more accurate memory check.
             let old_len_result =
                 tokio::time::timeout(Duration::from_millis(5), shard.entries.lock()).await;
 
@@ -192,23 +186,23 @@ impl ExecutableCommand for BitField {
                 guard.peek(&self.key).map_or(0, |e| e.size)
             } else {
                 warn!(
-                    "Could not acquire lock for BITFIELD pre-flight check within 5ms. Falling back to safe estimation."
+                    "Could not acquire lock for BITFIELD pre-flight check on key '{}' within 5ms. Using safe estimation.",
+                    String::from_utf8_lossy(&self.key)
                 );
                 0
             };
 
             let estimated_increase = max_required_len_bytes.saturating_sub(old_len);
             let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-            if total_memory.saturating_add(estimated_increase) > maxmem {
-                // Attempt to evict a key to make space.
-                if !ctx.db.evict_one_key(&ctx.state).await {
-                    return Err(SpinelDBError::MaxMemoryReached);
-                }
+
+            if total_memory.saturating_add(estimated_increase) > maxmem
+                && !ctx.db.evict_one_key(&ctx.state).await
+            {
+                return Err(SpinelDBError::MaxMemoryReached);
             }
         }
 
         // --- Execution Phase ---
-        // With safety checks passed, proceed to acquire locks and execute the operations.
         let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let entry = guard.get_or_insert_with_mut(self.key.clone(), || {
             StoredValue::new(DataValue::String(Bytes::new()))
@@ -234,8 +228,6 @@ impl ExecutableCommand for BitField {
                     }
                 };
 
-                // Grow the string with null bytes if the current operation requires more space.
-                // This is now safe due to the pre-flight check.
                 if required_len_bytes > bytes.len() {
                     bytes.resize(required_len_bytes, 0);
                 }
@@ -293,7 +285,6 @@ impl ExecutableCommand for BitField {
             *s = bytes.freeze();
             let new_size = s.len();
 
-            // Update the entry's metadata and the shard's memory counter if a write occurred.
             let outcome = if is_write {
                 let mem_diff = new_size as isize - old_size as isize;
                 if mem_diff != 0 {
@@ -328,7 +319,6 @@ fn read_bits(bytes: &[u8], offset: usize, bit_type: BitType) -> i64 {
     if bit_type.is_signed {
         let sign_bit_pos = bit_type.bits - 1;
         if (val >> sign_bit_pos) & 1 != 0 {
-            // Perform sign extension if the most significant bit is 1.
             let mask = u64::MAX << bit_type.bits;
             return (val | mask) as i64;
         }

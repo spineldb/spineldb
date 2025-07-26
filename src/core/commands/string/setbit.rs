@@ -6,13 +6,14 @@ use crate::core::commands::command_trait::{
 };
 use crate::core::commands::helpers::{extract_bytes, extract_string, validate_arg_count};
 use crate::core::protocol::RespFrame;
-use crate::core::storage::data_types::{DataValue, StoredValue};
+use crate::core::storage::data_types::{DataValue, MAX_STRING_SIZE, StoredValue};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use std::sync::atomic::Ordering;
 
+/// Represents the `SETBIT` command.
 #[derive(Debug, Clone, Default)]
 pub struct SetBit {
     pub key: Bytes,
@@ -31,7 +32,8 @@ impl ParseCommand for SetBit {
             .parse::<u8>()
             .map_err(|_| SpinelDBError::NotAnInteger)?;
 
-        if value != 0 && value != 1 {
+        // The bit value must be either 0 or 1.
+        if value > 1 {
             return Err(SpinelDBError::InvalidState(
                 "bit is not an integer or out of range".to_string(),
             ));
@@ -58,20 +60,29 @@ impl ExecutableCommand for SetBit {
 
         if let DataValue::String(s) = &mut entry.data {
             let byte_index = (self.offset / 8) as usize;
-            let bit_offset = (self.offset % 8) as u8;
-            let mask = 1 << bit_offset;
+
+            // Pre-flight check to prevent excessive memory allocation from a large offset.
+            if byte_index >= MAX_STRING_SIZE {
+                return Err(SpinelDBError::InvalidState(
+                    "bit offset is too large".to_string(),
+                ));
+            }
+
+            let bit_in_byte_offset = 7 - (self.offset % 8) as u8; // MSB-first bit numbering
+            let mask = 1 << bit_in_byte_offset;
 
             let old_size = s.len();
             let mut bytes = BytesMut::from(s.as_ref());
 
-            // Perbesar string jika offset berada di luar jangkauan
+            // Grow the string with null bytes if the offset is beyond the current length.
             if byte_index >= old_size {
                 bytes.resize(byte_index + 1, 0);
             }
 
             let original_byte = bytes[byte_index];
-            let original_bit = (original_byte & mask) >> bit_offset;
+            let original_bit = (original_byte & mask) >> bit_in_byte_offset;
 
+            // Set or clear the target bit.
             if self.value == 1 {
                 bytes[byte_index] |= mask;
             } else {

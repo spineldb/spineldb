@@ -19,6 +19,7 @@ use crate::core::tasks::{
     eviction::EvictionManager,
     lazy_free::LazyFreeManager,
     persistence::AofRewriteManager,
+    replica_quorum_validator::ReplicaQuorumValidatorTask,
 };
 use anyhow::{Result, anyhow};
 use std::time::Duration;
@@ -190,7 +191,16 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         });
     }
 
-    // --- Cluster / Replication Task ---
+    // --- Replication & Cluster Task ---
+    let replica_quorum_validator = ReplicaQuorumValidatorTask::new(server_state.clone());
+    let shutdown_rx_quorum_validator = shutdown_tx.subscribe();
+    background_tasks.spawn(async move {
+        replica_quorum_validator
+            .run(shutdown_rx_quorum_validator)
+            .await;
+        Ok(())
+    });
+
     if config_clone.cluster.enabled {
         let state_clone = server_state.clone();
         let shutdown_rx_cluster = shutdown_tx.subscribe();
