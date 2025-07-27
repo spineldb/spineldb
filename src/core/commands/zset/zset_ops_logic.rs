@@ -1,12 +1,17 @@
 // src/core/commands/zset/zset_ops_logic.rs
 
-use crate::core::SpinelDBError;
+use crate::core::commands::command_trait::WriteOutcome;
+use crate::core::commands::helpers::extract_string;
+use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::ExecutionContext;
 use crate::core::storage::db::zset::SortedSet;
+use crate::core::storage::db::{Db, ExecutionContext, ExecutionLocks, ShardCache};
+use crate::core::{RespValue, SpinelDBError};
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use tokio::sync::MutexGuard;
 
+/// Defines the aggregation function for ZUNIONSTORE and ZINTERSTORE.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Aggregate {
     #[default]
@@ -15,21 +20,15 @@ pub enum Aggregate {
     Max,
 }
 
-/// Helper to get a clone of a SortedSet from a given key, handling expiration and type checking.
-pub(super) async fn get_zset_from_guard(
+/// Helper to get a clone of a SortedSet from a given key.
+/// Returns WRONGTYPE error if the key exists but is not a Set.
+/// Returns Ok(None) if the key does not exist or is expired.
+pub(super) fn get_zset_from_guard<'a>(
     key: &Bytes,
-    ctx: &mut ExecutionContext<'_>,
+    db: &Db,
+    guards: &mut BTreeMap<usize, MutexGuard<'a, ShardCache>>,
 ) -> Result<Option<SortedSet>, SpinelDBError> {
-    use crate::core::storage::db::ExecutionLocks;
-    let guards = match &mut ctx.locks {
-        ExecutionLocks::Multi { guards } => guards,
-        _ => {
-            return Err(SpinelDBError::Internal(
-                "ZSet op requires multi-key lock".into(),
-            ));
-        }
-    };
-    let shard_index = ctx.db.get_shard_index(key);
+    let shard_index = db.get_shard_index(key);
     let guard = guards
         .get_mut(&shard_index)
         .ok_or_else(|| SpinelDBError::Internal("Missing shard lock for zset operation".into()))?;
@@ -37,15 +36,61 @@ pub(super) async fn get_zset_from_guard(
     if let Some(entry) = guard.get_mut(key) {
         if entry.is_expired() {
             guard.pop(key);
-            return Ok(None);
-        }
-        match &entry.data {
-            DataValue::SortedSet(zset) => Ok(Some(zset.clone())),
-            _ => Err(SpinelDBError::WrongType),
+            Ok(None)
+        } else {
+            match &entry.data {
+                DataValue::SortedSet(zset) => Ok(Some(zset.clone())),
+                _ => Err(SpinelDBError::WrongType),
+            }
         }
     } else {
         Ok(None)
     }
+}
+
+/// Helper to parse the shared `[WEIGHTS ...]` and `[AGGREGATE ...]` options.
+pub(super) fn parse_store_args(
+    args: &[RespFrame],
+    num_keys: usize,
+) -> Result<(Vec<f64>, Aggregate), SpinelDBError> {
+    let mut weights = vec![1.0; num_keys];
+    let mut aggregate = Aggregate::Sum;
+    let mut i = 0;
+
+    while i < args.len() {
+        let option = extract_string(&args[i])?.to_ascii_lowercase();
+        match option.as_str() {
+            "weights" => {
+                i += 1;
+                if args.len() < i + num_keys {
+                    return Err(SpinelDBError::SyntaxError);
+                }
+                weights = args[i..i + num_keys]
+                    .iter()
+                    .map(|f| {
+                        extract_string(f)
+                            .and_then(|s| s.parse::<f64>().map_err(|_| SpinelDBError::NotAFloat))
+                    })
+                    .collect::<Result<_, _>>()?;
+                i += num_keys;
+            }
+            "aggregate" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(SpinelDBError::SyntaxError);
+                }
+                aggregate = match extract_string(&args[i])?.to_ascii_lowercase().as_str() {
+                    "sum" => Aggregate::Sum,
+                    "min" => Aggregate::Min,
+                    "max" => Aggregate::Max,
+                    _ => return Err(SpinelDBError::SyntaxError),
+                };
+                i += 1;
+            }
+            _ => return Err(SpinelDBError::SyntaxError),
+        }
+    }
+    Ok((weights, aggregate))
 }
 
 pub(super) struct ZSetOp;
@@ -138,28 +183,40 @@ impl ZSetOp {
         dest_key: Bytes,
         zset: SortedSet,
         ctx: &mut ExecutionContext<'_>,
-    ) -> Result<(), SpinelDBError> {
-        use crate::core::storage::db::ExecutionLocks;
+    ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let guards = match &mut ctx.locks {
             ExecutionLocks::Multi { guards } => guards,
             _ => {
                 return Err(SpinelDBError::Internal(
-                    "ZSet store op requires multi-key lock".into(),
+                    "STORE op requires multi-key lock".into(),
                 ));
             }
         };
-        let shard_index = ctx.db.get_shard_index(&dest_key);
-        let guard = guards
-            .get_mut(&shard_index)
-            .ok_or_else(|| SpinelDBError::Internal("Missing dest lock".into()))?;
+        let dest_shard_index = ctx.db.get_shard_index(&dest_key);
+        let dest_guard = guards
+            .get_mut(&dest_shard_index)
+            .ok_or_else(|| SpinelDBError::Internal("Missing dest lock for STORE".into()))?;
 
-        if zset.is_empty() {
-            guard.pop(&dest_key);
-        } else {
-            let new_value = StoredValue::new(DataValue::SortedSet(zset));
-            guard.put(dest_key, new_value);
+        let set_len = zset.len();
+
+        if set_len == 0 {
+            let existed = dest_guard.pop(&dest_key).is_some();
+            let outcome = if existed {
+                WriteOutcome::Delete { keys_deleted: 1 }
+            } else {
+                WriteOutcome::DidNotWrite
+            };
+            return Ok((RespValue::Integer(0), outcome));
         }
-        Ok(())
+
+        let new_value = StoredValue::new(DataValue::SortedSet(zset));
+
+        dest_guard.put(dest_key, new_value);
+
+        Ok((
+            RespValue::Integer(set_len as i64),
+            WriteOutcome::Write { keys_modified: 1 },
+        ))
     }
 
     /// Helper to apply the aggregation function (SUM, MIN, MAX).

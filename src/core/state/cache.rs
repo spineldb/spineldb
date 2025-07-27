@@ -2,7 +2,7 @@
 
 //! Contains all state and logic related to the Intelligent Cache feature.
 
-use crate::core::commands::cache::cache_fetch::CacheFetch;
+use crate::core::commands::cache::cache_fetch::{CacheFetch, FetchOutcome};
 use crate::core::commands::cache::cache_set::CacheSet;
 use crate::core::commands::command_trait::WriteOutcome;
 use crate::core::metrics;
@@ -14,6 +14,7 @@ use crate::core::storage::db::ExecutionContext;
 use crate::core::{Command, SpinelDBError};
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::future::{BoxFuture, Shared};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,6 +29,10 @@ use tracing::{debug, warn};
 /// making it a candidate for proactive revalidation.
 const CACHE_REVALIDATOR_HOT_VARIANT_WINDOW: Duration = Duration::from_secs(3600); // 1 hour
 
+/// A type alias for a shared, clonable future that handles a single origin fetch.
+/// This is the core of the cache stampede protection mechanism.
+pub type SharedFetch = Shared<BoxFuture<'static, Result<FetchOutcome, Arc<SpinelDBError>>>>;
+
 /// Represents a job sent to the background revalidation worker.
 #[derive(Debug)]
 pub struct RevalidationJob {
@@ -39,8 +44,8 @@ pub struct RevalidationJob {
 /// Holds all state and logic related to the Intelligent Cache feature.
 #[derive(Debug)]
 pub struct CacheState {
-    /// Per-key locks to prevent cache stampedes on `CACHE.FETCH`.
-    pub fetch_locks: Arc<DashMap<Bytes, Arc<Mutex<()>>>>,
+    /// Per-key shared futures to prevent cache stampedes on `CACHE.FETCH`.
+    pub fetch_locks: Arc<DashMap<Bytes, SharedFetch>>,
     /// Per-key locks to prevent stampedes on stale-while-revalidate (SWR) background fetches.
     pub swr_locks: Arc<DashMap<Bytes, Arc<Mutex<()>>>>,
     /// Counter for cache hits.
@@ -77,7 +82,7 @@ impl CacheState {
     /// Creates a new `CacheState` with initialized counters and maps.
     pub fn new(revalidation_tx: mpsc::Sender<RevalidationJob>) -> Self {
         Self {
-            fetch_locks: Arc::new(DashMap::new()),
+            fetch_locks: Arc::new(DashMap::with_capacity(256)),
             swr_locks: Arc::new(DashMap::new()),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -147,6 +152,7 @@ impl CacheState {
     }
 
     /// Performs an HTTP fetch to an origin server and updates the cache.
+    /// This is a utility function used by background revalidation tasks.
     pub async fn fetch_from_origin(
         &self,
         server_state: &Arc<ServerState>,

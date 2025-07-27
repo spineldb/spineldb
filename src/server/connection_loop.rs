@@ -7,19 +7,20 @@ use super::stream::AnyStream;
 use crate::connection::ConnectionHandler;
 use crate::core::metrics;
 use crate::core::persistence::spldb_saver::SpldbSaverTask;
-use crate::core::state::ClientInfo;
+use crate::core::state::{ClientInfo, ClientRole}; // Import ClientRole
 use anyhow::anyhow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, broadcast};
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 /// The main server loop that accepts connections and handles graceful shutdown.
 pub async fn run(mut ctx: ServerContext) {
     let mut session_id_counter: u64 = 0;
-    let mut client_tasks = tokio::task::JoinSet::new();
+    let mut client_tasks = JoinSet::new();
 
     let mut sigint = signal(SignalKind::interrupt())
         .map_err(|e| anyhow!("Failed to register SIGINT handler: {}", e))
@@ -68,6 +69,7 @@ pub async fn run(mut ctx: ServerContext) {
                         session_id,
                         name: None,
                         db_index: 0,
+                        role: ClientRole::Normal, // Initialize new connections as 'Normal'.
                         created: Instant::now(),
                         last_command_time: Instant::now(),
                     }));
@@ -156,16 +158,8 @@ pub async fn run(mut ctx: ServerContext) {
     }
 
     info!("Waiting for critical background operations (e.g., resharding) to finish...");
-    if tokio::time::timeout(Duration::from_secs(30), async {
-        ctx.state.critical_tasks.lock().await.shutdown().await;
-    })
-    .await
-    .is_err()
-    {
-        warn!(
-            "Timed out waiting for critical operations to finish cleanly. Some operations may have been aborted."
-        );
-    }
+    // Wait indefinitely for critical tasks to avoid data corruption on shutdown.
+    ctx.state.critical_tasks.lock().await.shutdown().await;
     info!("Critical operations finished.");
 
     info!("Waiting for background tasks to finish...");

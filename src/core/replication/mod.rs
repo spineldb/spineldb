@@ -4,7 +4,6 @@
 //! role (primary or replica) based on the server's configuration.
 
 use crate::config::ReplicationConfig;
-use crate::core::commands::generic::Eval as EvalCmd;
 use crate::core::state::ServerState;
 use crate::core::{Command, SpinelDBError};
 use std::future::Future;
@@ -12,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::broadcast;
 use tokio::task::JoinError;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 // Public sub-modules for replication.
 pub mod backlog;
@@ -59,25 +58,12 @@ async fn run_backlog_feeder(state: Arc<ServerState>, mut shutdown_rx: broadcast:
             result = event_rx.recv() => {
                 match result {
                     Ok(work) => {
+                        // The `UnitOfWork` received from the event bus has already had any
+                        // necessary transformations (like EVALSHA -> EVAL) applied by the router
+                        // or transaction handler, ensuring it's safe for propagation.
                         let commands_to_propagate = match work.uow {
                             crate::core::events::UnitOfWork::Command(cmd) => {
-                                // Convert EVALSHA to EVAL for replication safety, ensuring
-                                // replicas don't need to have the script pre-loaded.
-                                if let Command::EvalSha(evalsha_cmd) = *cmd {
-                                    if let Some(script_body) = state.scripting.get(&evalsha_cmd.sha1) {
-                                        vec![Command::Eval(EvalCmd {
-                                            script: script_body,
-                                            num_keys: evalsha_cmd.num_keys,
-                                            keys: evalsha_cmd.keys.clone(),
-                                            args: evalsha_cmd.args.clone(),
-                                        })]
-                                    } else {
-                                        error!("CRITICAL: Could not find script for EVALSHA {} for replication propagation. Shutting down backlog feeder to prevent desync.", evalsha_cmd.sha1);
-                                        break; // FATAL: Stop processing to prevent desync.
-                                    }
-                                } else {
-                                    vec![*cmd]
-                                }
+                                vec![*cmd]
                             },
                             crate::core::events::UnitOfWork::Transaction(tx_data) => {
                                 // For replication, only propagate commands that actually modify data.

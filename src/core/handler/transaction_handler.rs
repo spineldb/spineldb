@@ -28,6 +28,7 @@ pub struct TransactionHandler<'a> {
 }
 
 impl<'a> TransactionHandler<'a> {
+    /// Creates a new transaction handler for the given context.
     pub fn new(
         state: Arc<ServerState>,
         db: &'a Arc<Db>,
@@ -77,52 +78,37 @@ impl<'a> TransactionHandler<'a> {
             ));
         }
 
-        // Disallow certain commands inside a transaction.
-        if matches!(
-            &command,
-            Command::Watch(_) | Command::Eval(_) | Command::EvalSha(_)
-        ) || command.get_flags().contains(CommandFlags::TRANSACTION)
-            || command.get_flags().contains(CommandFlags::PUBSUB)
-        {
-            tx_state.has_error = true;
-            return Ok(RespValue::Error(format!(
-                "ERR Command '{}' cannot be used in a transaction",
-                command.name()
-            )));
-        }
-
-        // Perform ACL check for the command being queued.
-        if self.state.acl_config.read().await.enabled {
-            let command_name = command.name();
-            let resp_frame: RespFrame = command.clone().into();
-            let raw_args = if let RespFrame::Array(mut arr) = resp_frame {
-                arr.split_off(1)
-            } else {
-                vec![]
-            };
-
-            let keys_bytes = command.get_keys();
-            let keys_as_strings: Vec<String> = keys_bytes
-                .iter()
-                .map(|b| String::from_utf8_lossy(b).into_owned())
-                .collect();
-
-            if !self.state.acl_enforcer.read().await.check_permission(
-                self.authenticated_user.as_deref(),
-                &raw_args,
-                command_name,
-                command.get_flags(),
-                &keys_as_strings,
-                &[], // Pub/Sub channels are not relevant here.
-            ) {
-                tx_state.has_error = true;
-                return Ok(RespValue::Error(
-                    "NOPERM No permission to run a command in the transaction".to_string(),
-                ));
+        // Transform EVALSHA to EVAL at queue time to prevent race conditions with SCRIPT FLUSH.
+        let command_to_queue = match command {
+            Command::EvalSha(ref evalsha_cmd) => {
+                if let Some(script_body) = self.state.scripting.get(&evalsha_cmd.sha1) {
+                    Command::Eval(EvalCmd {
+                        script: script_body,
+                        num_keys: evalsha_cmd.num_keys,
+                        keys: evalsha_cmd.keys.clone(),
+                        args: evalsha_cmd.args.clone(),
+                    })
+                } else {
+                    tx_state.has_error = true;
+                    return Ok(RespValue::Error(
+                        "NOSCRIPT No matching script. Please use EVAL.".to_string(),
+                    ));
+                }
             }
-        }
+            _ if matches!(&command, Command::Watch(_))
+                || command.get_flags().contains(CommandFlags::TRANSACTION)
+                || command.get_flags().contains(CommandFlags::PUBSUB) =>
+            {
+                tx_state.has_error = true;
+                return Ok(RespValue::Error(format!(
+                    "ERR Command '{}' cannot be used in a transaction",
+                    command.name()
+                )));
+            }
+            _ => command.clone(),
+        };
 
-        tx_state.commands.push(command);
+        tx_state.commands.push(command_to_queue);
         Ok(RespValue::SimpleString("QUEUED".into()))
     }
 
@@ -166,7 +152,6 @@ impl<'a> TransactionHandler<'a> {
 
         let (response, maybe_uow) = self.execute_transaction_atomically(tx_state).await?;
 
-        // If the transaction resulted in writes, publish it to the event bus.
         if let Some(uow) = maybe_uow {
             self.state.event_bus.publish(uow, &self.state);
         }
@@ -179,41 +164,9 @@ impl<'a> TransactionHandler<'a> {
         &mut self,
         tx_state: TransactionState,
     ) -> Result<(RespValue, Option<UnitOfWork>), SpinelDBError> {
-        // Proactive eviction check before acquiring locks.
-        if tx_state
-            .commands
-            .iter()
-            .any(|c| c.get_flags().contains(CommandFlags::WRITE))
-        {
-            let (maxmemory, policy) = {
-                let config = self.state.config.lock().await;
-                (config.maxmemory, config.maxmemory_policy)
-            };
-
-            if let Some(maxmem) = maxmemory {
-                if policy != crate::config::EvictionPolicy::NoEviction {
-                    const MAX_EVICTION_ATTEMPTS: usize = 10;
-                    for _ in 0..MAX_EVICTION_ATTEMPTS {
-                        let total_memory: usize = self
-                            .state
-                            .dbs
-                            .iter()
-                            .map(|db| db.get_current_memory())
-                            .sum();
-                        if total_memory < maxmem {
-                            break;
-                        }
-                        if !self.db.evict_one_key(&self.state).await {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
         let all_keys = self.collect_all_keys(&tx_state);
 
-        // Cluster cross-slot check
+        // Perform cluster cross-slot check before acquiring locks.
         if let Some(cluster_state) = &self.state.cluster {
             if !all_keys.is_empty() {
                 let first_slot = crate::core::cluster::slot::get_slot(&all_keys[0]);
@@ -260,7 +213,6 @@ impl<'a> TransactionHandler<'a> {
                         .increment_dirty_keys(total_keys_changed);
                 }
 
-                // Box the transaction data to keep the enum size small.
                 Some(UnitOfWork::Transaction(Box::new(TransactionData {
                     all_commands: tx_state.commands,
                     write_commands,
@@ -297,8 +249,6 @@ impl<'a> TransactionHandler<'a> {
         for (key, original_version) in watched_keys {
             let shard_index = self.db.get_shard_index(key);
             if let Some(guard) = guards.get(&shard_index) {
-                // Get the version of the key if it exists and is not expired.
-                // If it doesn't exist, its effective version for WATCH is 0.
                 let current_version = guard
                     .peek(key)
                     .filter(|e| !e.is_expired())
@@ -327,13 +277,42 @@ impl<'a> TransactionHandler<'a> {
         let mut has_flush = false;
         let mut has_error = false;
 
-        // Temporarily take ownership of the guards to pass into the context.
         let mut temp_guards = std::mem::take(guards);
 
         for command in commands {
             if has_error {
                 responses.push(RespValue::Error(
                     "EXECABORT Transaction discarded because of previous errors.".to_string(),
+                ));
+                continue;
+            }
+
+            // Re-check permissions right before execution to prevent race conditions.
+            let resp_frame: RespFrame = command.clone().into();
+            let raw_args = if let RespFrame::Array(mut arr) = resp_frame {
+                arr.split_off(1)
+            } else {
+                vec![]
+            };
+
+            let keys_bytes = command.get_keys();
+            let keys_as_strings: Vec<String> = keys_bytes
+                .iter()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .collect();
+
+            if !self.state.acl_enforcer.read().await.check_permission(
+                self.authenticated_user.as_deref(),
+                &raw_args,
+                command.name(),
+                command.get_flags(),
+                &keys_as_strings,
+                &[], // Pub/Sub channels are not relevant in a transaction.
+            ) {
+                has_error = true;
+                responses.push(RespValue::Error(
+                    "NOPERM An ACL rule preventing this command from executing was triggered."
+                        .to_string(),
                 ));
                 continue;
             }
@@ -351,7 +330,6 @@ impl<'a> TransactionHandler<'a> {
 
             let result = command.execute(&mut ctx).await;
 
-            // Reclaim ownership of the guards from the context.
             temp_guards = match ctx.locks {
                 ExecutionLocks::Multi { guards } => guards,
                 _ => unreachable!("Locks must be Multi during transaction execution"),
@@ -363,30 +341,7 @@ impl<'a> TransactionHandler<'a> {
                     if outcome != WriteOutcome::DidNotWrite
                         && !command.get_flags().contains(CommandFlags::NO_PROPAGATE)
                     {
-                        // Transform EVALSHA to EVAL for safe propagation.
-                        let cmd_to_propagate = if let Command::EvalSha(evalsha_cmd) = command {
-                            if let Some(script_body) = self.state.scripting.get(&evalsha_cmd.sha1) {
-                                Command::Eval(EvalCmd {
-                                    script: script_body,
-                                    num_keys: evalsha_cmd.num_keys,
-                                    keys: evalsha_cmd.keys.clone(),
-                                    args: evalsha_cmd.args.clone(),
-                                })
-                            } else {
-                                error!(
-                                    "CRITICAL: Script for executed EVALSHA '{}' vanished before propagation. Replicas may desync.",
-                                    evalsha_cmd.sha1
-                                );
-                                has_error = true;
-                                command.clone()
-                            }
-                        } else {
-                            command.clone()
-                        };
-
-                        if !has_error {
-                            successful_write_commands.push(cmd_to_propagate);
-                        }
+                        successful_write_commands.push(command.clone());
 
                         match outcome {
                             WriteOutcome::Write { keys_modified } => {
@@ -407,14 +362,12 @@ impl<'a> TransactionHandler<'a> {
             }
         }
 
-        // If any command failed, discard all writes from this transaction.
         if has_error {
             successful_write_commands.clear();
             total_keys_changed = 0;
             has_flush = false;
         }
 
-        // Return ownership of the guards.
         *guards = temp_guards;
 
         (

@@ -8,8 +8,8 @@
 //! design pattern for maintaining high performance and responsiveness. The process is
 //! carefully orchestrated to handle concurrent writes safely.
 
+use crate::core::commands::generic::Script as ScriptCmd;
 use crate::core::commands::generic::script::ScriptSubcommand;
-use crate::core::commands::generic::{Eval as EvalCmd, Script as ScriptCmd};
 use crate::core::events::{PropagatedWork, UnitOfWork};
 use crate::core::protocol::RespFrame;
 use crate::core::state::ServerState;
@@ -194,10 +194,9 @@ async fn append_buffered_work_to_temp_file(
         "AOF rewrite: Appending {} commands that arrived during snapshot to temp file.",
         buffered_work.len()
     );
-    // CRITICAL: Get a fresh script snapshot to handle scripts loaded *during* the rewrite.
-    let scripts_snapshot = state.scripting.get_all_scripts();
     for work_item in buffered_work {
-        write_uow_to_file(&mut temp_file, work_item.uow, &scripts_snapshot)?;
+        // The scripts_snapshot is no longer needed here as EVALSHA is transformed upstream.
+        write_uow_to_file(&mut temp_file, work_item.uow)?;
     }
     temp_file.sync_all()?;
     Ok(())
@@ -219,60 +218,27 @@ fn write_value_as_commands(
 }
 
 /// Serializes a UnitOfWork (a single command or a transaction) to a file.
-fn write_uow_to_file(
-    file: &mut StdFile,
-    uow: UnitOfWork,
-    scripts_snapshot: &HashMap<String, Bytes>,
-) -> Result<(), SpinelDBError> {
+fn write_uow_to_file(file: &mut StdFile, uow: UnitOfWork) -> Result<(), SpinelDBError> {
+    // The EVALSHA->EVAL transformation is now handled by the router/transaction handler,
+    // so this function can be simplified.
     let frames_to_write: Vec<RespFrame> = match uow {
         UnitOfWork::Transaction(tx_data) => {
             let mut frames: Vec<RespFrame> = Vec::with_capacity(tx_data.all_commands.len() + 2);
             frames.push(Command::Multi.into());
             for cmd in tx_data.all_commands {
-                frames.push(transform_evalsha_for_persistence(cmd, scripts_snapshot)?);
+                frames.push(cmd.into());
             }
             frames.push(Command::Exec.into());
             frames
         }
         UnitOfWork::Command(cmd) => {
-            vec![transform_evalsha_for_persistence(*cmd, scripts_snapshot)?]
+            vec![(*cmd).into()]
         }
     };
     for frame in frames_to_write {
         file.write_all(&frame.encode_to_vec()?)?;
     }
     Ok(())
-}
-
-/// Converts an `EVALSHA` command into an `EVAL` command for persistence, ensuring the AOF is self-contained.
-/// This is crucial for data consistency on restore.
-fn transform_evalsha_for_persistence(
-    cmd: Command,
-    scripts_snapshot: &HashMap<String, Bytes>,
-) -> Result<RespFrame, SpinelDBError> {
-    if let Command::EvalSha(evalsha_cmd) = cmd {
-        // Look up the script body from the provided snapshot.
-        if let Some(script_body) = scripts_snapshot.get(&evalsha_cmd.sha1) {
-            Ok(Command::Eval(EvalCmd {
-                script: script_body.clone(),
-                num_keys: evalsha_cmd.num_keys,
-                keys: evalsha_cmd.keys,
-                args: evalsha_cmd.args,
-            })
-            .into())
-        } else {
-            // This case indicates a logic error where a script was executed but not found for persistence.
-            let err_msg = format!(
-                "Could not find script for EVALSHA {} during AOF rewrite. Cannot guarantee data consistency.",
-                evalsha_cmd.sha1
-            );
-            error!("{}", err_msg);
-            Err(SpinelDBError::AofError(err_msg))
-        }
-    } else {
-        // For any other command, convert it to a frame directly.
-        Ok(cmd.into())
-    }
 }
 
 /// Generates the path for the temporary AOF file, e.g., "temp-rewrite-spineldb.aof".
