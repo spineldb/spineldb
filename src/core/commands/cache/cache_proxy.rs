@@ -4,7 +4,7 @@
 //! get-or-fetch pattern. It attempts to retrieve a key, and if it's a
 //! cache miss, it automatically fetches from an origin and caches the result.
 
-use crate::core::commands::cache::cache_fetch::CacheFetch;
+use crate::core::commands::cache::cache_fetch::{CacheFetch, FetchOutcome};
 use crate::core::commands::cache::cache_get::CacheGet;
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
@@ -181,6 +181,11 @@ impl CacheProxy {
             return Ok(get_response);
         }
 
+        // On cache miss, release the lock before starting the potentially long fetch operation.
+        // This prevents a deadlock where the fetch logic tries to acquire the same lock.
+        // The `CACHE.FETCH` logic has its own stampede protection.
+        ctx.release_locks();
+
         debug!(
             "CACHE.PROXY miss for key '{}'. Proceeding to fetch.",
             String::from_utf8_lossy(&self.key)
@@ -295,8 +300,14 @@ impl CacheProxy {
         };
 
         // This call will perform the fetch, store the result, and return the body.
-        let (body, _) = fetch_cmd.execute(ctx).await?;
-        Ok(RouteResponse::Single(body))
+        let (outcome, _write_outcome) = fetch_cmd.fetch_from_origin(&ctx.state, false).await?;
+
+        let body_bytes = match outcome {
+            FetchOutcome::InMemory(bytes) => bytes,
+            FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+        };
+
+        Ok(RouteResponse::Single(RespValue::BulkString(body_bytes)))
     }
 }
 

@@ -52,7 +52,8 @@ impl ExecutableCommand for CacheBypass {
         };
 
         // Call the fetch logic with the `bypass_store` flag set to true.
-        let (outcome, _) = fetch_cmd.fetch_from_origin(ctx, true).await?;
+        // Pass `&ctx.state` instead of the whole `ctx` to match the new signature.
+        let (outcome, _) = fetch_cmd.fetch_from_origin(&ctx.state, true).await?;
 
         // Convert the fetch outcome into a single byte buffer for the client.
         // If the content was streamed to disk, it's read back into memory here.
