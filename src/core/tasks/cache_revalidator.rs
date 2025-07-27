@@ -1,5 +1,8 @@
 // src/core/tasks/cache_revalidator.rs
 
+//! Implements the background worker and proactive revalidator tasks for the
+//! Intelligent Caching Engine.
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,10 +13,10 @@ use tracing::{info, warn};
 use crate::core::commands::cache::cache_get::revalidate_and_update_cache;
 use crate::core::state::ServerState;
 use crate::core::state::cache::RevalidationJob;
-
 use crate::core::storage::data_types::DataValue;
 
-/// A task responsible for performing background cache revalidations.
+/// A task responsible for performing background cache revalidations,
+/// typically triggered by a stale-while-revalidate (SWR) policy.
 pub struct CacheRevalidationWorker {
     pub state: Arc<ServerState>,
     /// Receives revalidation jobs from the main application threads.
@@ -28,9 +31,15 @@ impl CacheRevalidationWorker {
             tokio::select! {
                 Some(job) = self.rx.recv() => {
                     let state_clone = self.state.clone();
+                    // Spawn each revalidation job as a separate task to allow for concurrent fetches.
                     tokio::spawn(async move {
+                        // The spawned task must acquire its own lock on the relevant shard.
+                        let db = state_clone.get_db(0).unwrap();
+                        let shard_index = db.get_shard_index(&job.key);
+                        let mut guard = db.get_shard(shard_index).entries.lock().await;
+
                         if let Err(e) =
-                            revalidate_and_update_cache(state_clone, job.key, job.url, job.variant_hash, None)
+                            revalidate_and_update_cache(state_clone, job.key, job.url, job.variant_hash, None, &mut guard)
                                 .await
                         {
                             warn!("Proactive cache revalidation failed: {}", e);
@@ -54,6 +63,8 @@ const CACHE_REVALIDATOR_SAMPLE_SIZE: usize = 20;
 const CACHE_REVALIDATOR_PRE_WARM_WINDOW: Duration = Duration::from_secs(10);
 
 /// A task responsible for proactive cache revalidation (pre-warming).
+/// It periodically samples keys marked with a `prewarm` policy and revalidates them
+/// just before they expire.
 pub struct CacheRevalidator {
     state: Arc<ServerState>,
 }
@@ -94,6 +105,7 @@ impl CacheRevalidator {
             return;
         }
 
+        // Take a small, random sample of keys to check in this cycle.
         let sample: Vec<Bytes> = prewarm_keys_guard
             .iter()
             .take(CACHE_REVALIDATOR_SAMPLE_SIZE)
@@ -108,6 +120,7 @@ impl CacheRevalidator {
 
             if let Some(entry) = guard.peek(&key) {
                 if let DataValue::HttpCache { variants, .. } = &entry.data {
+                    // Check if the entry has an expiry and is within the pre-warm window.
                     if let Some(expiry) = entry.expiry {
                         let time_left = expiry.saturating_duration_since(Instant::now());
 
@@ -116,17 +129,23 @@ impl CacheRevalidator {
                         {
                             let key_clone = key.clone();
                             let variants_clone = variants.clone();
+                            // Drop the lock before calling the async revalidation function
+                            // to avoid holding the lock across an await point.
                             drop(guard);
 
                             self.state
                                 .cache
                                 .trigger_smart_background_revalidation(key_clone, variants_clone)
                                 .await;
+                            // `break` is used to move on to the next revalidation cycle
+                            // to avoid a burst of requests in a single cycle.
                             break;
                         }
                     }
                 }
             } else {
+                // The key exists in the prewarm set but not in the database,
+                // so it was likely deleted. Remove it from the prewarm set.
                 self.state.cache.prewarm_keys.write().await.remove(&key);
             }
         }

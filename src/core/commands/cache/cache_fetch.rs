@@ -12,6 +12,7 @@ use crate::core::commands::command_trait::{
 use crate::core::commands::helpers::{ArgParser, extract_bytes, validate_fetch_url};
 use crate::core::handler::command_router::RouteResponse;
 use crate::core::protocol::RespFrame;
+use crate::core::state::ServerState;
 use crate::core::storage::cache_types::{CacheBody, ManifestState};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{Command, RespValue, SpinelDBError};
@@ -178,11 +179,13 @@ impl CacheFetch {
                 "Bypassing cache store for authorized request to '{}'",
                 self.url
             );
-            let (body, _) = self.fetch_from_origin(ctx, true).await?;
-            return Ok(RouteResponse::Single(RespValue::BulkString(match body {
-                FetchOutcome::InMemory(bytes) => bytes,
-                FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
-            })));
+            let (outcome, _) = self.fetch_from_origin(&ctx.state, true).await?;
+            return Ok(RouteResponse::Single(RespValue::BulkString(
+                match outcome {
+                    FetchOutcome::InMemory(bytes) => bytes,
+                    FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+                },
+            )));
         }
 
         // Attempt an initial non-blocking read from the cache.
@@ -219,28 +222,10 @@ impl CacheFetch {
 
                 let state_clone = state.clone();
                 let command_clone = self.clone();
-                let auth_user_clone = ctx.authenticated_user.clone();
-                let session_id = ctx.session_id;
 
                 let fetch_future: BoxFuture<'static, Result<FetchOutcome, Arc<SpinelDBError>>> =
                     async move {
-                        let db = state_clone.get_db(0).unwrap();
-                        let command_for_ctx = Command::Cache(crate::core::commands::cache::Cache {
-                            subcommand:
-                                crate::core::commands::cache::command::CacheSubcommand::Fetch(
-                                    command_clone.clone(),
-                                ),
-                        });
-                        let mut new_ctx = ExecutionContext {
-                            state: state_clone.clone(),
-                            locks: db.determine_locks_for_command(&command_for_ctx).await,
-                            db: &db,
-                            command: Some(command_for_ctx),
-                            session_id,
-                            authenticated_user: auth_user_clone,
-                        };
-
-                        match command_clone.fetch_from_origin(&mut new_ctx, false).await {
+                        match command_clone.fetch_from_origin(&state_clone, false).await {
                             Ok((outcome, write_outcome)) => {
                                 // The leader is responsible for updating the dirty keys counter.
                                 if let WriteOutcome::Write { keys_modified } = write_outcome {
@@ -288,13 +273,13 @@ impl CacheFetch {
     }
 
     /// Fetches from the origin, deciding whether to stream to disk or buffer in memory.
-    pub async fn fetch_from_origin<'a>(
+    pub async fn fetch_from_origin(
         &self,
-        ctx: &mut ExecutionContext<'a>,
+        server_state: &Arc<ServerState>,
         mut bypass_store: bool,
     ) -> Result<(FetchOutcome, WriteOutcome), SpinelDBError> {
         let (streaming_threshold, cache_path, negative_cache_ttl) = {
-            let config = ctx.state.config.lock().await;
+            let config = server_state.config.lock().await;
             (
                 config.cache.streaming_threshold_bytes,
                 config.cache.on_disk_path.clone(),
@@ -302,7 +287,7 @@ impl CacheFetch {
             )
         };
 
-        ctx.state.cache.increment_misses();
+        server_state.cache.increment_misses();
         let client = reqwest::Client::new();
         let mut res = client
             .get(&self.url)
@@ -315,6 +300,21 @@ impl CacheFetch {
             let error_message = format!("Origin server responded with status {status}");
 
             if !bypass_store && negative_cache_ttl > 0 {
+                let db = server_state.get_db(0).unwrap();
+                let set_cmd_for_lock = Command::Cache(crate::core::commands::cache::Cache {
+                    subcommand: crate::core::commands::cache::command::CacheSubcommand::Set(
+                        CacheSet::default(),
+                    ),
+                });
+                let mut temp_ctx = ExecutionContext {
+                    state: server_state.clone(),
+                    locks: db.determine_locks_for_command(&set_cmd_for_lock).await,
+                    db: &db,
+                    command: Some(set_cmd_for_lock),
+                    session_id: 0,
+                    authenticated_user: None,
+                };
+
                 let set_cmd_internal = CacheSet {
                     key: self.key.clone(),
                     body_data: Bytes::from(status.as_u16().to_string()),
@@ -329,7 +329,10 @@ impl CacheFetch {
                 };
 
                 let _ = set_cmd_internal
-                    .execute_internal(ctx, CacheBody::InMemory(set_cmd_internal.body_data.clone()))
+                    .execute_internal(
+                        &mut temp_ctx,
+                        CacheBody::InMemory(set_cmd_internal.body_data.clone()),
+                    )
                     .await;
 
                 warn!(
@@ -366,7 +369,7 @@ impl CacheFetch {
             let final_filename = Uuid::new_v4().to_string();
             let final_path = PathBuf::from(&cache_path).join(&final_filename);
 
-            ctx.state
+            server_state
                 .cache
                 .log_manifest(ManifestState::Pending, final_path.clone())
                 .await?;
@@ -422,12 +425,27 @@ impl CacheFetch {
             headers: self.headers.clone(),
         };
 
+        let db = server_state.get_db(0).unwrap();
+        let set_cmd_for_lock = Command::Cache(crate::core::commands::cache::Cache {
+            subcommand: crate::core::commands::cache::command::CacheSubcommand::Set(
+                set_cmd_internal.clone(),
+            ),
+        });
+        let mut set_ctx = ExecutionContext {
+            state: server_state.clone(),
+            locks: db.determine_locks_for_command(&set_cmd_for_lock).await,
+            db: &db,
+            command: Some(set_cmd_for_lock),
+            session_id: 0, // Internal operation
+            authenticated_user: None,
+        };
+
         let (_, write_outcome) = set_cmd_internal
-            .execute_internal(ctx, final_cache_body.clone())
+            .execute_internal(&mut set_ctx, final_cache_body.clone())
             .await?;
 
         if let CacheBody::OnDisk { path, .. } = final_cache_body {
-            ctx.state
+            server_state
                 .cache
                 .log_manifest(ManifestState::Committed, path)
                 .await?;
