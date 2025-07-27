@@ -1,6 +1,6 @@
 // src/core/commands/zset/zunionstore.rs
 
-use super::zset_ops_logic::{Aggregate, ZSetOp, get_zset_from_guard};
+use super::zset_ops_logic::{Aggregate, ZSetOp, get_zset_from_guard, parse_store_args};
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
@@ -41,44 +41,7 @@ impl ParseCommand for ZUnionStore {
             .map(extract_bytes)
             .collect::<Result<_, _>>()?;
 
-        let mut weights = vec![1.0; num_keys];
-        let mut aggregate = Aggregate::Sum;
-        let mut i = 2 + num_keys;
-
-        while i < args.len() {
-            let option = extract_string(&args[i])?.to_ascii_lowercase();
-            match option.as_str() {
-                "weights" => {
-                    i += 1;
-                    if args.len() < i + num_keys {
-                        return Err(SpinelDBError::SyntaxError);
-                    }
-                    weights = args[i..i + num_keys]
-                        .iter()
-                        .map(|f| {
-                            extract_string(f).and_then(|s| {
-                                s.parse::<f64>().map_err(|_| SpinelDBError::NotAFloat)
-                            })
-                        })
-                        .collect::<Result<_, _>>()?;
-                    i += num_keys;
-                }
-                "aggregate" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(SpinelDBError::SyntaxError);
-                    }
-                    aggregate = match extract_string(&args[i])?.to_ascii_lowercase().as_str() {
-                        "sum" => Aggregate::Sum,
-                        "min" => Aggregate::Min,
-                        "max" => Aggregate::Max,
-                        _ => return Err(SpinelDBError::SyntaxError),
-                    };
-                    i += 1;
-                }
-                _ => return Err(SpinelDBError::SyntaxError),
-            }
-        }
+        let (weights, aggregate) = parse_store_args(&args[2 + num_keys..], num_keys)?;
 
         Ok(ZUnionStore {
             destination,
@@ -96,19 +59,31 @@ impl ExecutableCommand for ZUnionStore {
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let mut zsets = Vec::with_capacity(self.keys.len());
+        // Temporarily take ownership of the guards to pass to the helper.
+        let mut temp_guards = match std::mem::replace(
+            &mut ctx.locks,
+            crate::core::storage::db::ExecutionLocks::None,
+        ) {
+            crate::core::storage::db::ExecutionLocks::Multi { guards } => guards,
+            _ => {
+                return Err(SpinelDBError::Internal(
+                    "ZUNIONSTORE requires multi-key lock".into(),
+                ));
+            }
+        };
+
         for key in &self.keys {
-            zsets.push(get_zset_from_guard(key, ctx).await?.unwrap_or_default());
+            zsets.push(get_zset_from_guard(key, ctx.db, &mut temp_guards)?.unwrap_or_default());
         }
 
         let result_zset = ZSetOp::union(&zsets, &self.weights, self.aggregate);
-        let len = result_zset.len();
 
-        ZSetOp::store_result(self.destination.clone(), result_zset, ctx)?;
+        // Put the guards back into the context before calling the store helper.
+        ctx.locks = crate::core::storage::db::ExecutionLocks::Multi {
+            guards: temp_guards,
+        };
 
-        Ok((
-            RespValue::Integer(len as i64),
-            WriteOutcome::Write { keys_modified: 1 },
-        ))
+        ZSetOp::store_result(self.destination.clone(), result_zset, ctx)
     }
 }
 
@@ -129,7 +104,7 @@ impl CommandSpec for ZUnionStore {
         1
     }
     fn step(&self) -> i64 {
-        0 // Tidak bisa di-step karena numkeys
+        0 // Cannot be stepped due to numkeys argument
     }
     fn get_keys(&self) -> Vec<Bytes> {
         let mut all_keys = vec![self.destination.clone()];
@@ -140,18 +115,16 @@ impl CommandSpec for ZUnionStore {
         let mut args = vec![self.destination.clone(), self.keys.len().to_string().into()];
         args.extend_from_slice(&self.keys);
 
-        // Periksa apakah bobotnya bukan default (semua 1.0)
         let is_weights_default = self.weights.iter().all(|&w| (w - 1.0).abs() < f64::EPSILON);
         if !is_weights_default {
             args.push("WEIGHTS".into());
             args.extend(self.weights.iter().map(|w| w.to_string().into()));
         }
 
-        // Periksa apakah agregatnya bukan default (SUM)
         if !matches!(self.aggregate, Aggregate::Sum) {
             args.push("AGGREGATE".into());
             let agg_str = match self.aggregate {
-                Aggregate::Sum => unreachable!(), // Sudah diperiksa di atas
+                Aggregate::Sum => unreachable!(),
                 Aggregate::Min => "MIN",
                 Aggregate::Max => "MAX",
             };

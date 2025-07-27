@@ -6,7 +6,7 @@ use crate::core::commands::command_trait::{
 };
 use crate::core::commands::helpers::{extract_bytes, validate_arg_count};
 use crate::core::protocol::RespFrame;
-use crate::core::storage::data_types::DataValue; // Import DataValue
+use crate::core::storage::data_types::DataValue;
 use crate::core::storage::db::{ExecutionContext, ExecutionLocks};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
@@ -72,13 +72,13 @@ impl ExecutableCommand for RenameNx {
                 SpinelDBError::Internal("Missing source lock for RENAMENX".into())
             })?;
 
-            // Notify any clients blocked on the source key before moving it.
+            // Wake up anyone waiting on the source key before it's removed.
             if let Some(entry) = source_guard.peek(&self.source) {
                 match &entry.data {
-                    DataValue::List(_) => {
+                    DataValue::List(_) | DataValue::SortedSet(_) => {
                         ctx.state
                             .blocker_manager
-                            .notify_waiters(&self.source, Bytes::new());
+                            .wake_waiters_for_modification(&self.source);
                     }
                     DataValue::Stream(_) => {
                         ctx.state

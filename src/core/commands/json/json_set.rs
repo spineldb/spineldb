@@ -43,12 +43,14 @@ impl ExecutableCommand for JsonSet {
 
         let path = helpers::parse_path(&self.path)?;
 
-        let (_shard, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let entry = guard.get_or_insert_with_mut(self.key.clone(), || {
             StoredValue::new(DataValue::Json(serde_json::Value::Null))
         });
 
         if let DataValue::Json(root) = &mut entry.data {
+            let old_size = helpers::estimate_json_memory(root);
+
             let set_op = |target: &mut serde_json::Value| {
                 *target = new_value.clone();
                 Ok(serde_json::Value::Null) // Return value is not used for SET
@@ -60,8 +62,12 @@ impl ExecutableCommand for JsonSet {
                 helpers::find_and_modify(root, &path, set_op, true)?;
             }
 
+            let new_size = helpers::estimate_json_memory(root);
+            let mem_diff = new_size as isize - old_size as isize;
+
             entry.version = entry.version.wrapping_add(1);
-            entry.size = root.to_string().len(); // Recalculate size
+            entry.size = new_size;
+            shard.update_memory(mem_diff);
 
             Ok((
                 RespValue::SimpleString("OK".into()),

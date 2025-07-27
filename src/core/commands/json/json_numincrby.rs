@@ -45,7 +45,7 @@ impl ExecutableCommand for JsonNumIncrBy {
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let path = helpers::parse_path(&self.path)?;
 
-        let (_shard, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         // This command requires the key and path to already exist.
         let Some(entry) = guard.get_mut(&self.key) else {
             return Err(SpinelDBError::InvalidState(
@@ -61,6 +61,7 @@ impl ExecutableCommand for JsonNumIncrBy {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut final_value_str = String::new();
+            let old_size = helpers::estimate_json_memory(root);
 
             // Define the increment operation as a closure.
             let incr_op = |target: &mut Value| {
@@ -99,9 +100,13 @@ impl ExecutableCommand for JsonNumIncrBy {
             // `create_if_not_exist` is `false` because the path must exist.
             helpers::find_and_modify(root, &path, incr_op, false)?;
 
+            let new_size = helpers::estimate_json_memory(root);
+            let mem_diff = new_size as isize - old_size as isize;
+
             // Update metadata since the value has changed.
             entry.version = entry.version.wrapping_add(1);
-            entry.size = root.to_string().len();
+            entry.size = new_size;
+            shard.update_memory(mem_diff);
 
             Ok((
                 RespValue::BulkString(final_value_str.into()),

@@ -1,4 +1,4 @@
-//! Implements the `JSON.CLEAR` command for clearing a JSON value.
+// src/core/commands/json/json_clear.rs
 
 use super::helpers;
 use crate::core::commands::command_spec::CommandSpec;
@@ -38,7 +38,7 @@ impl ExecutableCommand for JsonClear {
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let path = helpers::parse_path(&self.path)?;
 
-        let (_, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         };
@@ -49,37 +49,55 @@ impl ExecutableCommand for JsonClear {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut cleared_count = 0;
+            let old_size = helpers::estimate_json_memory(root);
 
             let clear_op = |target: &mut Value| {
                 match target {
-                    Value::Object(map) => {
+                    Value::Object(map) if !map.is_empty() => {
                         map.clear();
                         cleared_count += 1;
                     }
-                    Value::Array(arr) => {
+                    Value::Array(arr) if !arr.is_empty() => {
                         arr.clear();
                         cleared_count += 1;
                     }
-                    _ => {
-                        // For primitives, set to Null
-                        *target = Value::Null;
+                    Value::String(_) => {
+                        *target = Value::String(String::new());
                         cleared_count += 1;
                     }
+                    Value::Number(_) => {
+                        *target = Value::Number(0.into());
+                        cleared_count += 1;
+                    }
+                    _ => {}
                 }
-                Ok(Value::Null) // Return value not directly used for count
+                Ok(Value::Null)
             };
 
-            helpers::find_and_modify(root, &path, clear_op, false)?;
+            let find_result = helpers::find_and_modify(root, &path, clear_op, false);
 
-            if cleared_count > 0 {
-                entry.version = entry.version.wrapping_add(1);
-                entry.size = root.to_string().len();
-                Ok((
-                    RespValue::Integer(cleared_count),
-                    WriteOutcome::Write { keys_modified: 1 },
-                ))
-            } else {
-                Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite))
+            match find_result {
+                Ok(_) => {
+                    if cleared_count > 0 {
+                        let new_size = helpers::estimate_json_memory(root);
+                        let mem_diff = new_size as isize - old_size as isize;
+
+                        entry.version = entry.version.wrapping_add(1);
+                        entry.size = new_size;
+                        shard.update_memory(mem_diff);
+
+                        Ok((
+                            RespValue::Integer(cleared_count),
+                            WriteOutcome::Write { keys_modified: 1 },
+                        ))
+                    } else {
+                        Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite))
+                    }
+                }
+                Err(SpinelDBError::InvalidState(msg)) if msg == "path does not exist" => {
+                    Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite))
+                }
+                Err(e) => Err(e),
             }
         } else {
             Err(SpinelDBError::WrongType)

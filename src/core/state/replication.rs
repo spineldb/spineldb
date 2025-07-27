@@ -68,8 +68,8 @@ pub struct ReplicationState {
     /// A set of master run IDs that this replica should refuse to connect to.
     /// This is a safety mechanism used during Warden-led failovers to prevent
     /// connecting to a demoted (stale) primary.
-    /// Key: Master run_id, Value: Expiry time for the poison entry.
-    pub poisoned_masters: Arc<DashMap<String, Instant>>,
+    /// Key: Master run_id, Value: UNIX timestamp (seconds) for the poison entry's expiry.
+    pub poisoned_masters: Arc<DashMap<String, u64>>,
 }
 
 impl ReplicationState {
@@ -93,22 +93,15 @@ impl ReplicationState {
         info!("Saving poisoned masters state to disk.");
         let now_unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
-        // Snapshot the DashMap, filter out expired entries, and convert Instants to UNIX timestamps.
+        // Snapshot the DashMap, filtering out any entries that have already expired.
         let entries: HashMap<String, u64> = self
             .poisoned_masters
             .iter()
-            .filter_map(|entry| {
-                let expiry_instant = *entry.value();
-                if expiry_instant > Instant::now() {
-                    let remaining_secs = expiry_instant.duration_since(Instant::now()).as_secs();
-                    Some((entry.key().clone(), now_unix_secs + remaining_secs))
-                } else {
-                    None
-                }
-            })
+            .filter(|entry| *entry.value() > now_unix_secs)
+            .map(|entry| (entry.key().clone(), *entry.value()))
             .collect();
 
         if entries.is_empty() {
@@ -138,14 +131,12 @@ impl ReplicationState {
                     Ok(deserialized) => {
                         let now_unix_secs = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs();
                         for (run_id, expiry_timestamp) in deserialized.entries {
                             if expiry_timestamp > now_unix_secs {
-                                let remaining_duration =
-                                    Duration::from_secs(expiry_timestamp - now_unix_secs);
-                                self.poisoned_masters
-                                    .insert(run_id, Instant::now() + remaining_duration);
+                                // The entry is still valid, load it directly into the map.
+                                self.poisoned_masters.insert(run_id, expiry_timestamp);
                             }
                         }
                         info!(

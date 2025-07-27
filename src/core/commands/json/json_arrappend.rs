@@ -59,7 +59,7 @@ impl ExecutableCommand for JsonArrAppend {
 
         let path = helpers::parse_path(&self.path)?;
 
-        let (_shard, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let entry = guard.get_or_insert_with_mut(self.key.clone(), || {
             let mut root = Value::Null;
             if !path.is_empty() {
@@ -77,6 +77,8 @@ impl ExecutableCommand for JsonArrAppend {
         });
 
         if let DataValue::Json(root) = &mut entry.data {
+            let old_size = helpers::estimate_json_memory(root);
+
             let append_op = |target: &mut Value| {
                 if target.is_null() {
                     *target = Value::Array(vec![]);
@@ -95,8 +97,12 @@ impl ExecutableCommand for JsonArrAppend {
 
             let final_len = res.as_u64().unwrap_or(0) as i64;
 
+            let new_size = helpers::estimate_json_memory(root);
+            let mem_diff = new_size as isize - old_size as isize;
+
             entry.version = entry.version.wrapping_add(1);
-            entry.size = root.to_string().len();
+            entry.size = new_size;
+            shard.update_memory(mem_diff);
 
             Ok((
                 RespValue::Integer(final_len),

@@ -8,7 +8,7 @@ use crate::core::handler::command_router::{RouteResponse, Router};
 use crate::core::protocol::{RespFrame, RespFrameCodec};
 use crate::core::pubsub::handler::PubSubModeHandler;
 use crate::core::replication::handler::ReplicaHandler;
-use crate::core::state::ServerState;
+use crate::core::state::{ClientRole, ServerState}; // Import ClientRole
 use crate::core::{Command, SpinelDBError};
 use crate::server::AnyStream;
 use futures::{SinkExt, StreamExt, stream};
@@ -240,6 +240,13 @@ impl ConnectionHandler {
         conn_guard: &mut ConnectionGuard,
     ) -> Result<NextAction, SpinelDBError> {
         self.role = ConnectionRole::ReplicaHandler;
+
+        // Update the client info to reflect its new role as a replica.
+        if let Some(entry) = self.state.clients.get(&self.session_id) {
+            let (client_info_arc, _) = entry.value();
+            client_info_arc.lock().await.role = ClientRole::Replica;
+        }
+
         conn_guard.set_handed_off();
         info!("Handing off connection {} to ReplicaHandler.", self.addr);
         let shutdown_rx_for_handler = self.shutdown_rx.resubscribe();

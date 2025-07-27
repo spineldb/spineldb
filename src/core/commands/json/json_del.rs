@@ -44,7 +44,7 @@ impl ExecutableCommand for JsonDel {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        let (_, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         };
@@ -55,6 +55,7 @@ impl ExecutableCommand for JsonDel {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut total_deleted = 0;
+            let old_size = helpers::estimate_json_memory(root);
 
             for path_str in &self.paths {
                 if path_str == "$" || path_str == "." {
@@ -71,8 +72,13 @@ impl ExecutableCommand for JsonDel {
             }
 
             if total_deleted > 0 {
+                let new_size = helpers::estimate_json_memory(root);
+                let mem_diff = new_size as isize - old_size as isize;
+
                 entry.version = entry.version.wrapping_add(1);
-                entry.size = root.to_string().len();
+                entry.size = new_size;
+                shard.update_memory(mem_diff);
+
                 Ok((
                     RespValue::Integer(total_deleted),
                     WriteOutcome::Write { keys_modified: 1 },

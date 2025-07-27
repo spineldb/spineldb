@@ -5,13 +5,14 @@ use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
 };
 use crate::core::commands::helpers::{extract_bytes, extract_string};
-use crate::core::commands::zset::ZIncrBy;
 use crate::core::commands::zset::zpop_logic::PopSide;
+use crate::core::commands::zset::{ZIncrBy, ZPopMax, ZPopMin};
+use crate::core::events::{TransactionData, UnitOfWork};
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::storage::db::zset::SortedSet;
-use crate::core::{RespValue, SpinelDBError};
+use crate::core::{Command, RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 
@@ -177,24 +178,46 @@ impl ExecutableCommand for Zadd {
             if changed_count > 0 {
                 // After adding elements, try to satisfy a blocked client. The notifier
                 // will atomically pop the element if a waiter exists.
-                // Try to pop for BZPOPMIN first.
-                let popped_for_min = state_clone.blocker_manager.notify_and_pop_zset_waiter(
-                    zset,
-                    &self.key,
-                    PopSide::Min,
-                );
+                let popped_side = state_clone
+                    .blocker_manager
+                    .notify_and_pop_zset_waiter(zset, &self.key, PopSide::Min)
+                    .or_else(|| {
+                        state_clone.blocker_manager.notify_and_pop_zset_waiter(
+                            zset,
+                            &self.key,
+                            PopSide::Max,
+                        )
+                    });
 
-                // If a MIN waiter was not found, try to pop for a BZPOPMAX waiter.
-                if !popped_for_min {
-                    state_clone.blocker_manager.notify_and_pop_zset_waiter(
-                        zset,
-                        &self.key,
-                        PopSide::Max,
-                    );
+                // If an atomic handoff occurred, we must manually propagate the state change.
+                if let Some(side) = popped_side {
+                    let zadd_cmd_for_tx = Command::Zadd(self.clone());
+                    let zpop_cmd_for_tx = match side {
+                        PopSide::Min => Command::ZPopMin(ZPopMin {
+                            pop_cmd: super::zpop_logic::ZPop::new(self.key.clone(), side, Some(1)),
+                        }),
+                        PopSide::Max => Command::ZPopMax(ZPopMax {
+                            pop_cmd: super::zpop_logic::ZPop::new(self.key.clone(), side, Some(1)),
+                        }),
+                    };
+
+                    let tx_data = TransactionData {
+                        all_commands: vec![zadd_cmd_for_tx.clone(), zpop_cmd_for_tx.clone()],
+                        write_commands: vec![zadd_cmd_for_tx, zpop_cmd_for_tx],
+                    };
+
+                    ctx.state
+                        .event_bus
+                        .publish(UnitOfWork::Transaction(Box::new(tx_data)), &ctx.state);
+
+                    // Since propagation is handled, return DidNotWrite.
+                    return Ok((
+                        RespValue::Integer(if self.ch { changed_count } else { added_count }),
+                        WriteOutcome::DidNotWrite,
+                    ));
                 }
 
-                // Recalculate memory and update metadata based on the final state of the zset,
-                // which may have changed due to the notifier popping an element.
+                // Standard write path (no handoff).
                 let new_mem = zset.memory_usage();
                 entry.version = entry.version.wrapping_add(1);
                 entry.size = new_mem;
@@ -207,7 +230,7 @@ impl ExecutableCommand for Zadd {
                 let result_count = if self.ch { changed_count } else { added_count };
 
                 Ok((
-                    RespValue::Integer(result_count as i64),
+                    RespValue::Integer(result_count),
                     WriteOutcome::Write { keys_modified: 1 },
                 ))
             } else {

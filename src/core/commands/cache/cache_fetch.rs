@@ -14,16 +14,26 @@ use crate::core::handler::command_router::RouteResponse;
 use crate::core::protocol::RespFrame;
 use crate::core::storage::cache_types::{CacheBody, ManifestState};
 use crate::core::storage::db::ExecutionContext;
-use crate::core::{RespValue, SpinelDBError};
+use crate::core::{Command, RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::future::{BoxFuture, FutureExt};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::fs::OpenOptions;
+use tokio::fs::{File as TokioFile, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use uuid::Uuid;
+
+/// The cloneable result of a shared origin fetch operation. This allows the outcome
+/// of a single fetch to be distributed to multiple waiting clients.
+#[derive(Debug, Clone)]
+pub enum FetchOutcome {
+    /// The response body is small and held in memory.
+    InMemory(Bytes),
+    /// The response body was large and has been streamed to a file on disk.
+    OnDisk { path: PathBuf, size: u64 },
+}
 
 /// Represents the `CACHE.FETCH` command with its parsed arguments.
 #[derive(Debug, Clone, Default)]
@@ -108,11 +118,46 @@ impl ParseCommand for CacheFetch {
 
 #[async_trait]
 impl ExecutableCommand for CacheFetch {
-    /// Executes the `CACHE.FETCH` command.
+    /// Executes `CACHE.FETCH`. This is a thin wrapper around `execute_and_stream` for
+    /// compatibility with the command trait, buffering any streaming responses. The command
+    /// router will prioritize calling `execute_and_stream` for optimal performance.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
+        let route_response = self.execute_and_stream(ctx).await?;
+
+        // A successful fetch implies a write operation occurred.
+        let write_outcome = match route_response {
+            RouteResponse::NoOp => WriteOutcome::DidNotWrite,
+            _ => WriteOutcome::Write { keys_modified: 1 },
+        };
+
+        let resp_value = match route_response {
+            RouteResponse::Single(val) => val,
+            RouteResponse::StreamBody { mut file, .. } => {
+                let mut body = Vec::new();
+                file.read_to_end(&mut body).await?;
+                RespValue::BulkString(body.into())
+            }
+            RouteResponse::NoOp => RespValue::Null,
+            _ => {
+                return Err(SpinelDBError::Internal(
+                    "Unexpected response type from stream logic".into(),
+                ));
+            }
+        };
+
+        Ok((resp_value, write_outcome))
+    }
+}
+
+impl CacheFetch {
+    /// Core execution logic for `CACHE.FETCH` that supports streaming responses.
+    pub async fn execute_and_stream<'a>(
+        &self,
+        ctx: &mut ExecutionContext<'a>,
+    ) -> Result<RouteResponse, SpinelDBError> {
         let (allowed_domains, allow_private) = {
             let config = ctx.state.config.lock().await;
             (
@@ -122,6 +167,7 @@ impl ExecutableCommand for CacheFetch {
         };
         validate_fetch_url(&self.url, &allowed_domains, allow_private).await?;
 
+        // Bypass cache store and shared future logic for authorized requests.
         if self
             .headers
             .iter()
@@ -133,80 +179,120 @@ impl ExecutableCommand for CacheFetch {
                 self.url
             );
             let (body, _) = self.fetch_from_origin(ctx, true).await?;
-            return Ok((RespValue::BulkString(body), WriteOutcome::DidNotWrite));
+            return Ok(RouteResponse::Single(RespValue::BulkString(match body {
+                FetchOutcome::InMemory(bytes) => bytes,
+                FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+            })));
         }
 
+        // Attempt an initial non-blocking read from the cache.
         let get_cmd = CacheGet {
             key: self.key.clone(),
             revalidate_url: None,
             headers: self.headers.clone(),
             ..Default::default()
         };
-
         let initial_response = get_cmd.execute_and_stream(ctx).await?;
         if !matches!(initial_response, RouteResponse::NoOp) {
-            return match initial_response {
-                RouteResponse::Single(val) => Ok((val, WriteOutcome::DidNotWrite)),
-                RouteResponse::StreamBody { mut file, .. } => {
-                    let mut body = Vec::new();
-                    file.read_to_end(&mut body).await?;
-                    Ok((
-                        RespValue::BulkString(body.into()),
-                        WriteOutcome::DidNotWrite,
-                    ))
-                }
-                _ => unreachable!(),
-            };
+            return Ok(initial_response);
         }
 
-        let fetch_lock = ctx
-            .state
-            .cache
-            .fetch_locks
-            .entry(self.key.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone();
-        let _lock_guard = fetch_lock.lock().await;
+        // --- Cache Stampede Protection using a Shared Future ---
+        let state = ctx.state.clone();
+        let key = self.key.clone();
 
-        let double_check_response = get_cmd.execute_and_stream(ctx).await?;
-        if !matches!(double_check_response, RouteResponse::NoOp) {
-            ctx.state.cache.fetch_locks.remove(&self.key);
-            return match double_check_response {
-                RouteResponse::Single(val) => Ok((val, WriteOutcome::DidNotWrite)),
-                RouteResponse::StreamBody { mut file, .. } => {
-                    let mut body = Vec::new();
-                    file.read_to_end(&mut body).await?;
-                    Ok((
-                        RespValue::BulkString(body.into()),
-                        WriteOutcome::DidNotWrite,
-                    ))
-                }
-                _ => unreachable!(),
-            };
-        }
+        let future_to_await = match state.cache.fetch_locks.entry(key.clone()) {
+            // Follower path: an origin fetch is already in progress.
+            dashmap::mapref::entry::Entry::Occupied(occupied) => {
+                debug!(
+                    "Cache miss for '{}': Another client is fetching. Awaiting shared result.",
+                    String::from_utf8_lossy(&key)
+                );
+                occupied.get().clone()
+            }
+            // Leader path: this is the first client to request the missed key.
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                debug!(
+                    "Cache miss for '{}'. This client is the leader and will fetch from origin.",
+                    String::from_utf8_lossy(&key)
+                );
 
-        debug!(
-            "Cache miss for key '{}'. This client is the leader and will fetch from origin.",
-            String::from_utf8_lossy(&self.key)
-        );
+                let state_clone = state.clone();
+                let command_clone = self.clone();
+                let auth_user_clone = ctx.authenticated_user.clone();
+                let session_id = ctx.session_id;
 
-        let fetch_result = self.fetch_from_origin(ctx, false).await;
-        ctx.state.cache.fetch_locks.remove(&self.key);
+                let fetch_future: BoxFuture<'static, Result<FetchOutcome, Arc<SpinelDBError>>> =
+                    async move {
+                        let db = state_clone.get_db(0).unwrap();
+                        let command_for_ctx = Command::Cache(crate::core::commands::cache::Cache {
+                            subcommand:
+                                crate::core::commands::cache::command::CacheSubcommand::Fetch(
+                                    command_clone.clone(),
+                                ),
+                        });
+                        let mut new_ctx = ExecutionContext {
+                            state: state_clone.clone(),
+                            locks: db.determine_locks_for_command(&command_for_ctx).await,
+                            db: &db,
+                            command: Some(command_for_ctx),
+                            session_id,
+                            authenticated_user: auth_user_clone,
+                        };
+
+                        match command_clone.fetch_from_origin(&mut new_ctx, false).await {
+                            Ok((outcome, write_outcome)) => {
+                                // The leader is responsible for updating the dirty keys counter.
+                                if let WriteOutcome::Write { keys_modified } = write_outcome {
+                                    state_clone.persistence.increment_dirty_keys(keys_modified);
+                                }
+                                Ok(outcome)
+                            }
+                            Err(e) => Err(Arc::new(e)),
+                        }
+                    }
+                    .boxed();
+
+                let shared_future = fetch_future.shared();
+                vacant.insert(shared_future.clone());
+                shared_future
+            }
+        };
+
+        // All clients (leader and followers) await the shared result here.
+        let fetch_result = future_to_await.await;
+
+        // The operation is complete; remove the future from the map to prevent memory leaks.
+        state.cache.fetch_locks.remove(&key);
 
         match fetch_result {
-            Ok((body, write_outcome)) => Ok((RespValue::BulkString(body), write_outcome)),
-            Err(e) => Err(e),
+            Ok(outcome) => {
+                // Each client constructs its own response from the shared outcome.
+                match outcome {
+                    FetchOutcome::InMemory(bytes) => {
+                        Ok(RouteResponse::Single(RespValue::BulkString(bytes)))
+                    }
+                    FetchOutcome::OnDisk { path, size } => {
+                        let file = TokioFile::open(&path).await.map_err(|e| {
+                            SpinelDBError::Internal(format!(
+                                "Failed to open cache file for streaming: {e}"
+                            ))
+                        })?;
+                        let resp_header = format!("${size}\r\n").into_bytes();
+                        Ok(RouteResponse::StreamBody { resp_header, file })
+                    }
+                }
+            }
+            Err(arc_err) => Err(SpinelDBError::clone(&*arc_err)),
         }
     }
-}
 
-impl CacheFetch {
     /// Fetches from the origin, deciding whether to stream to disk or buffer in memory.
-    pub async fn fetch_from_origin(
+    pub async fn fetch_from_origin<'a>(
         &self,
-        ctx: &mut ExecutionContext<'_>,
+        ctx: &mut ExecutionContext<'a>,
         mut bypass_store: bool,
-    ) -> Result<(Bytes, WriteOutcome), SpinelDBError> {
+    ) -> Result<(FetchOutcome, WriteOutcome), SpinelDBError> {
         let (streaming_threshold, cache_path, negative_cache_ttl) = {
             let config = ctx.state.config.lock().await;
             (
@@ -252,7 +338,6 @@ impl CacheFetch {
                     status
                 );
             }
-
             return Err(SpinelDBError::Internal(error_message));
         }
 
@@ -274,7 +359,7 @@ impl CacheFetch {
             .unwrap_or(0);
 
         let final_cache_body;
-        let final_body_for_client;
+        let final_outcome_for_client;
 
         if !bypass_store && content_length >= streaming_threshold {
             tokio::fs::create_dir_all(&cache_path).await?;
@@ -305,20 +390,23 @@ impl CacheFetch {
                 path: final_path.clone(),
                 size: total_size as u64,
             };
-            final_body_for_client = tokio::fs::read(&final_path).await?.into();
+            final_outcome_for_client = FetchOutcome::OnDisk {
+                path: final_path,
+                size: total_size as u64,
+            };
         } else {
             let body_bytes = res.bytes().await?;
             final_cache_body = CacheBody::InMemory(body_bytes.clone());
-            final_body_for_client = body_bytes;
+            final_outcome_for_client = FetchOutcome::InMemory(body_bytes);
         }
 
         if bypass_store {
-            return Ok((final_body_for_client, WriteOutcome::DidNotWrite));
+            return Ok((final_outcome_for_client, WriteOutcome::DidNotWrite));
         }
 
         let set_cmd_internal = CacheSet {
             key: self.key.clone(),
-            body_data: Bytes::new(),
+            body_data: Bytes::new(), // Body is in final_cache_body, not needed here
             ttl: self.ttl,
             swr: self.swr,
             grace: self.grace,
@@ -345,7 +433,7 @@ impl CacheFetch {
                 .await?;
         }
 
-        Ok((final_body_for_client, write_outcome))
+        Ok((final_outcome_for_client, write_outcome))
     }
 }
 

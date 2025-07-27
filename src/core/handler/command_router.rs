@@ -372,8 +372,10 @@ impl<'a> Router<'a> {
 
             // Propagate the command to AOF/replicas unless flagged otherwise.
             if !command.get_flags().contains(CommandFlags::NO_PROPAGATE) {
-                // Transform EVALSHA to EVAL for safe propagation.
-                let uow = if let Command::EvalSha(evalsha_cmd) = &command {
+                // Transform EVALSHA to EVAL for safe propagation. This ensures that even if a
+                // SCRIPT FLUSH happens right after execution, the replication/AOF stream
+                // receives the full script body, preventing desynchronization.
+                let uow = if let Command::EvalSha(ref evalsha_cmd) = command {
                     if let Some(script_body) = self.state.scripting.get(&evalsha_cmd.sha1) {
                         UnitOfWork::Command(Box::new(Command::Eval(EvalCmd {
                             script: script_body,
@@ -382,11 +384,14 @@ impl<'a> Router<'a> {
                             args: evalsha_cmd.args.clone(),
                         })))
                     } else {
+                        // This should be an unreachable state, because the command just executed successfully.
+                        // If it happens, it's a critical logic error. We must prevent propagation.
                         error!(
-                            "CRITICAL: Script for executed EVALSHA '{}' vanished before propagation.",
+                            "CRITICAL: Script for executed EVALSHA '{}' vanished before propagation. Command will NOT be propagated.",
                             evalsha_cmd.sha1
                         );
-                        UnitOfWork::Command(Box::new(command))
+                        // Return early without propagating
+                        return Ok(RouteResponse::Single(resp_value));
                     }
                 } else {
                     UnitOfWork::Command(Box::new(command))

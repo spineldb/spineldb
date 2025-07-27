@@ -6,7 +6,7 @@ use crate::core::commands::command_trait::{
 };
 use crate::core::commands::helpers::{extract_bytes, validate_arg_count};
 use crate::core::protocol::RespFrame;
-use crate::core::storage::data_types::{DataValue, StoredValue};
+use crate::core::storage::data_types::DataValue;
 use crate::core::storage::db::{ExecutionContext, ExecutionLocks};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
@@ -36,6 +36,7 @@ impl ExecutableCommand for Rename {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
+        // Handle the trivial case where source and destination are the same.
         if self.source == self.destination {
             return Ok((
                 RespValue::SimpleString("OK".into()),
@@ -43,6 +44,7 @@ impl ExecutableCommand for Rename {
             ));
         }
 
+        // Get the lazy-free threshold for potentially large overwritten values.
         let auto_unlink_threshold = ctx
             .state
             .config
@@ -51,6 +53,7 @@ impl ExecutableCommand for Rename {
             .safety
             .auto_unlink_on_del_threshold;
 
+        // Acquire locks for both source and destination keys.
         let guards = match &mut ctx.locks {
             ExecutionLocks::Multi { guards } => guards,
             _ => {
@@ -61,41 +64,31 @@ impl ExecutableCommand for Rename {
         };
 
         let source_shard_index = ctx.db.get_shard_index(&self.source);
-        let source_value = {
+        let dest_shard_index = ctx.db.get_shard_index(&self.destination);
+
+        // Step 1: Peek at the source value without removing it. If it doesn't exist, return an error.
+        let value_to_move = {
             let source_guard = guards
-                .get_mut(&source_shard_index)
+                .get(&source_shard_index)
                 .ok_or_else(|| SpinelDBError::Internal("Missing source lock for RENAME".into()))?;
 
-            if let Some(entry) = source_guard.peek(&self.source) {
-                match &entry.data {
-                    DataValue::List(_) | DataValue::SortedSet(_) => {
-                        ctx.state
-                            .blocker_manager
-                            .notify_waiters(&self.source, Bytes::new());
-                    }
-                    DataValue::Stream(_) => {
-                        ctx.state
-                            .stream_blocker_manager
-                            .notify_and_remove_all(&self.source);
-                    }
-                    _ => {}
-                }
-            }
-
             source_guard
-                .pop(&self.source)
+                .peek(&self.source)
+                .filter(|e| !e.is_expired())
+                .cloned()
                 .ok_or(SpinelDBError::KeyNotFound)?
         };
 
-        let dest_shard_index = ctx.db.get_shard_index(&self.destination);
-        let old_dest_value: Option<StoredValue> = {
+        // Step 2: Place the value at the destination, overwriting any existing value.
+        let old_dest_value = {
             let dest_guard = guards
                 .get_mut(&dest_shard_index)
                 .ok_or_else(|| SpinelDBError::Internal("Missing dest lock for RENAME".into()))?;
 
+            // Notify any clients blocked on the destination key before it is overwritten.
             if let Some(dest_entry) = dest_guard.peek(&self.destination) {
                 if std::mem::discriminant(&dest_entry.data)
-                    != std::mem::discriminant(&source_value.data)
+                    != std::mem::discriminant(&value_to_move.data)
                 {
                     warn!(
                         "RENAME is overwriting key '{}' which has a different type than source key '{}'.",
@@ -107,7 +100,7 @@ impl ExecutableCommand for Rename {
                     DataValue::List(_) | DataValue::SortedSet(_) => {
                         ctx.state
                             .blocker_manager
-                            .notify_waiters(&self.destination, Bytes::new());
+                            .wake_waiters_for_modification(&self.destination);
                     }
                     DataValue::Stream(_) => {
                         ctx.state
@@ -117,13 +110,41 @@ impl ExecutableCommand for Rename {
                     _ => {}
                 }
             }
-
-            dest_guard.put(self.destination.clone(), source_value)
+            // `put` overwrites and returns the previous value if it existed.
+            dest_guard.put(self.destination.clone(), value_to_move)
         };
 
+        // Step 3: Now that the value is safely at the destination, remove the source key.
+        {
+            let source_guard = guards.get_mut(&source_shard_index).ok_or_else(|| {
+                SpinelDBError::Internal("Missing source lock for RENAME pop".into())
+            })?;
+
+            // Notify any clients blocked on the source key before it is removed.
+            if let Some(entry) = source_guard.peek(&self.source) {
+                match &entry.data {
+                    DataValue::List(_) | DataValue::SortedSet(_) => {
+                        ctx.state
+                            .blocker_manager
+                            .wake_waiters_for_modification(&self.source);
+                    }
+                    DataValue::Stream(_) => {
+                        ctx.state
+                            .stream_blocker_manager
+                            .notify_and_remove_all(&self.source);
+                    }
+                    _ => {}
+                }
+            }
+            // This operation should always succeed as we confirmed existence in Step 1.
+            source_guard.pop(&self.source);
+        }
+
+        // Step 4: If the destination key was overwritten, dispatch the old value for lazy-freeing if it's large.
         if let Some(val) = old_dest_value {
             if auto_unlink_threshold > 0 && val.size > auto_unlink_threshold {
                 let state_clone = ctx.state.clone();
+                // Spawn a new task to send to the lazy-free channel.
                 tokio::spawn(async move {
                     let send_timeout = Duration::from_secs(5);
                     if tokio::time::timeout(
@@ -132,6 +153,7 @@ impl ExecutableCommand for Rename {
                     )
                     .await
                     .is_err()
+                    // Catches both timeout and send errors.
                     {
                         error!(
                             "Failed to send to lazy-free channel within 5 seconds during RENAME. The task may be unresponsive or have panicked."
@@ -143,6 +165,7 @@ impl ExecutableCommand for Rename {
             }
         }
 
+        // Step 5: Return success.
         Ok((
             RespValue::SimpleString("OK".into()),
             WriteOutcome::Write { keys_modified: 2 },

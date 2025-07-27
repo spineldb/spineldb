@@ -139,8 +139,6 @@ impl ParseCommand for CacheProxy {
 #[async_trait]
 impl ExecutableCommand for CacheProxy {
     /// Executes the `CACHE.PROXY` command.
-    /// This is a fallback that buffers any streaming response.
-    /// The primary, stream-aware logic is in `execute_and_stream`.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -200,9 +198,16 @@ impl CacheProxy {
         let key_str = String::from_utf8_lossy(&self.key);
         let policies_clone = ctx.state.cache.policies.read().await.clone();
 
+        // Find the best matching policy by specificity.
         let matched_policy = policies_clone
             .iter()
-            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str));
+            .filter(|p| WildMatch::new(&p.key_pattern).matches(&key_str))
+            .min_by_key(|p| {
+                // A simple specificity heuristic: fewer wildcards and longer non-wildcard parts are more specific.
+                let wildcard_count = p.key_pattern.chars().filter(|&c| c == '*').count();
+                let non_wildcard_len = p.key_pattern.len() - wildcard_count;
+                (wildcard_count, std::cmp::Reverse(non_wildcard_len))
+            });
 
         if let Some(policy) = matched_policy {
             debug!(

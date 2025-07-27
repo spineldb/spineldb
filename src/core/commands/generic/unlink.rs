@@ -75,7 +75,9 @@ impl ExecutableCommand for Unlink {
                     ctx.state.stream_blocker_manager.notify_and_remove_all(&key);
                 }
                 DataValue::List(_) | DataValue::SortedSet(_) => {
-                    ctx.state.blocker_manager.notify_waiters(&key, Bytes::new());
+                    ctx.state
+                        .blocker_manager
+                        .wake_waiters_for_modification(&key);
                 }
                 _ => {}
             }
@@ -84,19 +86,25 @@ impl ExecutableCommand for Unlink {
         // Send the values to the lazy-free manager for background reclamation.
         if !values_to_reclaim.is_empty() {
             let state_clone = ctx.state.clone();
+            // Spawn a new task to send to the lazy-free channel.
+            // This prevents the command from blocking if the channel is full.
             tokio::spawn(async move {
                 let send_timeout = Duration::from_secs(5);
+
+                // Use a timeout to prevent indefinite blocking if the lazy-free task is stuck.
                 if tokio::time::timeout(
                     send_timeout,
                     state_clone.persistence.lazy_free_tx.send(values_to_reclaim),
                 )
                 .await
                 .is_err()
+                // This catches both timeout and channel send errors.
                 {
                     error!(
                         "Failed to send to lazy-free channel within 5 seconds. The task may be unresponsive or have panicked."
                     );
                     state_clone.persistence.increment_lazy_free_errors();
+                    // As a safety measure, put the server into read-only mode to prevent further data loss or state inconsistency.
                     state_clone.set_read_only(true, "Lazy-free task is unresponsive.");
                 }
             });

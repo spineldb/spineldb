@@ -1,6 +1,9 @@
 // src/core/commands/cache/cache_bypass.rs
 
-use crate::core::commands::cache::cache_fetch::CacheFetch;
+//! Implements the `CACHE.BYPASS` command, which fetches content directly from an
+//! origin without reading from or writing to the cache.
+
+use crate::core::commands::cache::cache_fetch::{CacheFetch, FetchOutcome};
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
@@ -12,6 +15,7 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 
+/// Represents the `CACHE.BYPASS` command.
 #[derive(Debug, Clone, Default)]
 pub struct CacheBypass {
     pub key: Bytes,
@@ -19,6 +23,7 @@ pub struct CacheBypass {
 }
 
 impl ParseCommand for CacheBypass {
+    /// Parses the command arguments from the RESP frame.
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
         if args.len() != 2 {
             return Err(SpinelDBError::WrongArgumentCount(
@@ -34,18 +39,29 @@ impl ParseCommand for CacheBypass {
 
 #[async_trait]
 impl ExecutableCommand for CacheBypass {
+    /// Executes the `CACHE.BYPASS` command.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
+        // Construct a `CacheFetch` command to delegate the origin fetch logic.
         let fetch_cmd = CacheFetch {
             key: self.key.clone(),
             url: self.url.clone(),
             ..Default::default()
         };
 
-        let (body, _) = fetch_cmd.fetch_from_origin(ctx, true).await?;
-        Ok((RespValue::BulkString(body), WriteOutcome::DidNotWrite))
+        // Call the fetch logic with the `bypass_store` flag set to true.
+        let (outcome, _) = fetch_cmd.fetch_from_origin(ctx, true).await?;
+
+        // Convert the fetch outcome into a single byte buffer for the client.
+        // If the content was streamed to disk, it's read back into memory here.
+        let body_bytes = match outcome {
+            FetchOutcome::InMemory(bytes) => bytes,
+            FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+        };
+
+        Ok((RespValue::BulkString(body_bytes), WriteOutcome::DidNotWrite))
     }
 }
 
@@ -57,7 +73,7 @@ impl CommandSpec for CacheBypass {
         3
     }
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::NO_PROPAGATE
+        CommandFlags::READONLY | CommandFlags::NO_PROPAGATE | CommandFlags::MOVABLEKEYS
     }
     fn first_key(&self) -> i64 {
         1

@@ -326,6 +326,28 @@ impl StoredValue {
     }
 }
 
+/// Recursively estimates the memory usage of a `serde_json::Value` without serialization.
+fn estimate_json_memory(val: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    match val {
+        Value::Null | Value::Bool(_) => std::mem::size_of::<Value>(),
+        Value::Number(n) => std::mem::size_of::<Value>() + n.to_string().len(),
+        Value::String(s) => std::mem::size_of::<Value>() + s.capacity(),
+        Value::Array(arr) => {
+            std::mem::size_of::<Value>()
+                + arr.capacity() * std::mem::size_of::<Value>()
+                + arr.iter().map(estimate_json_memory).sum::<usize>()
+        }
+        Value::Object(map) => {
+            std::mem::size_of::<Value>()
+                + map
+                    .iter()
+                    .map(|(k, v)| k.capacity() + estimate_json_memory(v))
+                    .sum::<usize>()
+        }
+    }
+}
+
 /// An enum representing the different data types that can be stored.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataValue {
@@ -354,7 +376,7 @@ impl DataValue {
             DataValue::Set(s) => s.iter().map(|b| b.len()).sum(),
             DataValue::SortedSet(z) => z.memory_usage(),
             DataValue::Stream(s) => s.memory_usage(),
-            DataValue::Json(v) => serde_json::to_string(v).unwrap_or_default().len(),
+            DataValue::Json(v) => estimate_json_memory(v),
             DataValue::HttpCache {
                 variants, vary_on, ..
             } => {
@@ -374,6 +396,7 @@ impl DataValue {
                                 .as_ref()
                                 .map_or(0, |s| s.len());
 
+                        // On-disk cache bodies do not consume RAM.
                         let body_size = match &variant.body {
                             CacheBody::InMemory(b) => b.len(),
                             CacheBody::OnDisk { .. } => 0,

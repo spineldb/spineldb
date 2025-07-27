@@ -2,31 +2,15 @@
 
 //! Manages clients that are blocked waiting for data on list/zset keys.
 //! This implementation is cluster-aware and handles slot migrations safely.
-//!
-//! # Core Design: Preventing Race Conditions
-//!
-//! The primary challenge in implementing blocking commands like `BLPOP` or `BZPOPMIN` is
-//! avoiding a race condition where a client decides to block just as another client
-//! pushes data, causing the first client to miss the notification.
-//!
-//! This module solves this by ensuring that the client performing the write
-//! operation (e.g., `LPUSH`, `ZADD`), while holding the necessary data lock, is
-//! responsible for atomically performing the corresponding pop and sending the
-//! popped value directly to the waiting client through a `oneshot` channel (the waker).
-//! This guarantees that the data is transferred from one task to another without
-//! requiring the awakened client to re-acquire locks and race for the data.
 
 use crate::core::cluster::slot::get_slot;
-use crate::core::commands::command_trait::WriteOutcome;
-use crate::core::commands::list::RPush;
+use crate::core::commands::command_trait::{CommandExt, WriteOutcome};
 use crate::core::commands::list::lmove::{Side, lmove_logic};
 use crate::core::commands::list::logic::list_pop_logic;
 use crate::core::commands::zset::zpop_logic::{PopSide, zpop_logic};
 use crate::core::state::ServerState;
-use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::ExecutionContext;
-use crate::core::storage::db::PopDirection;
 use crate::core::storage::db::zset::SortedSet;
+use crate::core::storage::db::{ExecutionContext, PopDirection};
 use crate::core::{Command, RespValue, SpinelDBError};
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -35,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
-use tracing::debug;
+use tracing::{debug, error, warn};
 
 /// The value returned when a blocking list pop operation is successful.
 #[derive(Debug, Clone)]
@@ -232,24 +216,75 @@ impl BlockerManager {
                 Err(SpinelDBError::Moved { slot, addr })
             }
             BlockerOutcome::Woken(woken_value) => {
-                // The value was popped from the source by the notifier.
-                // We only need to acquire a lock on the destination and push it.
                 if let WokenValue::List(popped) = woken_value {
-                    let db = ctx.db; // Use the DB from the original context
-                    let push_cmd = Command::RPush(RPush {
-                        key: dest_key.clone(),
-                        values: vec![popped.value.clone()],
-                    });
+                    let db = ctx.db;
+                    let push_cmd = match to {
+                        Side::Left => Command::LPush(crate::core::commands::list::LPush {
+                            key: dest_key.clone(),
+                            values: vec![popped.value.clone()],
+                        }),
+                        Side::Right => Command::RPush(crate::core::commands::list::RPush {
+                            key: dest_key.clone(),
+                            values: vec![popped.value.clone()],
+                        }),
+                    };
 
                     let mut dest_ctx = ExecutionContext {
                         state: ctx.state.clone(),
                         locks: db.determine_locks_for_command(&push_cmd).await,
                         db,
-                        command: Some(push_cmd),
+                        command: Some(push_cmd.clone()),
                         session_id: ctx.session_id,
                         authenticated_user: ctx.authenticated_user.clone(),
                     };
-                    list_push_to_dest_from_move(&mut dest_ctx, dest_key, popped.value, to).await
+
+                    let push_result = push_cmd.execute(&mut dest_ctx).await;
+
+                    if let Err(e) = push_result {
+                        warn!(
+                            "Failed to push element to destination in BLMOVE (key: '{}', error: {}). \
+                             Attempting to return element to source key '{}'.",
+                            String::from_utf8_lossy(dest_key),
+                            e,
+                            String::from_utf8_lossy(source_key)
+                        );
+
+                        let return_push_cmd = match from {
+                            Side::Left => Command::LPush(crate::core::commands::list::LPush {
+                                key: source_key.clone(),
+                                values: vec![popped.value.clone()],
+                            }),
+                            Side::Right => Command::RPush(crate::core::commands::list::RPush {
+                                key: source_key.clone(),
+                                values: vec![popped.value.clone()],
+                            }),
+                        };
+
+                        let mut source_ctx = ExecutionContext {
+                            state: ctx.state.clone(),
+                            locks: db.determine_locks_for_command(&return_push_cmd).await,
+                            db,
+                            command: Some(return_push_cmd.clone()),
+                            session_id: ctx.session_id,
+                            authenticated_user: ctx.authenticated_user.clone(),
+                        };
+
+                        if let Err(return_err) = return_push_cmd.execute(&mut source_ctx).await {
+                            error!(
+                                "CRITICAL DATA LOSS: Failed to return element '{}' back to source list '{}' after BLMOVE failure. Error: {}",
+                                String::from_utf8_lossy(&popped.value),
+                                String::from_utf8_lossy(source_key),
+                                return_err
+                            );
+                        }
+
+                        return Err(e);
+                    }
+
+                    Ok((
+                        RespValue::BulkString(popped.value),
+                        WriteOutcome::Write { keys_modified: 2 },
+                    ))
                 } else {
                     Err(SpinelDBError::Internal(
                         "Received wrong woken value type for list move".into(),
@@ -321,14 +356,13 @@ impl BlockerManager {
                 Err(SpinelDBError::Moved { slot, addr })
             }
             BlockerOutcome::Woken(woken_value) => {
-                // No re-read necessary. Use the value sent by the notifier.
                 if let WokenValue::ZSet(popped) = woken_value {
                     let resp = RespValue::Array(vec![
                         RespValue::BulkString(popped.key),
                         RespValue::BulkString(popped.member),
                         RespValue::BulkString(popped.score.to_string().into()),
                     ]);
-                    Ok((resp, WriteOutcome::DidNotWrite)) // Write handled by notifier
+                    Ok((resp, WriteOutcome::DidNotWrite))
                 } else {
                     Err(SpinelDBError::Internal(
                         "Received wrong woken value type for zset pop".into(),
@@ -347,14 +381,12 @@ impl BlockerManager {
         state: &Arc<ServerState>,
     ) -> BlockerOutcome {
         let Some(cluster_state) = &state.cluster else {
-            // Standalone mode: a simple timeout is sufficient.
             return match timeout(wait_timeout, rx).await {
                 Ok(Ok(popped)) => BlockerOutcome::Woken(popped),
                 _ => BlockerOutcome::TimedOut,
             };
         };
 
-        // Cluster mode: poll periodically to check for slot migrations.
         const POLLING_TIMEOUT: Duration = Duration::from_millis(500);
         let deadline = Instant::now() + wait_timeout;
         let my_slot = get_slot(&keys[0]);
@@ -371,7 +403,6 @@ impl BlockerManager {
                 Ok(Ok(popped)) => return BlockerOutcome::Woken(popped),
                 Ok(Err(_)) => return BlockerOutcome::TimedOut, // Waker was dropped.
                 Err(_) => {
-                    // Timeout elapsed. Check if the slot has moved.
                     if !cluster_state.i_own_slot(my_slot) {
                         return BlockerOutcome::Moved(my_slot);
                     }
@@ -380,14 +411,17 @@ impl BlockerManager {
         }
     }
 
-    /// Called by list write commands (`LPUSH`/`RPUSH`) to atomically pop an element and notify a waiter.
-    pub fn notify_waiters(&self, key: &Bytes, value: Bytes) -> bool {
+    /// Called by list write commands (`LPUSH`/`RPUSH`). It attempts to hand off a value
+    /// to a waiting client. If successful, the value bypasses the list entirely.
+    /// Returns true if a waiter was notified and the value was consumed.
+    pub fn notify_and_consume_for_push(&self, key: &Bytes, value: Bytes) -> bool {
         loop {
             let waiter_info = if let Some(mut queue) = self.waiters.get_mut(key) {
                 if queue.is_empty() {
-                    drop(queue);
-                    self.waiters.remove(key);
                     return false;
+                } else if queue.front().unwrap().waker.lock().unwrap().is_none() {
+                    queue.pop_front();
+                    continue;
                 }
                 queue.pop_front()
             } else {
@@ -407,8 +441,8 @@ impl BlockerManager {
                         value: value.clone(),
                     };
                     if waker.send(WokenValue::List(popped_value)).is_ok() {
-                        debug!(
-                            "Atomically popped and notified a waiter for list key '{}'",
+                        tracing::debug!(
+                            "Atomically handed off value to a waiter for list key '{}'",
                             String::from_utf8_lossy(key)
                         );
                         return true;
@@ -420,13 +454,31 @@ impl BlockerManager {
         }
     }
 
+    /// Wakes up any clients waiting on a key that is about to be modified or deleted.
+    pub fn wake_waiters_for_modification(&self, key: &Bytes) {
+        if let Some(mut queue) = self.waiters.get_mut(key) {
+            while let Some(info) = queue.pop_front() {
+                if let Ok(mut guard) = info.waker.lock() {
+                    if let Some(waker) = guard.take() {
+                        let dummy_value = PoppedValue {
+                            key: key.clone(),
+                            value: Bytes::new(),
+                        };
+                        let _ = waker.send(WokenValue::List(dummy_value));
+                    }
+                }
+            }
+        }
+    }
+
     /// Called by zset write commands (`ZADD`/`ZINCRBY`) to atomically pop an element and notify a waiter.
+    /// Returns the side that was popped (Min or Max) if a waiter was successfully notified.
     pub fn notify_and_pop_zset_waiter(
         &self,
         zset: &mut SortedSet,
         key: &Bytes,
         side: PopSide,
-    ) -> bool {
+    ) -> Option<PopSide> {
         let popped_entry = match side {
             PopSide::Min => zset.pop_first(),
             PopSide::Max => zset.pop_last(),
@@ -462,18 +514,19 @@ impl BlockerManager {
                                 "Atomically popped and notified a waiter for zset key '{}'",
                                 String::from_utf8_lossy(key)
                             );
-                            return true; // Success: value is consumed by the waiter.
+                            // Return the side that was successfully popped and handed off.
+                            return Some(side);
                         }
                     }
                 } else {
                     break;
                 }
             }
-
-            // If we are here, no waiter was notified, so put the element back.
+            // If no waiter was found or notified, put the popped element back.
             zset.add(popped.score, popped.member);
         }
-        false
+        // No waiter was notified.
+        None
     }
 
     /// Removes a specific waker from all associated key queues.
@@ -499,40 +552,5 @@ impl BlockerManager {
             "Removed any pending list/zset blockers for session_id {}.",
             session_id
         );
-    }
-}
-
-/// A helper function used by `orchestrate_blmove` to push the moved value to the destination list.
-async fn list_push_to_dest_from_move<'a>(
-    ctx: &mut ExecutionContext<'a>,
-    dest_key: &Bytes,
-    value: Bytes,
-    to: Side,
-) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-    let (shard, guard) = ctx.get_single_shard_context_mut()?;
-    let entry = guard.get_or_insert_with_mut(dest_key.clone(), || {
-        StoredValue::new(DataValue::List(VecDeque::new()))
-    });
-
-    if let DataValue::List(list) = &mut entry.data {
-        let val_len = value.len();
-        match to {
-            Side::Left => list.push_front(value.clone()),
-            Side::Right => list.push_back(value.clone()),
-        };
-        entry.size += val_len;
-        entry.version = entry.version.wrapping_add(1);
-        shard.update_memory(val_len as isize);
-
-        ctx.state
-            .blocker_manager
-            .notify_waiters(dest_key, value.clone());
-
-        Ok((
-            RespValue::BulkString(value),
-            WriteOutcome::Write { keys_modified: 1 },
-        ))
-    } else {
-        Err(SpinelDBError::WrongType)
     }
 }

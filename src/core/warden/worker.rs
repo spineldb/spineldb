@@ -116,6 +116,10 @@ impl MasterMonitor {
 
     /// The main loop for managing the Pub/Sub connection for inter-Warden communication.
     async fn run_pubsub_loop(self, hello_interval: Duration) {
+        const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+        const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+        let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
+
         loop {
             let master_addr = self.state.lock().addr;
 
@@ -125,12 +129,13 @@ impl MasterMonitor {
                         "Successfully subscribed to channels on master '{}' at {}",
                         self.master_name, master_addr
                     );
+                    reconnect_delay = INITIAL_RECONNECT_DELAY; // Reset delay on success.
                     Some(client)
                 }
                 Err(e) => {
                     warn!(
-                        "Failed to connect or subscribe for master '{}': {}. Retrying...",
-                        self.master_name, e
+                        "Failed to connect or subscribe for master '{}': {}. Retrying in {:?}...",
+                        self.master_name, e, reconnect_delay
                     );
                     None
                 }
@@ -145,7 +150,9 @@ impl MasterMonitor {
                 }
             }
 
-            time::sleep(hello_interval).await;
+            time::sleep(reconnect_delay).await;
+            // Apply exponential backoff for subsequent reconnection attempts.
+            reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY);
         }
     }
 
@@ -243,6 +250,7 @@ impl MasterMonitor {
             return;
         };
 
+        // Ignore messages from self or for a different master.
         if hello.run_id == self.global_state.my_run_id || hello.master_name != self.master_name {
             return;
         }
@@ -270,10 +278,12 @@ impl MasterMonitor {
 
         if self.ping_instance(master_addr).await.is_err() {
             let mut state = self.state.lock();
+            // If the master is down, start the timer.
             if state.primary_state.down_since.is_none() {
                 state.primary_state.down_since = Some(Instant::now());
             }
 
+            // If the timer has exceeded the `down_after` threshold, mark as SDOWN.
             if state
                 .primary_state
                 .down_since
@@ -289,6 +299,7 @@ impl MasterMonitor {
                 state.status = MasterStatus::Sdown;
             }
         } else {
+            // If the master is back online, reset its state.
             let mut state = self.state.lock();
             if state.primary_state.down_since.is_some() {
                 info!(
@@ -354,6 +365,7 @@ impl MasterMonitor {
             )
         };
 
+        // Do nothing if the master's runid is not yet known.
         if current_master_runid == "?" {
             return;
         }
@@ -542,6 +554,7 @@ impl MasterMonitor {
             return;
         }
 
+        // Handle a VOTE-REQUEST from a peer.
         if msg_type == "VOTE-REQUEST" {
             let mut state = self.state.lock();
             if epoch > state.last_voted_epoch {
@@ -565,6 +578,7 @@ impl MasterMonitor {
                     }
                 });
             }
+        // Handle a VOTE-ACK that was cast for this Warden.
         } else if msg_type == "VOTE-ACK"
             && msg_parts.len() == 5
             && msg_parts[3] == self.global_state.my_run_id
@@ -626,6 +640,7 @@ impl MasterMonitor {
                 }
             }
         }
+        // Remove any replicas that are no longer reported by the master.
         state
             .replicas
             .retain(|addr, _| discovered_replicas.contains(addr));

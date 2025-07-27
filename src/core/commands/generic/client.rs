@@ -6,6 +6,7 @@ use crate::core::commands::command_trait::{
 };
 use crate::core::commands::helpers::{extract_bytes, extract_string};
 use crate::core::protocol::RespFrame;
+use crate::core::state::ClientRole; // Import the new enum
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
@@ -101,14 +102,22 @@ impl ExecutableCommand for Client {
                     let name = client_info.name.as_deref().unwrap_or("");
                     let age = client_info.created.elapsed().as_secs();
                     let idle = client_info.last_command_time.elapsed().as_secs();
+
+                    // Format the client's role for display.
+                    let role_str = match client_info.role {
+                        ClientRole::Normal => "normal",
+                        ClientRole::Replica => "replica",
+                    };
+
                     info_str.push_str(&format!(
-                        "id={} addr={} name={} age={} idle={} db={}\n",
+                        "id={} addr={} name={} age={} idle={} db={} role={}\n",
                         client_info.session_id,
                         client_info.addr,
                         name,
                         age,
                         idle,
-                        client_info.db_index
+                        client_info.db_index,
+                        role_str
                     ));
                 }
                 Ok((
@@ -160,7 +169,6 @@ impl ExecutableCommand for Client {
             }
             ClientSubcommand::SetInfo => {
                 // Implemented as a no-op for client library compatibility.
-                // In the future, this information could be stored in ClientInfo.
                 Ok((
                     RespValue::SimpleString("OK".into()),
                     WriteOutcome::DidNotWrite,
@@ -203,9 +211,6 @@ impl CommandSpec for Client {
             ClientSubcommand::Kill(id) => {
                 args.extend_from_slice(&["KILL".into(), id.to_string().into()])
             }
-            // Since this is a no-op and doesn't change state,
-            // serializing it for AOF/replication is not strictly necessary,
-            // but we do it for completeness.
             ClientSubcommand::SetInfo => args.push("SETINFO".into()),
         }
         args
