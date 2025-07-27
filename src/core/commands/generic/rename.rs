@@ -144,6 +144,7 @@ impl ExecutableCommand for Rename {
         if let Some(val) = old_dest_value {
             if auto_unlink_threshold > 0 && val.size > auto_unlink_threshold {
                 let state_clone = ctx.state.clone();
+                // Spawn a new task to send to the lazy-free channel.
                 tokio::spawn(async move {
                     let send_timeout = Duration::from_secs(5);
                     if tokio::time::timeout(
@@ -152,6 +153,7 @@ impl ExecutableCommand for Rename {
                     )
                     .await
                     .is_err()
+                    // Catches both timeout and send errors.
                     {
                         error!(
                             "Failed to send to lazy-free channel within 5 seconds during RENAME. The task may be unresponsive or have panicked."

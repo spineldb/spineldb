@@ -10,7 +10,7 @@ use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 #[derive(Debug, Clone)]
@@ -61,11 +61,18 @@ impl ExecutableCommand for Failover {
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         match &self.subcommand {
             FailoverSubcommand::Poison { run_id, ttl_secs } => {
-                let expiry = Instant::now() + Duration::from_secs(*ttl_secs);
+                // Calculate the absolute expiry time as a UNIX timestamp in seconds.
+                // This is robust against system clock changes during server downtime.
+                let now_unix_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let expiry_timestamp = now_unix_secs + ttl_secs;
+
                 ctx.state
                     .replication
                     .poisoned_masters
-                    .insert(run_id.clone(), expiry);
+                    .insert(run_id.clone(), expiry_timestamp);
 
                 // Persist the new state to disk.
                 if let Err(e) = ctx.state.replication.save_poisoned_masters_to_disk() {

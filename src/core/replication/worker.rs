@@ -23,7 +23,7 @@ use rand::Rng;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
     BufReader as TokioBufReader, ReadHalf, WriteHalf, split,
@@ -300,7 +300,6 @@ impl ReplicaWorker {
         Ok(())
     }
 
-    /// The main loop for processing the continuous stream of commands from the primary.
     async fn process_command_stream(
         &mut self,
         framed_reader: &mut FramedRead<ReadHalf<ReplicaStream>, RespFrameCodec>,
@@ -320,23 +319,19 @@ impl ReplicaWorker {
         }
     }
 
-    /// Handles a single frame (command) received from the primary.
     async fn handle_primary_frame(
         &mut self,
         result: Result<RespFrame, SpinelDBError>,
         writer: &Arc<Mutex<WriteHalf<ReplicaStream>>>,
     ) -> Result<(), SpinelDBError> {
         let frame = result?;
-        // Calculate the encoded length to update the replication offset.
         let frame_len = frame.encode_to_vec().unwrap_or_default().len() as u64;
         let command = Command::try_from(frame.clone())?;
         debug!("Received command from primary: {command:?}");
 
-        // Apply the command locally.
         self.apply_command_or_transaction(command.clone(), writer)
             .await?;
 
-        // Update offset *after* successful execution to ensure state consistency.
         if let Some(info) = self.state.replication.replica_info.lock().await.as_mut() {
             info.processed_offset += frame_len;
         }
@@ -344,21 +339,16 @@ impl ReplicaWorker {
         Ok(())
     }
 
-    /// Routes a command to the appropriate handler (transaction or direct apply).
     async fn apply_command_or_transaction(
         &mut self,
         command: Command,
         writer: &Arc<Mutex<WriteHalf<ReplicaStream>>>,
     ) -> Result<(), SpinelDBError> {
-        // SELECT is a state-changing command for the replica worker itself.
-        // It must be executed immediately, even inside a MULTI/EXEC block,
-        // to correctly set the context for subsequent commands in the transaction.
         if let Command::Select(Select { db_index }) = command {
             self.current_db_index = db_index;
             return Ok(());
         }
 
-        // Handle transaction control commands.
         match &command {
             Command::Multi => {
                 if self.is_in_transaction {
@@ -398,7 +388,6 @@ impl ReplicaWorker {
             return Ok(());
         }
 
-        // Handle specific commands that don't modify data but are part of the protocol.
         if let Command::Replconf(ref r) = command {
             if r.args
                 .first()
@@ -417,11 +406,9 @@ impl ReplicaWorker {
             }
         }
 
-        // Apply any other command directly.
         self.apply_single_command(command).await
     }
 
-    /// Applies a batch of commands from a transaction to the local database atomically.
     async fn apply_transaction(&mut self, commands: Vec<Command>) -> Result<(), SpinelDBError> {
         if commands.is_empty() {
             return Ok(());
@@ -435,13 +422,10 @@ impl ReplicaWorker {
             .get_db(self.current_db_index)
             .ok_or_else(|| SpinelDBError::Internal("Replica using invalid DB index".into()))?;
 
-        // Acquire all necessary locks for the entire transaction at once.
         let all_keys: Vec<Bytes> = commands.iter().flat_map(|c| c.get_keys()).collect();
         let mut guards = db.lock_shards_for_keys(&all_keys).await;
 
-        // Execute each command within the transaction.
         for command in &commands {
-            // Replicas only execute write commands from the primary's stream.
             if !command.get_flags().contains(CommandFlags::WRITE) {
                 continue;
             }
@@ -450,20 +434,17 @@ impl ReplicaWorker {
                 locks: ExecutionLocks::Multi { guards },
                 db: &db,
                 command: Some(command.clone()),
-                session_id: 0, // session_id is irrelevant for replica execution.
+                session_id: 0,
                 authenticated_user: None,
             };
             match command.execute(&mut ctx).await {
                 Ok(_) => {
-                    // Give the guards back to the loop for the next command.
                     guards = match ctx.locks {
                         ExecutionLocks::Multi { guards } => guards,
                         _ => unreachable!(),
                     };
                 }
                 Err(e) => {
-                    // A failure to apply a command is a critical error. The replica is now
-                    // out of sync and must perform a full resync.
                     let err_msg = format!(
                         "CRITICAL: Failed to execute command '{command:?}' in replicated transaction: {e}. Clearing local data."
                     );
@@ -478,14 +459,12 @@ impl ReplicaWorker {
         Ok(())
     }
 
-    /// Applies a single, non-transactional command to the local database.
     async fn apply_single_command(&mut self, command: Command) -> Result<(), SpinelDBError> {
         let db = self
             .state
             .get_db(self.current_db_index)
             .ok_or_else(|| SpinelDBError::Internal("Replica using invalid DB index".into()))?;
 
-        // Only write commands are processed.
         if !command.get_flags().contains(CommandFlags::WRITE) {
             return Ok(());
         }
@@ -513,10 +492,6 @@ impl ReplicaWorker {
         }
     }
 
-    // ... (The rest of the functions `clear_all_local_data`, `spawn_ack_task`, `perform_handshake`,
-    // `handle_fullresync_response`, `read_and_load_spldb`, `expect_simple_string` remain unchanged) ...
-
-    /// Wipes all local data to ensure a clean slate for a full resync.
     async fn clear_all_local_data(&mut self) {
         warn!("Clearing all data on this replica due to a critical replication error.");
         for db in &self.state.dbs {
@@ -525,7 +500,6 @@ impl ReplicaWorker {
         self.current_db_index = 0;
     }
 
-    /// Spawns a non-blocking task to send an ACK back to the primary.
     async fn spawn_ack_task(&self, writer: Arc<Mutex<WriteHalf<ReplicaStream>>>, ack_offset: u64) {
         tokio::spawn(async move {
             let ack_cmd_frame = RespFrame::Array(vec![
@@ -543,7 +517,6 @@ impl ReplicaWorker {
         });
     }
 
-    /// Performs the initial handshake with the primary (PING, REPLCONF, PSYNC).
     async fn perform_handshake<R, W>(
         &mut self,
         framed: &mut FramedRead<R, RespFrameCodec>,
@@ -609,21 +582,27 @@ impl ReplicaWorker {
             if s.starts_with("FULLRESYNC") {
                 let new_master_run_id = self.handle_fullresync_response(&s).await?;
 
-                // Clean up expired poison entries before checking.
+                let now_unix_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
                 self.state
                     .replication
                     .poisoned_masters
-                    .retain(|_, expiry| *expiry > Instant::now());
+                    .retain(|_, expiry| *expiry > now_unix_secs);
 
-                if self
+                if let Some(expiry_timestamp) = self
                     .state
                     .replication
                     .poisoned_masters
-                    .contains_key(&new_master_run_id)
+                    .get(&new_master_run_id)
                 {
-                    return Err(SpinelDBError::ReplicationError(format!(
-                        "Refusing to sync with a poisoned master: {new_master_run_id}"
-                    )));
+                    if *expiry_timestamp.value() > now_unix_secs {
+                        return Err(SpinelDBError::ReplicationError(format!(
+                            "Refusing to sync with a poisoned master: {new_master_run_id}"
+                        )));
+                    }
                 }
 
                 Ok(HandshakeResult::FullResync)
@@ -641,7 +620,6 @@ impl ReplicaWorker {
         }
     }
 
-    /// Handles the `FULLRESYNC` response by updating the local replication state.
     async fn handle_fullresync_response(
         &mut self,
         response_str: &str,
@@ -666,12 +644,10 @@ impl ReplicaWorker {
         Ok(new_replid)
     }
 
-    /// Reads the SPLDB file from the stream and loads it into the local database.
     async fn read_and_load_spldb<R: AsyncRead + Unpin>(
         &mut self,
         reader: &mut TokioBufReader<R>,
     ) -> Result<(), SpinelDBError> {
-        // The SPLDB file is sent as a RESP Bulk String. First, parse the length header.
         let mut line_buf = String::new();
         reader.read_line(&mut line_buf).await?;
         if !line_buf.starts_with('$') {
@@ -686,12 +662,10 @@ impl ReplicaWorker {
         })?;
 
         info!("Receiving SPLDB file of size: {spldb_len} bytes. Loading into DB...");
-        // Read the exact number of bytes for the SPLDB file.
         let mut spldb_bytes = BytesMut::with_capacity(spldb_len);
         spldb_bytes.resize(spldb_len, 0);
         reader.read_exact(&mut spldb_bytes).await?;
 
-        // Load the received data into the database.
         load_from_bytes(&spldb_bytes.freeze(), &self.state.dbs)
             .await
             .map_err(|e| SpinelDBError::ReplicationError(format!("SPLDB loading failed: {e}")))?;
@@ -699,7 +673,6 @@ impl ReplicaWorker {
         Ok(())
     }
 
-    /// A helper to expect a specific simple string response from the primary.
     async fn expect_simple_string<R: AsyncRead + Unpin>(
         &self,
         framed: &mut FramedRead<R, RespFrameCodec>,
