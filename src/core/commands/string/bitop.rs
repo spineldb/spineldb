@@ -107,8 +107,17 @@ impl ExecutableCommand for BitOp {
 
         // Perform a pre-flight check against maxmemory before allocating the result buffer.
         if let Some(maxmem) = ctx.state.config.lock().await.maxmemory {
+            let dest_shard_index = ctx.db.get_shard_index(&self.dest_key);
+            let old_dest_size = guards
+                .get(&dest_shard_index)
+                .and_then(|guard| guard.peek(&self.dest_key))
+                .filter(|entry| !entry.is_expired())
+                .map_or(0, |entry| entry.size);
+
+            let estimated_increase = max_len.saturating_sub(old_dest_size);
             let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-            if total_memory.saturating_add(max_len) > maxmem {
+
+            if total_memory.saturating_add(estimated_increase) > maxmem {
                 let policy = ctx.state.config.lock().await.maxmemory_policy;
                 if policy == EvictionPolicy::NoEviction {
                     return Err(SpinelDBError::MaxMemoryReached);
@@ -119,7 +128,7 @@ impl ExecutableCommand for BitOp {
                 // Re-check after eviction.
                 let total_memory_after_evict: usize =
                     ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-                if total_memory_after_evict.saturating_add(max_len) > maxmem {
+                if total_memory_after_evict.saturating_add(estimated_increase) > maxmem {
                     return Err(SpinelDBError::MaxMemoryReached);
                 }
             }
@@ -166,7 +175,7 @@ impl ExecutableCommand for BitOp {
             .get_mut(&dest_shard_index)
             .ok_or_else(|| SpinelDBError::Internal("Missing shard lock for BITOP dest".into()))?;
 
-        // Store the result in the destination key. Overwrites with an empty string if the result is empty.
+        // Store the result in the destination key.
         let new_value = StoredValue::new(DataValue::String(result_bytes));
         dest_guard.put(self.dest_key.clone(), new_value);
 

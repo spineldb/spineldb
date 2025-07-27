@@ -1,3 +1,5 @@
+// src/core/commands/json/json_clear.rs
+
 //! Implements the `JSON.CLEAR` command for clearing a JSON value.
 
 use super::helpers;
@@ -40,10 +42,12 @@ impl ExecutableCommand for JsonClear {
 
         let (_, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
+            // Key does not exist, so nothing was cleared.
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         };
 
         if entry.is_expired() {
+            // Expired key is treated as non-existent.
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         }
 
@@ -52,34 +56,53 @@ impl ExecutableCommand for JsonClear {
 
             let clear_op = |target: &mut Value| {
                 match target {
-                    Value::Object(map) => {
+                    Value::Object(map) if !map.is_empty() => {
                         map.clear();
                         cleared_count += 1;
                     }
-                    Value::Array(arr) => {
+                    Value::Array(arr) if !arr.is_empty() => {
                         arr.clear();
                         cleared_count += 1;
                     }
-                    _ => {
-                        // For primitives, set to Null
-                        *target = Value::Null;
+                    // For primitives, set to 0 or an empty container.
+                    Value::String(_) => {
+                        *target = Value::String(String::new());
                         cleared_count += 1;
                     }
+                    Value::Number(_) => {
+                        *target = Value::Number(0.into());
+                        cleared_count += 1;
+                    }
+                    // Other types like Null or empty containers are not cleared.
+                    _ => {}
                 }
                 Ok(Value::Null) // Return value not directly used for count
             };
 
-            helpers::find_and_modify(root, &path, clear_op, false)?;
+            // Handle the result of find_and_modify to correctly return 0 on path not found.
+            let find_result = helpers::find_and_modify(root, &path, clear_op, false);
 
-            if cleared_count > 0 {
-                entry.version = entry.version.wrapping_add(1);
-                entry.size = root.to_string().len();
-                Ok((
-                    RespValue::Integer(cleared_count),
-                    WriteOutcome::Write { keys_modified: 1 },
-                ))
-            } else {
-                Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite))
+            match find_result {
+                // The operation succeeded.
+                Ok(_) => {
+                    if cleared_count > 0 {
+                        entry.version = entry.version.wrapping_add(1);
+                        entry.size = root.to_string().len(); // Recalculate size
+                        Ok((
+                            RespValue::Integer(cleared_count),
+                            WriteOutcome::Write { keys_modified: 1 },
+                        ))
+                    } else {
+                        // The path existed but the value was already empty/null, so nothing changed.
+                        Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite))
+                    }
+                }
+                // The path was not found, which is not an error for JSON.CLEAR.
+                Err(SpinelDBError::InvalidState(msg)) if msg == "path does not exist" => {
+                    Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite))
+                }
+                // Propagate other errors, like trying to access a key on a non-object.
+                Err(e) => Err(e),
             }
         } else {
             Err(SpinelDBError::WrongType)
