@@ -41,7 +41,7 @@ impl ExecutableCommand for JsonNumMultBy {
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let path = helpers::parse_path(&self.path)?;
-        let (_, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
             return Err(SpinelDBError::InvalidState(
                 "key or path does not exist".into(),
@@ -55,6 +55,8 @@ impl ExecutableCommand for JsonNumMultBy {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut final_value_str = String::new();
+            let old_size = helpers::estimate_json_memory(root);
+
             let mult_op = |target: &mut Value| {
                 let current_val = target.as_f64().ok_or(SpinelDBError::NotAFloat)?;
                 let new_val_float = current_val * self.value;
@@ -66,8 +68,12 @@ impl ExecutableCommand for JsonNumMultBy {
 
             helpers::find_and_modify(root, &path, mult_op, false)?;
 
+            let new_size = helpers::estimate_json_memory(root);
+            let mem_diff = new_size as isize - old_size as isize;
+
             entry.version = entry.version.wrapping_add(1);
-            entry.size = root.to_string().len();
+            entry.size = new_size;
+            shard.update_memory(mem_diff);
 
             Ok((
                 RespValue::BulkString(final_value_str.into()),

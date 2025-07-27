@@ -41,7 +41,7 @@ impl ExecutableCommand for JsonArrTrim {
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let path = helpers::parse_path(&self.path)?;
-        let (_, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
             return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
         };
@@ -51,6 +51,8 @@ impl ExecutableCommand for JsonArrTrim {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut final_len: Option<i64> = None;
+            let old_size = helpers::estimate_json_memory(root);
+
             let trim_op = |target: &mut Value| {
                 if !target.is_array() {
                     return Err(SpinelDBError::InvalidState("Target is not an array".into()));
@@ -89,8 +91,13 @@ impl ExecutableCommand for JsonArrTrim {
             helpers::find_and_modify(root, &path, trim_op, false)?;
 
             if let Some(len) = final_len {
+                let new_size = helpers::estimate_json_memory(root);
+                let mem_diff = new_size as isize - old_size as isize;
+
                 entry.version = entry.version.wrapping_add(1);
-                entry.size = root.to_string().len();
+                entry.size = new_size;
+                shard.update_memory(mem_diff);
+
                 Ok((
                     RespValue::Integer(len),
                     WriteOutcome::Write { keys_modified: 1 },

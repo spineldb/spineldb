@@ -70,8 +70,8 @@ impl ExecutableCommand for JsonToggle {
             helpers::find_and_modify(root, &path, toggle_op, false)?;
 
             if let Some(val) = final_value {
+                // The memory size of a boolean does not change, so no need to update memory counters.
                 entry.version = entry.version.wrapping_add(1);
-                // Size of boolean doesn't change, so no need to update memory counter
                 Ok((
                     RespValue::Integer(val as i64),
                     WriteOutcome::Write { keys_modified: 1 },

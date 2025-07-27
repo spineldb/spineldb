@@ -472,12 +472,13 @@ impl BlockerManager {
     }
 
     /// Called by zset write commands (`ZADD`/`ZINCRBY`) to atomically pop an element and notify a waiter.
+    /// Returns the side that was popped (Min or Max) if a waiter was successfully notified.
     pub fn notify_and_pop_zset_waiter(
         &self,
         zset: &mut SortedSet,
         key: &Bytes,
         side: PopSide,
-    ) -> bool {
+    ) -> Option<PopSide> {
         let popped_entry = match side {
             PopSide::Min => zset.pop_first(),
             PopSide::Max => zset.pop_last(),
@@ -513,16 +514,19 @@ impl BlockerManager {
                                 "Atomically popped and notified a waiter for zset key '{}'",
                                 String::from_utf8_lossy(key)
                             );
-                            return true;
+                            // Return the side that was successfully popped and handed off.
+                            return Some(side);
                         }
                     }
                 } else {
                     break;
                 }
             }
+            // If no waiter was found or notified, put the popped element back.
             zset.add(popped.score, popped.member);
         }
-        false
+        // No waiter was notified.
+        None
     }
 
     /// Removes a specific waker from all associated key queues.

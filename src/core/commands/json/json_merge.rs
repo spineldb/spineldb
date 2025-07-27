@@ -51,7 +51,7 @@ impl ExecutableCommand for JsonMerge {
             ));
         }
 
-        let (_, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         };
@@ -62,6 +62,7 @@ impl ExecutableCommand for JsonMerge {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut merged = false;
+            let old_size = helpers::estimate_json_memory(root);
 
             let merge_op = |target: &mut Value| {
                 match (target, &merge_value) {
@@ -90,8 +91,13 @@ impl ExecutableCommand for JsonMerge {
             helpers::find_and_modify(root, &path, merge_op, false)?;
 
             if merged {
+                let new_size = helpers::estimate_json_memory(root);
+                let mem_diff = new_size as isize - old_size as isize;
+
                 entry.version = entry.version.wrapping_add(1);
-                entry.size = root.to_string().len();
+                entry.size = new_size;
+                shard.update_memory(mem_diff);
+
                 Ok((
                     RespValue::Integer(1), // Redis returns 1 on successful merge.
                     WriteOutcome::Write { keys_modified: 1 },

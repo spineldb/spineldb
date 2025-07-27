@@ -99,6 +99,7 @@ impl AclEnforcer {
             return true;
         }
 
+        // The AUTH command is a special case that must be allowed before authentication.
         if user.is_none() && command_name.eq_ignore_ascii_case("AUTH") {
             return true;
         }
@@ -113,7 +114,7 @@ impl AclEnforcer {
             .filter_map(|rule_name| self.rules.get(rule_name))
             .collect();
 
-        // 1. Check static rules first.
+        // 1. Check static command and category rules first.
         let mut final_verdict =
             self.check_static_command_permission(&user_rules, command_name, command_flags);
 
@@ -131,7 +132,7 @@ impl AclEnforcer {
             return false;
         }
 
-        // 3. Check key and pubsub permissions.
+        // 3. Check key and pub/sub permissions if command permission was granted.
         if !self.check_key_permission(&user_rules, keys) {
             return false;
         }
@@ -187,7 +188,7 @@ impl AclEnforcer {
                     regex_pattern.push('[');
                     if chars.peek() == Some(&'^') {
                         regex_pattern.push('^');
-                        chars.next(); // Consume '^'
+                        chars.next();
                     }
                     for pc in chars.by_ref() {
                         if pc == ']' {
@@ -293,7 +294,7 @@ impl AclEnforcer {
         for rule in rules {
             for condition in &rule.conditions {
                 if self.evaluate_condition(condition, raw_args, keys) {
-                    // If the condition is met, apply its result
+                    // If the condition is met, apply its result rules.
                     for action in &condition.rules_on_match {
                         match action {
                             AclCommandRule::All
@@ -336,7 +337,7 @@ impl AclEnforcer {
     /// Checks if access to a set of keys is allowed.
     fn check_key_permission(&self, rules: &[&ParsedAclRule], keys: &[String]) -> bool {
         if keys.is_empty() {
-            return true; // No keys to check.
+            return true;
         }
         let all_key_rules: Vec<_> = rules.iter().flat_map(|r| &r.keys).collect();
         if all_key_rules.iter().any(|r| matches!(r, AclKeyRule::All)) {

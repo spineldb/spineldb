@@ -64,31 +64,36 @@ pub struct ClusterNode {
     pub config_epoch: u64,
     #[serde(default)]
     pub replication_offset: u64,
+    /// Stores slots this node is migrating to another. Key: slot, Value: destination node_id.
     #[serde(default)]
-    pub migrating_slots: BTreeMap<u16, String>, // Key: slot, Value: destination node_id
+    pub migrating_slots: BTreeMap<u16, String>,
+    /// Stores slots this node is importing from another. Key: slot, Value: source node_id.
     #[serde(default)]
-    pub importing_slots: BTreeMap<u16, String>, // Key: slot, Value: source node_id
+    pub importing_slots: BTreeMap<u16, String>,
 }
 
 impl ClusterNode {
+    /// Gets the state flags for this node.
     pub fn get_flags(&self) -> NodeFlags {
         NodeFlags::from_bits_truncate(self.flags_raw)
     }
+    /// Sets the state flags for this node.
     pub fn set_flags(&mut self, flags: NodeFlags) {
         self.flags_raw = flags.bits();
     }
 }
 
-/// Represents the runtime state of a node, which is not persisted.
+/// Represents the runtime state of a node, which is not persisted or gossiped.
 #[derive(Debug, Clone)]
 pub struct NodeRuntimeState {
     pub node_info: ClusterNode,
     pub ping_sent: Option<Instant>,
     pub pong_received: Option<Instant>,
-    pub pfail_reports: HashMap<String, Instant>, // Key: reporter_id
+    /// Tracks which nodes have reported this node as PFAIL. Key: reporter_id.
+    pub pfail_reports: HashMap<String, Instant>,
 }
 
-/// A struct for serializing the essential cluster state to a file.
+/// A helper struct for serializing the essential cluster state to a file.
 #[derive(Debug, Serialize, Deserialize)]
 struct SerializableClusterState {
     my_id: String,
@@ -99,13 +104,19 @@ struct SerializableClusterState {
 /// `ClusterState` is the main container for all cluster-related information on this node.
 #[derive(Debug)]
 pub struct ClusterState {
+    /// The unique 40-character hexadecimal run ID of this node.
     pub my_id: String,
+    /// The current configuration epoch of the cluster, used for failover ordering.
     pub current_epoch: AtomicU64,
+    /// The last used epoch for a `CACHE.PURGETAG` operation.
     pub last_purge_epoch: AtomicU64,
+    /// A map of all known nodes in the cluster, keyed by their unique run ID.
     pub nodes: DashMap<String, NodeRuntimeState>,
+    /// A mapping of each of the 16384 hash slots to the ID of the node that owns it.
     pub slots_map: [RwLock<Option<String>>; NUM_SLOTS],
+    /// The file path for the persisted cluster configuration (`nodes.conf`).
     pub config_file_path: String,
-    // --- Failover-related atomics ---
+    // --- Failover-related atomics for replica-initiated failovers ---
     pub last_vote_epoch: AtomicU64,
     pub failover_auth_time: AtomicU64,
     pub failover_auth_count: AtomicU64,
@@ -189,7 +200,6 @@ impl ClusterState {
         let slots_map = std::array::from_fn(|_| RwLock::new(None));
         let nodes = DashMap::new();
 
-        // Use an index-based loop to avoid moving `s_state.nodes`.
         for i in 0..s_state.nodes.len() {
             let mut node_info = s_state.nodes[i].clone();
             let mut pong_received = None;
@@ -223,8 +233,6 @@ impl ClusterState {
                 node_info.bus_addr = format!("{my_addr}:{my_bus_port}");
                 pong_received = Some(Instant::now());
 
-                // If nodes.conf says we are a replica, update the in-memory config.
-                // This makes CLUSTER REPLICATE changes persistent.
                 if let Some(master_id) = &node_info.replica_of {
                     if let Some(master_node) = s_state.nodes.iter().find(|n| &n.id == master_id) {
                         if let Ok(mut config) = server_config.clone().into_mutex().try_lock() {
@@ -247,7 +255,6 @@ impl ClusterState {
                     }
                 }
 
-                // Update the original vec after modifications.
                 s_state.nodes[i] = node_info.clone();
             }
 
@@ -279,7 +286,7 @@ impl ClusterState {
         })
     }
 
-    /// Saves the current cluster configuration to the `nodes.conf` file.
+    /// Saves the current cluster configuration to the `nodes.conf` file atomically.
     pub fn save_config(&self) -> Result<(), SpinelDBError> {
         let nodes_vec: Vec<ClusterNode> = self
             .nodes
@@ -342,7 +349,7 @@ impl ClusterState {
 
     /// Cleans up old PFAIL reports to prevent them from persisting indefinitely.
     pub fn clean_pfail_reports(&self) {
-        let timeout_ms = 15000; // This should ideally come from config.
+        let timeout_ms = 15000;
         let timeout = Duration::from_millis(timeout_ms * 2);
 
         for mut entry in self.nodes.iter_mut() {
@@ -485,7 +492,6 @@ impl ClusterState {
                 .insert(new_runtime.node_info.id.clone(), new_runtime);
         }
 
-        // Self-demotion logic for partitioned masters.
         let my_config = self.get_my_config();
         if my_config.node_info.get_flags().contains(NodeFlags::PRIMARY)
             && received_node.get_flags().contains(NodeFlags::PRIMARY)
@@ -512,7 +518,8 @@ impl ClusterState {
         }
     }
 
-    /// Handles the case where this node discovers a new master with a higher epoch.
+    /// Handles the case where this node discovers a new primary with a higher epoch,
+    /// triggering a self-demotion to a replica to prevent split-brain.
     async fn handle_epoch_conflict_and_reconfigure(
         &self,
         state: Arc<ServerState>,
@@ -525,7 +532,6 @@ impl ClusterState {
             self.get_my_config().node_info.config_epoch,
         );
 
-        // 1. Update the main server config to point to the new master.
         {
             let mut config_guard = state.config.lock().await;
             let parts: Vec<&str> = new_master_info.addr.split(':').collect();
@@ -544,7 +550,6 @@ impl ClusterState {
             };
         }
 
-        // 2. Update this node's own cluster state.
         if let Some(mut myself) = self.nodes.get_mut(&self.my_id) {
             let mut flags = myself.node_info.get_flags();
             flags.remove(NodeFlags::PRIMARY);
@@ -554,13 +559,10 @@ impl ClusterState {
             myself.node_info.slots.clear();
         }
 
-        // 3. Persist the new cluster topology.
         self.save_config()?;
 
-        // 4. Disable the self-fencing read-only mode as we are becoming a replica.
         state.set_quorum_loss_read_only(false, "Reconfiguring as a replica.");
 
-        // 5. Signal the replication worker to restart and connect to the new master.
         if state.replication_reconfigure_tx.send(()).is_err() {
             warn!(
                 "Could not send reconfigure signal to replication worker; it may not be running or the channel is full."

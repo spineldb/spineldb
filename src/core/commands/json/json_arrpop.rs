@@ -50,7 +50,7 @@ impl ExecutableCommand for JsonArrPop {
         let path_str = self.path.as_deref().unwrap_or(".");
         let path = helpers::parse_path(path_str)?;
 
-        let (_shard, guard) = ctx.get_single_shard_context_mut()?;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
         let Some(entry) = guard.get_mut(&self.key) else {
             return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
         };
@@ -62,6 +62,8 @@ impl ExecutableCommand for JsonArrPop {
 
         if let DataValue::Json(root) = &mut entry.data {
             let mut popped_value = Value::Null;
+            let old_size = helpers::estimate_json_memory(root);
+
             let pop_op = |target: &mut Value| {
                 if !target.is_array() {
                     return Err(SpinelDBError::InvalidState("Target is not an array".into()));
@@ -95,9 +97,13 @@ impl ExecutableCommand for JsonArrPop {
                 return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
             }
 
+            let new_size = helpers::estimate_json_memory(root);
+            let mem_diff = new_size as isize - old_size as isize;
+
             // Update metadata as the value has changed.
             entry.version = entry.version.wrapping_add(1);
-            entry.size = root.to_string().len();
+            entry.size = new_size;
+            shard.update_memory(mem_diff);
 
             // Always serialize the popped value to a JSON string, as per RedisJSON behavior.
             let response_str = serde_json::to_string(&popped_value)?;

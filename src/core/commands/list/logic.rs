@@ -1,9 +1,10 @@
 // src/core/commands/list/logic.rs
 
 use crate::core::commands::command_trait::WriteOutcome;
+use crate::core::events::{TransactionData, UnitOfWork};
 use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::storage::db::{ExecutionContext, PopDirection, PushDirection};
-use crate::core::{RespValue, SpinelDBError};
+use crate::core::{Command, RespValue, SpinelDBError};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -34,52 +35,94 @@ pub(crate) async fn list_push_logic<'a>(
 
     let state = ctx.state.clone();
 
-    // **ATOMICITY FIX**: First, try to hand off the first value to a waiting client.
-    // If successful, that value is considered "consumed" and is NOT added to the list.
-    // The rest of the values are then added. This is the Redis-compatible, race-free pattern.
+    // Atomically hand off the first value to a waiting client if one exists.
     let was_consumed_by_waiter = state
         .blocker_manager
         .notify_and_consume_for_push(key, values[0].clone());
 
-    let values_to_actually_push = if was_consumed_by_waiter {
-        &values[1..]
-    } else {
-        values
-    };
+    // If a waiter consumed the value, it bypassed the list entirely.
+    // To ensure state consistency, we must manually propagate a transaction
+    // that mimics this atomic operation (PUSH followed by a POP) to replicas/AOF.
+    if was_consumed_by_waiter {
+        let push_cmd = match direction {
+            PushDirection::Left => Command::LPush(crate::core::commands::list::LPush {
+                key: key.clone(),
+                values: values.to_vec(),
+            }),
+            PushDirection::Right => Command::RPush(crate::core::commands::list::RPush {
+                key: key.clone(),
+                values: values.to_vec(),
+            }),
+        };
 
+        // The corresponding pop operation to maintain state consistency.
+        let pop_cmd = match direction {
+            PushDirection::Left => {
+                Command::LPop(crate::core::commands::list::LPop { key: key.clone() })
+            }
+            PushDirection::Right => {
+                Command::RPop(crate::core::commands::list::RPop { key: key.clone() })
+            }
+        };
+
+        // The transaction must contain all commands for AOF, but only writes for replication.
+        let tx_data = TransactionData {
+            all_commands: vec![push_cmd.clone(), pop_cmd.clone()],
+            write_commands: vec![push_cmd, pop_cmd],
+        };
+
+        // Manually publish the synthetic transaction.
+        ctx.state
+            .event_bus
+            .publish(UnitOfWork::Transaction(Box::new(tx_data)), &ctx.state);
+
+        // The list length is determined after the remaining items (if any) are pushed.
+        let final_len = if let Ok(guard) = ctx
+            .db
+            .get_shard(ctx.db.get_shard_index(key))
+            .entries
+            .try_lock()
+        {
+            guard
+                .peek(key)
+                .map(|e| match &e.data {
+                    DataValue::List(l) => l.len() + values.len() - 1,
+                    _ => values.len() - 1,
+                })
+                .unwrap_or(values.len() - 1)
+        } else {
+            values.len() - 1 // A reasonable fallback
+        };
+
+        // Since the state change was manually propagated, we return DidNotWrite
+        // to prevent the command router from propagating it again.
+        return Ok((
+            RespValue::Integer(final_len as i64),
+            WriteOutcome::DidNotWrite,
+        ));
+    }
+
+    // Standard path: no waiter was available, so we modify the list in storage.
     let (shard, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
     let entry = shard_cache_guard.get_or_insert_with_mut(key.clone(), || {
         StoredValue::new(DataValue::List(VecDeque::new()))
     });
 
     if let DataValue::List(list) = &mut entry.data {
-        if !values_to_actually_push.is_empty() {
-            let mut total_added_size = 0;
-            // Note: For LPUSH, Redis pushes elements one by one from left to right,
-            // so the arguments appear reversed in the list. Our iterator does this naturally.
-            for value in values_to_actually_push {
-                total_added_size += value.len();
-                match direction {
-                    PushDirection::Left => list.push_front(value.clone()),
-                    PushDirection::Right => list.push_back(value.clone()),
-                }
+        let mut total_added_size = 0;
+        for value in values {
+            total_added_size += value.len();
+            match direction {
+                PushDirection::Left => list.push_front(value.clone()),
+                PushDirection::Right => list.push_back(value.clone()),
             }
-            entry.version = entry.version.wrapping_add(1);
-            entry.size += total_added_size;
-            shard.update_memory(total_added_size as isize);
         }
+        entry.version = entry.version.wrapping_add(1);
+        entry.size += total_added_size;
+        shard.update_memory(total_added_size as isize);
 
         let final_len = list.len() as i64;
-
-        // The write outcome is determined by whether we actually modified the list in storage.
-        let outcome = if !values_to_actually_push.is_empty() {
-            WriteOutcome::Write { keys_modified: 1 }
-        } else {
-            // If the value was consumed by a waiter, the state was changed conceptually,
-            // but the list key itself was not modified on this node. Redis does not
-            // replicate the PUSH in this case, so DidNotWrite is correct.
-            WriteOutcome::DidNotWrite
-        };
+        let outcome = WriteOutcome::Write { keys_modified: 1 };
 
         Ok((RespValue::Integer(final_len), outcome))
     } else {

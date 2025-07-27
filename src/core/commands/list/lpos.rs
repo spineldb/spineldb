@@ -12,6 +12,7 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 
+/// Represents the `LPOS` command with all its parsed options.
 #[derive(Debug, Clone, Default)]
 pub struct LPos {
     pub key: Bytes,
@@ -22,6 +23,7 @@ pub struct LPos {
 }
 
 impl ParseCommand for LPos {
+    /// Parses the `LPOS` command arguments from a RESP frame.
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
         if args.len() < 2 {
             return Err(SpinelDBError::WrongArgumentCount("LPOS".to_string()));
@@ -57,9 +59,8 @@ impl ParseCommand for LPos {
                         .parse()
                         .map_err(|_| SpinelDBError::NotAnInteger)?;
 
-                    // Perilaku COUNT 0 adalah 'semua'.
-                    // Representasikan secara internal sebagai u64::MAX agar loop
-                    // tidak berhenti sampai akhir list.
+                    // COUNT 0 means find all occurrences.
+                    // Represent this internally as u64::MAX to simplify the loop condition.
                     count = if c == 0 { Some(u64::MAX) } else { Some(c) };
                 }
                 "maxlen" => {
@@ -90,15 +91,16 @@ impl ParseCommand for LPos {
 
 #[async_trait]
 impl ExecutableCommand for LPos {
+    /// Executes the `LPOS` command.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let (_, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
 
-        // Pertama, periksa apakah kunci ada dan merupakan list.
+        // First, check if the key exists and is a list.
         let Some(entry) = shard_cache_guard.get_mut(&self.key) else {
-            // Jika kunci tidak ada, hasilnya Null atau array kosong tergantung COUNT.
+            // If the key does not exist, return Null or an empty array depending on COUNT.
             return Ok((
                 if self.count.is_some() {
                     RespValue::Array(vec![])
@@ -109,7 +111,7 @@ impl ExecutableCommand for LPos {
             ));
         };
 
-        // Lakukan penghapusan pasif jika kunci kedaluwarsa.
+        // Perform passive deletion if the key is expired.
         if entry.is_expired() {
             shard_cache_guard.pop(&self.key);
             return Ok((
@@ -123,7 +125,7 @@ impl ExecutableCommand for LPos {
         }
 
         let DataValue::List(list) = &entry.data else {
-            // Jika kunci ada tapi bukan list.
+            // If the key exists but is not a list.
             return Err(SpinelDBError::WrongType);
         };
 
@@ -131,7 +133,7 @@ impl ExecutableCommand for LPos {
         let mut occurrences_found = 0i64;
         let mut positions = Vec::new();
 
-        // Tentukan arah iterasi berdasarkan RANK (positif atau negatif).
+        // Determine the iteration direction based on the RANK (positive or negative).
         let iter: Box<dyn Iterator<Item = (usize, &Bytes)>> = if rank > 0 {
             Box::new(list.iter().enumerate())
         } else {
@@ -140,7 +142,7 @@ impl ExecutableCommand for LPos {
 
         let mut comparisons = 0u64;
         for (i, v) in iter {
-            // Cek MAXLEN jika ada.
+            // Check the MAXLEN limit if it is specified.
             if let Some(ml) = self.max_len {
                 if ml > 0 && comparisons >= ml {
                     break;
@@ -151,34 +153,34 @@ impl ExecutableCommand for LPos {
             if v == &self.element {
                 occurrences_found += 1;
 
-                // Periksa apakah kemunculan ini sesuai dengan RANK yang diminta.
-                // rank.abs() digunakan karena rank negatif hanya mengubah arah pencarian.
+                // Check if this occurrence matches the requested RANK.
+                // rank.abs() is used because a negative rank only changes search direction.
                 if occurrences_found >= rank.abs() {
                     if self.count.is_some() {
-                        // Jika COUNT ada, kumpulkan posisinya.
+                        // If COUNT is present, collect the positions.
                         positions.push(RespValue::Integer(i as i64));
 
-                        // Hentikan jika sudah mencapai jumlah yang diminta oleh COUNT.
-                        // `u64::MAX` (representasi COUNT 0) tidak akan pernah tercapai.
+                        // Stop if the number of requested occurrences is reached.
+                        // `u64::MAX` (our internal representation for COUNT 0) will never be reached.
                         if let Some(c) = self.count {
                             if positions.len() as u64 >= c {
                                 break;
                             }
                         }
                     } else {
-                        // Jika COUNT tidak ada, kita hanya mencari rank pertama yang cocok.
-                        // Langsung kembalikan posisinya.
+                        // If COUNT is not present, we only need the first matching rank.
+                        // Return its position immediately.
                         return Ok((RespValue::Integer(i as i64), WriteOutcome::DidNotWrite));
                     }
                 }
             }
         }
 
-        // Jika loop selesai, kembalikan hasil berdasarkan apakah COUNT digunakan.
+        // After the loop, return the result based on whether COUNT was used.
         if self.count.is_some() {
             Ok((RespValue::Array(positions), WriteOutcome::DidNotWrite))
         } else {
-            // Loop selesai tapi rank yang cocok tidak ditemukan (jika tanpa COUNT).
+            // Loop finished, but a matching rank was not found (when without COUNT).
             Ok((RespValue::Null, WriteOutcome::DidNotWrite))
         }
     }
@@ -212,8 +214,8 @@ impl CommandSpec for LPos {
             args.extend([Bytes::from_static(b"RANK"), r.to_string().into()]);
         }
         if let Some(c) = self.count {
-            // Konversi u64::MAX (representasi internal kita untuk COUNT 0)
-            // kembali menjadi string "0" untuk AOF/Replikasi yang akurat.
+            // Convert u64::MAX (our internal representation for COUNT 0)
+            // back to the string "0" for accurate AOF/Replication.
             let count_str = if c == u64::MAX {
                 "0".to_string()
             } else {

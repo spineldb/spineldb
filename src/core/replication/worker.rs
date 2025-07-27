@@ -350,6 +350,14 @@ impl ReplicaWorker {
         command: Command,
         writer: &Arc<Mutex<WriteHalf<ReplicaStream>>>,
     ) -> Result<(), SpinelDBError> {
+        // SELECT is a state-changing command for the replica worker itself.
+        // It must be executed immediately, even inside a MULTI/EXEC block,
+        // to correctly set the context for subsequent commands in the transaction.
+        if let Command::Select(Select { db_index }) = command {
+            self.current_db_index = db_index;
+            return Ok(());
+        }
+
         // Handle transaction control commands.
         match &command {
             Command::Multi => {
@@ -407,10 +415,6 @@ impl ReplicaWorker {
                 self.spawn_ack_task(writer.clone(), offset).await;
                 return Ok(());
             }
-        }
-        if let Command::Select(Select { db_index }) = command {
-            self.current_db_index = db_index;
-            return Ok(());
         }
 
         // Apply any other command directly.
@@ -508,6 +512,9 @@ impl ReplicaWorker {
             Ok(())
         }
     }
+
+    // ... (The rest of the functions `clear_all_local_data`, `spawn_ack_task`, `perform_handshake`,
+    // `handle_fullresync_response`, `read_and_load_spldb`, `expect_simple_string` remain unchanged) ...
 
     /// Wipes all local data to ensure a clean slate for a full resync.
     async fn clear_all_local_data(&mut self) {
