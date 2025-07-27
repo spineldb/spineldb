@@ -13,6 +13,7 @@ use crate::core::replication;
 use crate::core::storage::ttl::TtlManager;
 use crate::core::tasks::{
     cache_gc::OnDiskCacheGCTask,
+    cache_lock_cleaner::CacheLockCleanerTask,
     cache_purger::CachePurgerTask,
     cache_revalidator::{CacheRevalidationWorker, CacheRevalidator},
     cache_tag_validator::CacheTagValidatorTask,
@@ -125,7 +126,15 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         Ok(())
     });
 
-    // Spawn the new cache tag validator task for cluster mode.
+    // Spawn the cache lock cleaner task to prevent memory leaks.
+    let cache_lock_cleaner = CacheLockCleanerTask::new(server_state.clone());
+    let shutdown_rx_lock_cleaner = shutdown_tx.subscribe();
+    background_tasks.spawn(async move {
+        cache_lock_cleaner.run(shutdown_rx_lock_cleaner).await;
+        Ok(())
+    });
+
+    // Spawn the cache tag validator task for cluster mode.
     let cache_validator = CacheTagValidatorTask::new(server_state.clone());
     let shutdown_rx_cache_validate = shutdown_tx.subscribe();
     background_tasks.spawn(async move {

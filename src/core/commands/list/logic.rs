@@ -33,57 +33,55 @@ pub(crate) async fn list_push_logic<'a>(
     }
 
     let state = ctx.state.clone();
+
+    // **ATOMICITY FIX**: First, try to hand off the first value to a waiting client.
+    // If successful, that value is considered "consumed" and is NOT added to the list.
+    // The rest of the values are then added. This is the Redis-compatible, race-free pattern.
+    let was_consumed_by_waiter = state
+        .blocker_manager
+        .notify_and_consume_for_push(key, values[0].clone());
+
+    let values_to_actually_push = if was_consumed_by_waiter {
+        &values[1..]
+    } else {
+        values
+    };
+
     let (shard, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
     let entry = shard_cache_guard.get_or_insert_with_mut(key.clone(), || {
         StoredValue::new(DataValue::List(VecDeque::new()))
     });
 
     if let DataValue::List(list) = &mut entry.data {
-        let mut total_added_size = 0;
-        for value in values {
-            total_added_size += value.len();
-            match direction {
-                PushDirection::Left => list.push_front(value.clone()),
-                PushDirection::Right => list.push_back(value.clone()),
+        if !values_to_actually_push.is_empty() {
+            let mut total_added_size = 0;
+            // Note: For LPUSH, Redis pushes elements one by one from left to right,
+            // so the arguments appear reversed in the list. Our iterator does this naturally.
+            for value in values_to_actually_push {
+                total_added_size += value.len();
+                match direction {
+                    PushDirection::Left => list.push_front(value.clone()),
+                    PushDirection::Right => list.push_back(value.clone()),
+                }
             }
+            entry.version = entry.version.wrapping_add(1);
+            entry.size += total_added_size;
+            shard.update_memory(total_added_size as isize);
         }
-        entry.version = entry.version.wrapping_add(1);
-        entry.size += total_added_size;
-        shard
-            .current_memory
-            .fetch_add(total_added_size, Ordering::Relaxed);
 
         let final_len = list.len() as i64;
 
-        // Try to notify a waiting client (BLPOP/BLMOVE). The notifier will atomically
-        // pop the element and send it to the waiter if one exists.
-        let was_popped_for_waiter = state.blocker_manager.notify_waiters(
-            key,
-            values[0].clone(), // Send the first pushed element
-        );
+        // The write outcome is determined by whether we actually modified the list in storage.
+        let outcome = if !values_to_actually_push.is_empty() {
+            WriteOutcome::Write { keys_modified: 1 }
+        } else {
+            // If the value was consumed by a waiter, the state was changed conceptually,
+            // but the list key itself was not modified on this node. Redis does not
+            // replicate the PUSH in this case, so DidNotWrite is correct.
+            WriteOutcome::DidNotWrite
+        };
 
-        if was_popped_for_waiter {
-            // If the element was consumed by a waiter, remove it from the list
-            // to reflect its immediate consumption.
-            let popped_value = match direction {
-                PushDirection::Left => list.pop_front(),
-                PushDirection::Right => list.pop_back(),
-            };
-
-            // Sanity check: the popped value should be the same as the one sent to the notifier.
-            debug_assert_eq!(popped_value.as_ref(), Some(&values[0]));
-
-            if let Some(val) = popped_value {
-                let val_len = val.len();
-                entry.size -= val_len;
-                shard.current_memory.fetch_sub(val_len, Ordering::Relaxed);
-            }
-        }
-
-        Ok((
-            RespValue::Integer(final_len),
-            WriteOutcome::Write { keys_modified: 1 },
-        ))
+        Ok((RespValue::Integer(final_len), outcome))
     } else {
         Err(SpinelDBError::WrongType)
     }

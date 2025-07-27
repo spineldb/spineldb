@@ -159,6 +159,8 @@ impl ExecutableCommand for CacheFetch {
             };
         }
 
+        // --- Cache Stampede Protection ---
+        // Get or create a lock for this specific key.
         let fetch_lock = ctx
             .state
             .cache
@@ -166,11 +168,18 @@ impl ExecutableCommand for CacheFetch {
             .entry(self.key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
+
+        // The first request becomes the "leader" and acquires the lock.
+        // Subsequent requests ("followers") will block here until the leader is done.
         let _lock_guard = fetch_lock.lock().await;
 
+        // Double-check the cache after acquiring the lock. A follower waking up
+        // will now find the data cached by the leader.
         let double_check_response = get_cmd.execute_and_stream(ctx).await?;
         if !matches!(double_check_response, RouteResponse::NoOp) {
-            ctx.state.cache.fetch_locks.remove(&self.key);
+            // Data is now in cache. Return it.
+            // The lock entry in `fetch_locks` is intentionally NOT removed to fix a race condition.
+            // The CacheLockCleanerTask will garbage collect it later.
             return match double_check_response {
                 RouteResponse::Single(val) => Ok((val, WriteOutcome::DidNotWrite)),
                 RouteResponse::StreamBody { mut file, .. } => {
@@ -185,13 +194,14 @@ impl ExecutableCommand for CacheFetch {
             };
         }
 
+        // If we're here, we are the leader. Fetch from origin.
         debug!(
             "Cache miss for key '{}'. This client is the leader and will fetch from origin.",
             String::from_utf8_lossy(&self.key)
         );
 
         let fetch_result = self.fetch_from_origin(ctx, false).await;
-        ctx.state.cache.fetch_locks.remove(&self.key);
+        // The lock entry in `fetch_locks` is intentionally NOT removed.
 
         match fetch_result {
             Ok((body, write_outcome)) => Ok((RespValue::BulkString(body), write_outcome)),
@@ -318,7 +328,7 @@ impl CacheFetch {
 
         let set_cmd_internal = CacheSet {
             key: self.key.clone(),
-            body_data: Bytes::new(),
+            body_data: Bytes::new(), // Body is in final_cache_body, not needed here
             ttl: self.ttl,
             swr: self.swr,
             grace: self.grace,

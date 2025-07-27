@@ -380,14 +380,18 @@ impl BlockerManager {
         }
     }
 
-    /// Called by list write commands (`LPUSH`/`RPUSH`) to atomically pop an element and notify a waiter.
-    pub fn notify_waiters(&self, key: &Bytes, value: Bytes) -> bool {
+    /// Called by list write commands (`LPUSH`/`RPUSH`). It attempts to hand off a value
+    /// to a waiting client. If successful, the value bypasses the list entirely.
+    /// Returns true if a waiter was notified and the value was consumed.
+    pub fn notify_and_consume_for_push(&self, key: &Bytes, value: Bytes) -> bool {
         loop {
             let waiter_info = if let Some(mut queue) = self.waiters.get_mut(key) {
                 if queue.is_empty() {
-                    drop(queue);
-                    self.waiters.remove(key);
-                    return false;
+                    return false; // No waiters to notify
+                } else if queue.front().unwrap().waker.lock().unwrap().is_none() {
+                    // Waker has been dropped (e.g., client disconnected), clean it up.
+                    queue.pop_front();
+                    continue;
                 }
                 queue.pop_front()
             } else {
@@ -407,8 +411,10 @@ impl BlockerManager {
                         value: value.clone(),
                     };
                     if waker.send(WokenValue::List(popped_value)).is_ok() {
-                        debug!(
-                            "Atomically popped and notified a waiter for list key '{}'",
+                        // The value was successfully sent to the waiter, meaning it was "consumed".
+                        // The PUSH command should NOT add this value to the list.
+                        tracing::debug!(
+                            "Atomically handed off value to a waiter for list key '{}'",
                             String::from_utf8_lossy(key)
                         );
                         return true;
@@ -416,6 +422,28 @@ impl BlockerManager {
                 }
             } else {
                 return false;
+            }
+        }
+    }
+
+    /// Wakes up any clients waiting on a key that is about to be modified or deleted.
+    /// This is a simple notification; the waiting client is responsible for re-checking the key state.
+    pub fn wake_waiters_for_modification(&self, key: &Bytes) {
+        if let Some(mut queue) = self.waiters.get_mut(key) {
+            // Wake up everyone waiting on this key.
+            while let Some(info) = queue.pop_front() {
+                if let Ok(mut guard) = info.waker.lock() {
+                    // take() ensures we only send once.
+                    if let Some(waker) = guard.take() {
+                        // The woken value doesn't matter here, as the client will re-read the state.
+                        // We send a value just to unblock the oneshot receiver.
+                        let dummy_value = PoppedValue {
+                            key: key.clone(),
+                            value: Bytes::new(),
+                        };
+                        let _ = waker.send(WokenValue::List(dummy_value));
+                    }
+                }
             }
         }
     }
@@ -526,7 +554,7 @@ async fn list_push_to_dest_from_move<'a>(
 
         ctx.state
             .blocker_manager
-            .notify_waiters(dest_key, value.clone());
+            .notify_and_consume_for_push(dest_key, value.clone());
 
         Ok((
             RespValue::BulkString(value),

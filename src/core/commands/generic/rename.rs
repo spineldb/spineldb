@@ -66,12 +66,13 @@ impl ExecutableCommand for Rename {
                 .get_mut(&source_shard_index)
                 .ok_or_else(|| SpinelDBError::Internal("Missing source lock for RENAME".into()))?;
 
+            // Wake up anyone waiting on the source key before it's removed.
             if let Some(entry) = source_guard.peek(&self.source) {
                 match &entry.data {
                     DataValue::List(_) | DataValue::SortedSet(_) => {
                         ctx.state
                             .blocker_manager
-                            .notify_waiters(&self.source, Bytes::new());
+                            .wake_waiters_for_modification(&self.source);
                     }
                     DataValue::Stream(_) => {
                         ctx.state
@@ -93,6 +94,7 @@ impl ExecutableCommand for Rename {
                 .get_mut(&dest_shard_index)
                 .ok_or_else(|| SpinelDBError::Internal("Missing dest lock for RENAME".into()))?;
 
+            // Wake up anyone waiting on the destination key before it's overwritten.
             if let Some(dest_entry) = dest_guard.peek(&self.destination) {
                 if std::mem::discriminant(&dest_entry.data)
                     != std::mem::discriminant(&source_value.data)
@@ -107,7 +109,7 @@ impl ExecutableCommand for Rename {
                     DataValue::List(_) | DataValue::SortedSet(_) => {
                         ctx.state
                             .blocker_manager
-                            .notify_waiters(&self.destination, Bytes::new());
+                            .wake_waiters_for_modification(&self.destination);
                     }
                     DataValue::Stream(_) => {
                         ctx.state
@@ -121,6 +123,7 @@ impl ExecutableCommand for Rename {
             dest_guard.put(self.destination.clone(), source_value)
         };
 
+        // Handle lazy-free for the overwritten value if it was large.
         if let Some(val) = old_dest_value {
             if auto_unlink_threshold > 0 && val.size > auto_unlink_threshold {
                 let state_clone = ctx.state.clone();

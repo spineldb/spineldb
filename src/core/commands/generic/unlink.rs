@@ -75,7 +75,9 @@ impl ExecutableCommand for Unlink {
                     ctx.state.stream_blocker_manager.notify_and_remove_all(&key);
                 }
                 DataValue::List(_) | DataValue::SortedSet(_) => {
-                    ctx.state.blocker_manager.notify_waiters(&key, Bytes::new());
+                    ctx.state
+                        .blocker_manager
+                        .wake_waiters_for_modification(&key);
                 }
                 _ => {}
             }

@@ -145,7 +145,7 @@ pub(crate) async fn lmove_logic<'a>(
     // --- Step 4: Notify blockers on destination key and finish ---
     ctx.state
         .blocker_manager
-        .notify_waiters(dest_key, value_to_move.clone());
+        .notify_and_consume_for_push(dest_key, value_to_move.clone());
 
     Ok((
         RespValue::BulkString(value_to_move),
