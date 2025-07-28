@@ -8,7 +8,7 @@ use crate::core::commands::command_trait::{
 use crate::core::commands::helpers::{extract_bytes, extract_string};
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::{Db, ExecutionContext, ExecutionLocks};
+use crate::core::storage::db::{Db, ExecutionContext};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -106,110 +106,54 @@ impl ExecutableCommand for Sort {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        // Phase 1: Pre-flight read and version snapshotting (optimistic locking).
-        let (source_elements, initial_versions, all_keys_to_check) = {
-            let (_, guard) = ctx.get_single_shard_context_mut()?;
-            let Some(entry) = guard.peek(&self.key) else {
+        // --- Phase 1: Pre-flight data collection and version snapshotting ---
+        let (source_elements, initial_versions, copied_values) = {
+            let mut all_keys_to_lock = BTreeSet::new();
+            all_keys_to_lock.insert(self.key.clone());
+            if let Some(dest) = &self.store_destination {
+                all_keys_to_lock.insert(dest.clone());
+            }
+
+            // Temporarily acquire all necessary locks to create a consistent snapshot.
+            let mut guards = ctx
+                .db
+                .lock_shards_for_keys(&all_keys_to_lock.iter().cloned().collect::<Vec<_>>())
+                .await;
+
+            let Some(entry) = self.get_value_from_guards(&self.key, &mut guards, ctx.db)? else {
                 return self.handle_empty_source(ctx).await;
             };
-            if entry.is_expired() {
-                return self.handle_empty_source(ctx).await;
-            }
-            let source_elements = self.get_source_elements_from_entry(entry)?;
 
-            let mut all_keys = BTreeSet::new();
-            all_keys.insert(self.key.clone());
-            self.collect_extra_keys(&source_elements, &mut all_keys)?;
-            if let Some(dest) = &self.store_destination {
-                all_keys.insert(dest.clone());
-            }
+            let source_elements = self.get_source_elements_from_entry(&entry)?;
+
+            self.collect_extra_keys(&source_elements, &mut all_keys_to_lock)?;
+
+            // Cluster slot checks now that all keys are known.
+            self.check_cluster_slots(&all_keys_to_lock.iter().cloned().collect::<Vec<_>>(), ctx)?;
+
+            self.check_memory_usage_for_copy(&all_keys_to_lock, ctx)
+                .await?;
 
             let mut versions = BTreeMap::new();
-            for key in &all_keys {
-                versions.insert(key.clone(), guard.peek(key).map_or(0, |e| e.version));
-            }
-            (source_elements, versions, all_keys)
-        };
+            let mut copied_values = BTreeMap::new();
 
-        // Eagerly check for cross-slot violations after all dynamic keys have been resolved.
-        if let Some(cluster_state) = &ctx.state.cluster {
-            let first_slot = get_cluster_slot(&self.key);
-            for key_for_check in &all_keys_to_check {
-                if get_cluster_slot(key_for_check) != first_slot {
-                    return Err(SpinelDBError::CrossSlot);
+            for key in &all_keys_to_lock {
+                if let Some(value) = self.get_value_from_guards(key, &mut guards, ctx.db)? {
+                    versions.insert(key.clone(), value.version);
+                    copied_values.insert(key.clone(), value.data.clone());
+                } else {
+                    versions.insert(key.clone(), 0);
                 }
             }
-            // Also ensure this node owns the slot.
-            if !cluster_state.i_own_slot(first_slot) {
-                let owner_node = cluster_state.get_node_for_slot(first_slot);
-                let addr = owner_node.map_or_else(String::new, |node| node.node_info.addr.clone());
-                return Err(SpinelDBError::Moved {
-                    slot: first_slot,
-                    addr,
-                });
-            }
-        }
-
-        let keys_for_acl: Vec<String> = all_keys_to_check
-            .iter()
-            .map(|b| String::from_utf8_lossy(b).to_string())
-            .collect();
-        if !ctx.state.acl_enforcer.read().await.check_permission(
-            ctx.authenticated_user.as_deref(),
-            &[],
-            "get",
-            CommandFlags::READONLY,
-            &keys_for_acl,
-            &[],
-        ) {
-            return Err(SpinelDBError::NoPermission);
-        }
+            (source_elements, versions, copied_values)
+        }; // All locks are released here.
 
         if source_elements.is_empty() {
             return self.handle_empty_source(ctx).await;
         }
 
-        // Phase 2: Upgrade to write locks and verify versions.
-        let all_keys_vec: Vec<Bytes> = initial_versions.keys().cloned().collect();
-        ctx.upgrade_locks(&all_keys_vec).await;
-
-        let guards = match &mut ctx.locks {
-            ExecutionLocks::Multi { guards } => guards,
-            _ => {
-                return Err(SpinelDBError::Internal(
-                    "Lock upgrade for SORT failed".into(),
-                ));
-            }
-        };
-
-        for (key, original_version) in &initial_versions {
-            let shard_index = ctx.db.get_shard_index(key);
-            if let Some(guard) = guards.get(&shard_index) {
-                let current_version = guard.peek(key).map_or(0, |e| e.version);
-                if current_version != *original_version {
-                    warn!(
-                        "SORT for key '{}' aborted due to concurrent modification of key '{}' (optimistic lock failed).",
-                        String::from_utf8_lossy(&self.key),
-                        String::from_utf8_lossy(key)
-                    );
-                    return Ok((
-                        if self.store_destination.is_some() {
-                            RespValue::Integer(0)
-                        } else {
-                            RespValue::Array(vec![])
-                        },
-                        WriteOutcome::DidNotWrite,
-                    ));
-                }
-            } else {
-                return Err(SpinelDBError::Internal(
-                    "Missing shard lock after upgrade".into(),
-                ));
-            }
-        }
-
-        // Phase 3: Perform the actual sort and retrieval under lock.
-        let weights = self.get_sortable_weights(&source_elements, ctx.db, guards)?;
+        // --- Phase 2: Perform slow operations (sorting) outside of the lock ---
+        let weights = self.get_sortable_weights(&source_elements, &copied_values)?;
         let mut sortable_items: Vec<(SortableWeight, Bytes)> =
             weights.into_iter().zip(source_elements).collect();
 
@@ -224,16 +168,76 @@ impl ExecutableCommand for Sort {
             .map(|(_, item)| item)
             .collect();
 
-        // Phase 4: Output the results (either store or return).
-        if let Some(dest_key) = &self.store_destination {
-            self.execute_store(dest_key, final_items, ctx.db, guards)
-        } else {
-            self.execute_get(&final_items, ctx.db, guards)
+        // --- Phase 3: Re-acquire locks, verify versions, and finalize operation ---
+        {
+            let mut guards = ctx
+                .db
+                .lock_shards_for_keys(&initial_versions.keys().cloned().collect::<Vec<_>>())
+                .await;
+
+            // Optimistic lock verification.
+            for (key, original_version) in &initial_versions {
+                let current_version = self
+                    .get_value_from_guards(key, &mut guards, ctx.db)?
+                    .map_or(0, |v| v.version);
+
+                if current_version != *original_version {
+                    warn!(
+                        "SORT for key '{}' aborted due to concurrent modification of key '{}'.",
+                        String::from_utf8_lossy(&self.key),
+                        String::from_utf8_lossy(key)
+                    );
+                    // Return an empty result as per Redis behavior on WATCH failure.
+                    return Ok((
+                        if self.store_destination.is_some() {
+                            RespValue::Integer(0)
+                        } else {
+                            RespValue::Array(vec![])
+                        },
+                        WriteOutcome::DidNotWrite,
+                    ));
+                }
+            }
+
+            // If verification passes, perform the final action (STORE or GET).
+            if let Some(dest_key) = &self.store_destination {
+                self.execute_store(dest_key, final_items, &mut guards, ctx.db)
+            } else {
+                self.execute_get(&final_items, &copied_values)
+            }
         }
     }
 }
 
 impl Sort {
+    /// Estimates the memory required to copy all values for the sort operation and
+    /// checks if it exceeds the `maxmemory` limit.
+    async fn check_memory_usage_for_copy(
+        &self,
+        all_keys: &BTreeSet<Bytes>,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<(), SpinelDBError> {
+        if let Some(maxmemory) = ctx.state.config.lock().await.maxmemory {
+            let mut estimated_copy_size = 0;
+            for key in all_keys {
+                let shard_index = ctx.db.get_shard_index(key);
+                // We assume locks are already held from the caller.
+                let guard = ctx.db.get_shard(shard_index).entries.lock().await;
+                if let Some(value) = guard.peek(key).filter(|e| !e.is_expired()) {
+                    estimated_copy_size += value.size;
+                }
+            }
+
+            // Add type annotation here to resolve the ambiguity.
+            let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
+
+            if total_memory.saturating_add(estimated_copy_size) > maxmemory {
+                return Err(SpinelDBError::MaxMemoryReached);
+            }
+        }
+        Ok(())
+    }
+
     fn collect_extra_keys(
         &self,
         source_elements: &[Bytes],
@@ -256,6 +260,47 @@ impl Sort {
             }
         }
         Ok(())
+    }
+
+    fn check_cluster_slots(
+        &self,
+        all_keys: &[Bytes],
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<(), SpinelDBError> {
+        let Some(cluster_state) = &ctx.state.cluster else {
+            return Ok(());
+        };
+        if all_keys.is_empty() {
+            return Ok(());
+        }
+        let first_slot = get_cluster_slot(&all_keys[0]);
+        for key_for_check in all_keys {
+            if get_cluster_slot(key_for_check) != first_slot {
+                return Err(SpinelDBError::CrossSlot);
+            }
+        }
+        if !cluster_state.i_own_slot(first_slot) {
+            let owner_node = cluster_state.get_node_for_slot(first_slot);
+            let addr = owner_node.map_or_else(String::new, |node| node.node_info.addr.clone());
+            return Err(SpinelDBError::Moved {
+                slot: first_slot,
+                addr,
+            });
+        }
+        Ok(())
+    }
+
+    fn get_value_from_guards<'b>(
+        &self,
+        key: &Bytes,
+        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        db: &Db,
+    ) -> Result<Option<StoredValue>, SpinelDBError> {
+        let shard_index = db.get_shard_index(key);
+        let guard = guards.get_mut(&shard_index).ok_or(SpinelDBError::Internal(
+            "Required shard lock missing".into(),
+        ))?;
+        Ok(guard.peek(key).filter(|e| !e.is_expired()).cloned())
     }
 
     fn get_source_elements_from_entry(
@@ -286,11 +331,10 @@ impl Sort {
         Ok((RespValue::Array(vec![]), WriteOutcome::DidNotWrite))
     }
 
-    fn get_sortable_weights<'b>(
+    fn get_sortable_weights(
         &self,
         elements: &[Bytes],
-        db: &Db,
-        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        copied_values: &BTreeMap<Bytes, DataValue>,
     ) -> Result<Vec<SortableWeight>, SpinelDBError> {
         let mut weights = Vec::with_capacity(elements.len());
         let use_external_weights =
@@ -300,7 +344,7 @@ impl Sort {
             let weight_source_bytes = if use_external_weights {
                 let (by_key, by_field) =
                     self.resolve_pattern(self.by_pattern.as_ref().unwrap(), element);
-                self.fetch_value_for_pattern(&by_key, by_field.as_ref(), db, guards)?
+                self.fetch_value_from_copied(&by_key, by_field.as_ref(), copied_values)?
                     .unwrap_or_default()
             } else {
                 element.clone()
@@ -317,36 +361,25 @@ impl Sort {
         Ok(weights)
     }
 
-    fn fetch_value_for_pattern<'b>(
+    fn fetch_value_from_copied(
         &self,
         key: &Bytes,
         field: Option<&Bytes>,
-        db: &Db,
-        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        copied_values: &BTreeMap<Bytes, DataValue>,
     ) -> Result<Option<Bytes>, SpinelDBError> {
-        let shard_index = db.get_shard_index(key);
-        let guard = guards
-            .get_mut(&shard_index)
-            .ok_or_else(|| SpinelDBError::Internal("Required shard lock missing".into()))?;
-
-        match guard.peek(key) {
+        match copied_values.get(key) {
             None => Ok(None),
-            Some(entry) => {
-                if entry.is_expired() {
-                    return Ok(None);
+            Some(data_value) => match (field, data_value) {
+                (Some(f), DataValue::Hash(h)) => Ok(h.get(f).cloned()),
+                (None, DataValue::String(s)) => Ok(Some(s.clone())),
+                _ => {
+                    warn!(
+                        "SORT...BY/GET pattern points to key '{}' with incompatible type.",
+                        String::from_utf8_lossy(key)
+                    );
+                    Err(SpinelDBError::WrongType)
                 }
-                match (field, &entry.data) {
-                    (Some(f), DataValue::Hash(h)) => Ok(h.get(f).cloned()),
-                    (None, DataValue::String(s)) => Ok(Some(s.clone())),
-                    _ => {
-                        warn!(
-                            "SORT...BY/GET pattern points to key '{}' with incompatible type.",
-                            String::from_utf8_lossy(key)
-                        );
-                        Err(SpinelDBError::WrongType)
-                    }
-                }
-            }
+            },
         }
     }
 
@@ -362,8 +395,8 @@ impl Sort {
         &self,
         dest_key: &Bytes,
         items: Vec<Bytes>,
-        db: &Db,
         guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        db: &Db,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let list: VecDeque<Bytes> = items.into_iter().collect();
         let list_len = list.len();
@@ -380,11 +413,10 @@ impl Sort {
         ))
     }
 
-    fn execute_get<'b>(
+    fn execute_get(
         &self,
         items: &[Bytes],
-        db: &Db,
-        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        copied_values: &BTreeMap<Bytes, DataValue>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         if self.get_patterns.is_empty() {
             let result = items
@@ -400,7 +432,7 @@ impl Sort {
                     Some(item.clone())
                 } else {
                     let (get_key, get_field) = self.resolve_pattern(pattern, item);
-                    self.fetch_value_for_pattern(&get_key, get_field.as_ref(), db, guards)?
+                    self.fetch_value_from_copied(&get_key, get_field.as_ref(), copied_values)?
                 };
                 final_result.push(value.map(RespValue::BulkString).unwrap_or(RespValue::Null));
             }
@@ -462,6 +494,7 @@ impl CommandSpec for Sort {
         if let Some(dest) = &self.store_destination {
             keys.push(dest.clone());
         }
+        // Note: Dynamic keys from BY/GET are not included here as they are resolved at runtime.
         keys
     }
 
@@ -487,6 +520,7 @@ impl CommandSpec for Sort {
             || self.by_pattern.is_some()
             || self.alpha
         {
+            // ASC is the default, but explicitly added if other options are present.
             args.push(Bytes::from_static(b"ASC"));
         }
         if self.alpha {

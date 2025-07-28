@@ -13,8 +13,8 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::BTreeMap;
-use std::time::Duration;
-use tracing::error;
+use tokio::sync::mpsc::error::TrySendError;
+use tracing::warn;
 
 /// Represents the `DEL` command.
 #[derive(Debug, Clone, Default)]
@@ -115,27 +115,26 @@ impl ExecutableCommand for Del {
 
         // Dispatch values to the lazy-free thread if necessary.
         if !items_to_unlink.is_empty() {
-            let state_clone = ctx.state.clone();
-            // Spawn a new task to send to the lazy-free channel.
-            tokio::spawn(async move {
-                let send_timeout = Duration::from_secs(5);
-
-                // Use a timeout to prevent indefinite blocking if the lazy-free task is stuck.
-                if tokio::time::timeout(
-                    send_timeout,
-                    state_clone.persistence.lazy_free_tx.send(items_to_unlink),
-                )
-                .await
-                .is_err()
-                {
-                    error!(
-                        "Failed to send to lazy-free channel within 5 seconds. The task may be unresponsive or have panicked."
+            // Use try_send for a non-blocking attempt to offload work.
+            match ctx.state.persistence.lazy_free_tx.try_send(items_to_unlink) {
+                Ok(_) => {}
+                Err(TrySendError::Full(items)) => {
+                    // This is a critical state where the background task cannot keep up.
+                    // Instead of blocking or spawning, we log, increment a metric,
+                    // and let the items be dropped synchronously. This provides backpressure.
+                    warn!(
+                        "Lazy-free channel is full. Deallocating {} items synchronously.",
+                        items.len()
                     );
-                    state_clone.persistence.increment_lazy_free_errors();
-                    // As a safety measure, put the server into read-only mode.
-                    state_clone.set_read_only(true, "Lazy-free task is unresponsive.");
+                    ctx.state.persistence.increment_lazy_free_errors();
                 }
-            });
+                Err(TrySendError::Closed(_)) => {
+                    // The lazy-free task has terminated, which is a critical failure.
+                    let reason = "Lazy-free task is not running.".to_string();
+                    warn!("CRITICAL: {reason}");
+                    ctx.state.set_read_only(true, &reason);
+                }
+            }
         }
 
         let outcome = if count > 0 {
