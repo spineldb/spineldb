@@ -128,13 +128,19 @@ impl CacheState {
     /// Atomically increments the counter for cache hits.
     pub fn increment_hits(&self) {
         self.hits.fetch_add(1, Ordering::Relaxed);
-        metrics::CACHE_HITS_TOTAL.inc();
+        // Use a "manual" label for hits not associated with a specific policy.
+        metrics::CACHE_HITS_TOTAL
+            .with_label_values(&["manual"])
+            .inc();
     }
 
     /// Atomically increments the counter for cache misses.
     pub fn increment_misses(&self) {
         self.misses.fetch_add(1, Ordering::Relaxed);
-        metrics::CACHE_MISSES_TOTAL.inc();
+        // Use a "manual" label for misses not associated with a specific policy.
+        metrics::CACHE_MISSES_TOTAL
+            .with_label_values(&["manual"])
+            .inc();
     }
 
     /// Atomically increments the counter for stale cache hits.
@@ -210,6 +216,7 @@ impl CacheState {
             tags: cmd.tags.clone(),
             vary: cmd.vary.clone(),
             headers: cmd.headers.clone(),
+            ..Default::default()
         };
 
         let db = server_state.get_db(0).unwrap();

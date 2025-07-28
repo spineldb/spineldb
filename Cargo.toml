@@ -66,3 +66,4 @@ uuid = { version = "1.17", features = ["v4"] }
 broadcast = "0.1.0"
 jsonpath_lib = "0.3.0"
 serde_bytes = "0.11.17"
+zstd = "0.13.3"

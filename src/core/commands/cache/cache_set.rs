@@ -17,9 +17,13 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tracing::debug;
+use uuid::Uuid;
 use wildmatch::WildMatch;
 
 /// Represents the `CACHE.SET` command with all its parsed options.
@@ -37,6 +41,10 @@ pub struct CacheSet {
     pub swr: Option<u64>,
     pub grace: Option<u64>,
     pub revalidate_url: Option<String>,
+    /// If true, the body will be compressed with zstd before storing.
+    pub compression: bool,
+    /// If true, the body will be stored on disk, regardless of its size.
+    pub force_disk: bool,
 }
 
 impl ParseCommand for CacheSet {
@@ -76,6 +84,10 @@ impl ParseCommand for CacheSet {
                 cmd.grace = Some(grace_val);
             } else if let Some(url) = parser.match_option("revalidate-url")? {
                 cmd.revalidate_url = Some(url);
+            } else if parser.match_flag("compression") {
+                cmd.compression = true;
+            } else if parser.match_flag("force-disk") {
+                cmd.force_disk = true;
             } else if parser.match_flag("headers") {
                 headers_found = true;
                 break;
@@ -128,23 +140,54 @@ impl ExecutableCommand for CacheSet {
             .await?;
         }
 
-        let cache_body = CacheBody::InMemory(self.body_data.clone());
+        // Determine the storage method for the cache body based on command flags.
+        let cache_path = ctx.state.config.lock().await.cache.on_disk_path.clone();
+        let cache_body = if self.force_disk {
+            if cache_path.is_empty() {
+                return Err(SpinelDBError::InvalidState(
+                    "Cannot use FORCE-DISK, on_disk_path is not configured.".into(),
+                ));
+            }
+            // Forcefully write the body to a file on disk.
+            let final_filename = Uuid::new_v4().to_string();
+            let final_path = PathBuf::from(&cache_path).join(&final_filename);
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&final_path)
+                .await?;
+            file.write_all(&self.body_data).await?;
+            file.sync_all().await?;
+            CacheBody::OnDisk {
+                path: final_path,
+                size: self.body_data.len() as u64,
+            }
+        } else if self.compression {
+            // Compress the body in memory.
+            let original_size = self.body_data.len();
+            let compressed_data = Bytes::from(zstd::encode_all(self.body_data.as_ref(), 0)?);
+            CacheBody::CompressedInMemory {
+                original_size,
+                data: compressed_data,
+            }
+        } else {
+            // Default behavior: store the body in memory.
+            CacheBody::InMemory(self.body_data.clone())
+        };
+
         self.execute_internal(ctx, cache_body).await
     }
 }
 
 impl CacheSet {
-    /// Internal execution logic that accepts a `CacheBody`, allowing for on-disk storage.
+    /// Internal execution logic that accepts a pre-constructed `CacheBody`.
     pub async fn execute_internal<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
         cache_body: CacheBody,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        // Clone the Arc<ServerState> to get a separate handle that can be used
-        // while `ctx` is mutably borrowed.
         let state_clone = ctx.state.clone();
-
-        // Get config value before taking the mutable lock on the context.
         let max_variants = state_clone.config.lock().await.cache.max_variants_per_key;
 
         let needs_prewarm = {
@@ -199,10 +242,15 @@ impl CacheSet {
             vary_on.clear();
         }
 
-        // If in cluster mode, stamp the entry with the current purge epoch.
         if let Some(cluster) = &state_clone.cluster {
             tags_epoch = cluster.last_purge_epoch.load(Ordering::Relaxed);
         }
+
+        let content_encoding = if matches!(cache_body, CacheBody::CompressedInMemory { .. }) {
+            Some(Bytes::from_static(b"zstd"))
+        } else {
+            None
+        };
 
         let new_variant = CacheVariant {
             body: cache_body,
@@ -210,14 +258,17 @@ impl CacheSet {
                 etag: self.etag.clone(),
                 last_modified: self.last_modified.clone(),
                 revalidate_url: self.revalidate_url.clone(),
+                content_encoding,
             },
             last_accessed: Instant::now(),
         };
 
         let variant_hash = calculate_variant_hash(&vary_on, &self.headers);
 
-        // Enforce max_variants_per_key limit with LRU eviction.
-        if max_variants > 0 && variants.len() >= max_variants {
+        if max_variants > 0
+            && variants.len() >= max_variants
+            && !variants.contains_key(&variant_hash)
+        {
             if let Some(lru_hash) = variants
                 .iter()
                 .min_by_key(|(_, v)| v.last_accessed)
@@ -319,6 +370,12 @@ impl CommandSpec for CacheSet {
         }
         if let Some(v) = &self.vary {
             args.extend([Bytes::from_static(b"VARY"), v.clone()]);
+        }
+        if self.compression {
+            args.push(Bytes::from_static(b"COMPRESSION"));
+        }
+        if self.force_disk {
+            args.push(Bytes::from_static(b"FORCE-DISK"));
         }
         if let Some(h) = &self.headers {
             args.push(Bytes::from_static(b"HEADERS"));

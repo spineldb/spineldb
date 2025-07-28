@@ -280,7 +280,9 @@ impl StoredValue {
                 for variant in variants.values() {
                     let body_bytes = match &variant.body {
                         CacheBody::InMemory(bytes) => bytes.clone(),
-                        CacheBody::OnDisk { .. } => continue,
+                        // On-disk and negative caches are not persisted via AOF/SPLDB commands.
+                        // They are reconstructed via their own mechanisms if needed.
+                        _ => continue,
                     };
 
                     cache_commands.push(Command::Cache(crate::core::commands::cache::Cache {
@@ -300,6 +302,11 @@ impl StoredValue {
                                 Some(Bytes::from(vary_str.clone()))
                             },
                             headers: None,
+                            compression: matches!(
+                                variant.body,
+                                CacheBody::CompressedInMemory { .. }
+                            ),
+                            force_disk: false, // This state is transient and not stored this way.
                         }),
                     }));
                 }
@@ -367,7 +374,7 @@ pub enum DataValue {
 }
 
 impl DataValue {
-    /// Calculates the memory usage of the data itself.
+    /// Calculates the memory usage of the data payload.
     pub fn memory_usage(&self) -> usize {
         match self {
             DataValue::String(b) => b.len(),
@@ -384,24 +391,15 @@ impl DataValue {
                 let variants_size: usize = variants
                     .values()
                     .map(|variant| {
-                        let meta_size = variant.metadata.etag.as_ref().map_or(0, |b| b.len())
-                            + variant
-                                .metadata
-                                .last_modified
-                                .as_ref()
-                                .map_or(0, |b| b.len())
-                            + variant
-                                .metadata
-                                .revalidate_url
-                                .as_ref()
-                                .map_or(0, |s| s.len());
-
-                        // On-disk cache bodies do not consume RAM.
+                        let meta_size = variant.metadata.memory_usage();
                         let body_size = match &variant.body {
                             CacheBody::InMemory(b) => b.len(),
-                            CacheBody::OnDisk { .. } => 0,
+                            CacheBody::CompressedInMemory { data, .. } => data.len(),
+                            CacheBody::Negative { body, .. } => {
+                                body.as_ref().map_or(0, |b| b.len())
+                            }
+                            CacheBody::OnDisk { .. } => 0, // On-disk does not count towards RAM usage
                         };
-
                         body_size + meta_size
                     })
                     .sum();
@@ -411,8 +409,7 @@ impl DataValue {
     }
 }
 
-// --- LFU Helper Constants and Functions ---
-
+// LFU Helper Constants and Functions
 const LFU_INIT_VAL: u8 = 5;
 const LFU_DECAY_TIME_MINUTES: u16 = 1;
 const LFU_LOG_FACTOR: f64 = 10.0;

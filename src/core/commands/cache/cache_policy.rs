@@ -75,6 +75,9 @@ impl ParseCommand for CachePolicyCmd {
                     vary_on: vec![],
                     respect_origin_headers: false,
                     negative_ttl: None,
+                    priority: 0,
+                    compression: false,
+                    force_disk: false,
                 };
 
                 let mut parser = ArgParser::new(&command_args[3..]);
@@ -93,6 +96,12 @@ impl ParseCommand for CachePolicyCmd {
                         policy.grace = Some(v);
                     } else if let Some(v) = parser.match_option("negative_ttl")? {
                         policy.negative_ttl = Some(v);
+                    } else if let Some(v) = parser.match_option("priority")? {
+                        policy.priority = v;
+                    } else if parser.match_flag("compression") {
+                        policy.compression = true;
+                    } else if parser.match_flag("force-disk") {
+                        policy.force_disk = true;
                     } else if parser.match_flag("prewarm") {
                         policy.prewarm = true;
                     } else if parser.match_flag("respect_origin_headers") {
@@ -178,8 +187,11 @@ impl ExecutableCommand for CachePolicyCmd {
                 } else {
                     policies.push((**policy_to_set).clone());
                 }
+                // Re-sort policies by priority after any modification.
+                policies.sort_by_key(|p| std::cmp::Reverse(p.priority));
                 drop(policies);
 
+                // If the `prewarm` flag changed, update the prewarm key set.
                 if let Some(old) = old_policy {
                     if old.prewarm && !policy_to_set.prewarm {
                         debug!(
@@ -266,6 +278,16 @@ impl ExecutableCommand for CachePolicyCmd {
                         info.push(RespValue::BulkString("respect_origin_headers".into()));
                         info.push(RespValue::Integer(1));
                     }
+                    info.push(RespValue::BulkString("priority".into()));
+                    info.push(RespValue::Integer(policy.priority as i64));
+                    if policy.compression {
+                        info.push(RespValue::BulkString("compression".into()));
+                        info.push(RespValue::Integer(1));
+                    }
+                    if policy.force_disk {
+                        info.push(RespValue::BulkString("force-disk".into()));
+                        info.push(RespValue::Integer(1));
+                    }
                     Ok((RespValue::Array(info), WriteOutcome::DidNotWrite))
                 } else {
                     Ok((RespValue::Null, WriteOutcome::DidNotWrite))
@@ -287,31 +309,24 @@ impl CommandSpec for CachePolicyCmd {
     fn name(&self) -> &'static str {
         "cache.policy"
     }
-
     fn arity(&self) -> i64 {
         -2
     }
-
     fn flags(&self) -> CommandFlags {
         CommandFlags::ADMIN | CommandFlags::NO_PROPAGATE
     }
-
     fn first_key(&self) -> i64 {
         0
     }
-
     fn last_key(&self) -> i64 {
         0
     }
-
     fn step(&self) -> i64 {
         0
     }
-
     fn get_keys(&self) -> Vec<Bytes> {
         vec![]
     }
-
     fn to_resp_args(&self) -> Vec<Bytes> {
         vec![]
     }

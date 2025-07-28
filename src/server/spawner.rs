@@ -4,7 +4,7 @@
 
 use super::context::ServerContext;
 use super::metrics_server;
-use crate::config::AppendFsync;
+use crate::config::{AppendFsync, ReplicationConfig};
 use crate::core::cluster;
 use crate::core::persistence::AofWriterTask;
 use crate::core::persistence::spldb_saver::SpldbSaverTask;
@@ -144,12 +144,16 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         Ok(())
     });
 
-    let cache_validator = CacheTagValidatorTask::new(server_state.clone());
-    let shutdown_rx_cache_validate = shutdown_tx.subscribe();
-    background_tasks.spawn(async move {
-        cache_validator.run(shutdown_rx_cache_validate).await;
-        Ok(())
-    });
+    if config_clone.cluster.enabled {
+        let cache_validator = CacheTagValidatorTask::new(server_state.clone());
+        let shutdown_rx_cache_validate = shutdown_tx.subscribe();
+        background_tasks.spawn(async move {
+            cache_validator.run(shutdown_rx_cache_validate).await;
+            Ok(())
+        });
+    } else {
+        info!("Cache tag validator runs only in cluster mode. Task will not start.");
+    }
 
     // --- Persistence Tasks ---
     if config_clone.persistence.aof_enabled {
@@ -209,15 +213,21 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         });
     }
 
-    // --- Replication & Cluster Task ---
-    let replica_quorum_validator = ReplicaQuorumValidatorTask::new(server_state.clone());
-    let shutdown_rx_quorum_validator = shutdown_tx.subscribe();
-    background_tasks.spawn(async move {
-        replica_quorum_validator
-            .run(shutdown_rx_quorum_validator)
-            .await;
-        Ok(())
-    });
+    // --- Replication & Cluster Tasks ---
+    if let ReplicationConfig::Primary(primary_config) = &config_clone.replication {
+        if primary_config.fencing_on_replica_disconnect {
+            let replica_quorum_validator = ReplicaQuorumValidatorTask::new(server_state.clone());
+            let shutdown_rx_quorum_validator = shutdown_tx.subscribe();
+            background_tasks.spawn(async move {
+                replica_quorum_validator
+                    .run(shutdown_rx_quorum_validator)
+                    .await;
+                Ok(())
+            });
+        } else {
+            info!("Replica quorum fencing is disabled. Validator task will not run.");
+        }
+    }
 
     if config_clone.cluster.enabled {
         let state_clone = server_state.clone();

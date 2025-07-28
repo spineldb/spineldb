@@ -27,14 +27,15 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 use wildmatch::WildMatch;
 
-/// The cloneable result of a shared origin fetch operation. This allows the outcome
-/// of a single fetch to be distributed to multiple waiting clients.
+/// The cloneable result of a shared origin fetch operation.
 #[derive(Debug, Clone)]
 pub enum FetchOutcome {
     /// The response body is small and held in memory.
     InMemory(Bytes),
     /// The response body was large and has been streamed to a file on disk.
     OnDisk { path: PathBuf, size: u64 },
+    /// The origin responded with a non-200 status, which has been negatively cached.
+    Negative { status: u16, body: Option<Bytes> },
 }
 
 /// Represents the `CACHE.FETCH` command with its parsed arguments.
@@ -143,9 +144,6 @@ impl ParseCommand for CacheFetch {
 
 #[async_trait]
 impl ExecutableCommand for CacheFetch {
-    /// Executes `CACHE.FETCH`. This is a thin wrapper around `execute_and_stream` for
-    /// compatibility with the command trait, buffering any streaming responses. The command
-    /// router will prioritize calling `execute_and_stream` for optimal performance.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -204,12 +202,17 @@ impl CacheFetch {
                 self.url
             );
             let (outcome, _) = self.fetch_from_origin(&ctx.state, true).await?;
-            return Ok(RouteResponse::Single(RespValue::BulkString(
-                match outcome {
-                    FetchOutcome::InMemory(bytes) => bytes,
-                    FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
-                },
-            )));
+            let body_bytes = match outcome {
+                FetchOutcome::InMemory(bytes) => bytes,
+                FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+                FetchOutcome::Negative { status, body } => {
+                    return Err(SpinelDBError::InvalidState(format!(
+                        "Origin responded with status {status}: {}",
+                        String::from_utf8_lossy(&body.unwrap_or_default())
+                    )));
+                }
+            };
+            return Ok(RouteResponse::Single(RespValue::BulkString(body_bytes)));
         }
 
         // Attempt an initial non-blocking read from the cache.
@@ -290,6 +293,12 @@ impl CacheFetch {
                         let resp_header = format!("${size}\r\n").into_bytes();
                         Ok(RouteResponse::StreamBody { resp_header, file })
                     }
+                    FetchOutcome::Negative { status, body } => {
+                        Err(SpinelDBError::InvalidState(format!(
+                            "Origin responded with status {status}: {}",
+                            String::from_utf8_lossy(&body.unwrap_or_default())
+                        )))
+                    }
                 }
             }
             Err(arc_err) => Err(SpinelDBError::clone(&*arc_err)),
@@ -311,7 +320,6 @@ impl CacheFetch {
             )
         };
 
-        // Find a matching policy to get additional options
         let key_str = String::from_utf8_lossy(&self.key);
         let policies = server_state.cache.policies.read().await;
         let matched_policy = policies
@@ -331,7 +339,7 @@ impl CacheFetch {
 
         if res.status() != reqwest::StatusCode::OK {
             let status = res.status();
-            let error_message = format!("Origin server responded with status {status}");
+            let error_body = res.bytes().await.ok();
 
             let negative_ttl = policy_negative_ttl.unwrap_or(global_negative_ttl);
             if !bypass_store && negative_ttl > 0 {
@@ -351,20 +359,19 @@ impl CacheFetch {
                 };
                 let set_cmd_internal = CacheSet {
                     key: self.key.clone(),
-                    body_data: Bytes::from(status.as_u16().to_string()),
                     ttl: Some(negative_ttl),
-                    swr: Some(0),
-                    grace: Some(0),
                     tags: self.tags.clone(),
                     vary: self.vary.clone(),
                     headers: self.headers.clone(),
-                    etag: Some(Bytes::from_static(b"__NEGATIVE_CACHE__")),
                     ..Default::default()
                 };
                 let _ = set_cmd_internal
                     .execute_internal(
                         &mut temp_ctx,
-                        CacheBody::InMemory(set_cmd_internal.body_data.clone()),
+                        CacheBody::Negative {
+                            status: status.as_u16(),
+                            body: error_body.clone(),
+                        },
                     )
                     .await;
                 warn!(
@@ -373,7 +380,13 @@ impl CacheFetch {
                     status
                 );
             }
-            return Err(SpinelDBError::Internal(error_message));
+            return Ok((
+                FetchOutcome::Negative {
+                    status: status.as_u16(),
+                    body: error_body,
+                },
+                WriteOutcome::DidNotWrite,
+            ));
         }
 
         let headers = res.headers().clone();
@@ -406,13 +419,15 @@ impl CacheFetch {
         let content_length = headers
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
+            .and_then(|s| s.parse::<usize>().ok());
+
+        let should_stream_to_disk = !bypass_store
+            && (content_length.is_none() || content_length.unwrap_or(0) >= streaming_threshold);
 
         let final_cache_body;
         let final_outcome_for_client;
 
-        if !bypass_store && content_length >= streaming_threshold {
+        if should_stream_to_disk {
             tokio::fs::create_dir_all(&cache_path).await?;
             let final_filename = Uuid::new_v4().to_string();
             let final_path = PathBuf::from(&cache_path).join(&final_filename);
@@ -436,14 +451,21 @@ impl CacheFetch {
             temp_file.sync_all().await?;
             drop(temp_file);
 
-            final_cache_body = CacheBody::OnDisk {
-                path: final_path.clone(),
-                size: total_size as u64,
-            };
-            final_outcome_for_client = FetchOutcome::OnDisk {
-                path: final_path,
-                size: total_size as u64,
-            };
+            if total_size < streaming_threshold {
+                let body_bytes = tokio::fs::read(&final_path).await?;
+                tokio::fs::remove_file(&final_path).await.ok();
+                final_cache_body = CacheBody::InMemory(body_bytes.clone().into());
+                final_outcome_for_client = FetchOutcome::InMemory(body_bytes.into());
+            } else {
+                final_cache_body = CacheBody::OnDisk {
+                    path: final_path.clone(),
+                    size: total_size as u64,
+                };
+                final_outcome_for_client = FetchOutcome::OnDisk {
+                    path: final_path,
+                    size: total_size as u64,
+                };
+            }
         } else {
             let body_bytes = res.bytes().await?;
             final_cache_body = CacheBody::InMemory(body_bytes.clone());
@@ -470,6 +492,7 @@ impl CacheFetch {
             tags: self.tags.clone(),
             vary: self.vary.clone(),
             headers: self.headers.clone(),
+            ..Default::default()
         };
 
         let db = server_state.get_db(0).unwrap();

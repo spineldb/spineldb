@@ -52,14 +52,19 @@ impl ExecutableCommand for CacheBypass {
         };
 
         // Call the fetch logic with the `bypass_store` flag set to true.
-        // Pass `&ctx.state` instead of the whole `ctx` to match the new signature.
         let (outcome, _) = fetch_cmd.fetch_from_origin(&ctx.state, true).await?;
 
         // Convert the fetch outcome into a single byte buffer for the client.
-        // If the content was streamed to disk, it's read back into memory here.
         let body_bytes = match outcome {
             FetchOutcome::InMemory(bytes) => bytes,
             FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+            FetchOutcome::Negative { status, body } => {
+                // If the bypassed fetch resulted in an error, propagate it to the client.
+                return Err(SpinelDBError::InvalidState(format!(
+                    "Origin responded with status {status}: {}",
+                    String::from_utf8_lossy(&body.unwrap_or_default())
+                )));
+            }
         };
 
         Ok((RespValue::BulkString(body_bytes), WriteOutcome::DidNotWrite))

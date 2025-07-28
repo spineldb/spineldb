@@ -138,7 +138,6 @@ impl ParseCommand for CacheProxy {
 
 #[async_trait]
 impl ExecutableCommand for CacheProxy {
-    /// Executes the `CACHE.PROXY` command.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -182,8 +181,6 @@ impl CacheProxy {
         }
 
         // On cache miss, release the lock before starting the potentially long fetch operation.
-        // This prevents a deadlock where the fetch logic tries to acquire the same lock.
-        // The `CACHE.FETCH` logic has its own stampede protection.
         ctx.release_locks();
 
         debug!(
@@ -199,46 +196,58 @@ impl CacheProxy {
         let mut resolved_tags = self.tags.clone();
         let mut resolved_vary_on: Option<Bytes> = self.vary.clone();
         let mut relevant_headers = self.headers.clone();
+        let mut policy_name = "none";
 
         let key_str = String::from_utf8_lossy(&self.key);
-        let policies_clone = ctx.state.cache.policies.read().await.clone();
+        let policies = ctx.state.cache.policies.read().await.clone();
 
-        // Find the best matching policy by specificity.
-        let matched_policy = policies_clone
+        // Find the highest-priority matching policy. Policies are pre-sorted on SET.
+        let matched_policy = policies
             .iter()
-            .filter(|p| WildMatch::new(&p.key_pattern).matches(&key_str))
-            .min_by_key(|p| {
-                // A simple specificity heuristic: fewer wildcards and longer non-wildcard parts are more specific.
-                let wildcard_count = p.key_pattern.chars().filter(|&c| c == '*').count();
-                let non_wildcard_len = p.key_pattern.len() - wildcard_count;
-                (wildcard_count, std::cmp::Reverse(non_wildcard_len))
-            });
+            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str));
 
         if let Some(policy) = matched_policy {
+            policy_name = &policy.name;
             debug!(
                 "Matched cache policy '{}' for key '{}'",
-                policy.name, key_str
+                policy_name, key_str
             );
 
             // Resolve URL template if not provided in the command.
             if resolved_url.is_none() {
                 let mut url = policy.url_template.clone();
-                let regex_pattern = glob_to_regex(&policy.key_pattern);
-                if let Ok(re) = Regex::new(&regex_pattern) {
-                    if let Some(caps) = re.captures(&key_str) {
-                        for i in 1..caps.len() {
-                            if let Some(capture) = caps.get(i) {
-                                let placeholder = format!("{{{i}}}");
-                                let sanitized_capture = encode(capture.as_str());
-                                url = url.replace(&placeholder, &sanitized_capture);
-                            }
+
+                // Interpolate from request headers.
+                let re_hdr = Regex::new(r"\{hdr:([^}]+)\}").unwrap();
+                url = re_hdr
+                    .replace_all(&url, |caps: &regex::Captures| {
+                        let header_name = &caps[1];
+                        self.headers
+                            .as_ref()
+                            .and_then(|h| {
+                                h.iter()
+                                    .find(|(k, _)| k.eq_ignore_ascii_case(header_name.as_bytes()))
+                            })
+                            .map(|(_, v)| encode(&String::from_utf8_lossy(v)).into_owned())
+                            .unwrap_or_default()
+                    })
+                    .to_string();
+
+                // Interpolate from key pattern captures.
+                let re_key = Regex::new(&glob_to_regex(&policy.key_pattern)).unwrap();
+                if let Some(caps) = re_key.captures(&key_str) {
+                    for i in 1..caps.len() {
+                        if let Some(capture) = caps.get(i) {
+                            let placeholder = format!("{{{i}}}");
+                            let sanitized_capture = encode(capture.as_str());
+                            url = url.replace(&placeholder, &sanitized_capture);
                         }
                     }
                 }
                 resolved_url = Some(url);
             }
 
-            // Inherit TTL/SWR/Grace from the policy if not specified in the command.
+            // Inherit options from the policy if not specified in the command.
             resolved_ttl = self.ttl.or(policy.ttl);
             resolved_swr = self.swr.or(policy.swr);
             resolved_grace = self.grace.or(policy.grace);
@@ -266,19 +275,17 @@ impl CacheProxy {
             }
 
             // Generate dynamic tags from the policy's templates.
-            let regex_pattern = glob_to_regex(&policy.key_pattern);
-            if let Ok(re) = Regex::new(&regex_pattern) {
-                if let Some(caps) = re.captures(&key_str) {
-                    for tag_template in &policy.tags {
-                        let mut final_tag = tag_template.clone();
-                        for i in 1..caps.len() {
-                            if let Some(capture) = caps.get(i) {
-                                let placeholder = format!("{{{i}}}");
-                                final_tag = final_tag.replace(&placeholder, capture.as_str());
-                            }
+            let re_key = Regex::new(&glob_to_regex(&policy.key_pattern)).unwrap();
+            if let Some(caps) = re_key.captures(&key_str) {
+                for tag_template in &policy.tags {
+                    let mut final_tag = tag_template.clone();
+                    for i in 1..caps.len() {
+                        if let Some(capture) = caps.get(i) {
+                            let placeholder = format!("{{{i}}}");
+                            final_tag = final_tag.replace(&placeholder, capture.as_str());
                         }
-                        resolved_tags.push(Bytes::from(final_tag));
                     }
+                    resolved_tags.push(Bytes::from(final_tag));
                 }
             }
         }
@@ -299,12 +306,22 @@ impl CacheProxy {
             headers: relevant_headers,
         };
 
-        // This call will perform the fetch, store the result, and return the body.
+        // Update metrics with the resolved policy label.
+        crate::core::metrics::CACHE_MISSES_TOTAL
+            .with_label_values(&[policy_name])
+            .inc();
+
         let (outcome, _write_outcome) = fetch_cmd.fetch_from_origin(&ctx.state, false).await?;
 
         let body_bytes = match outcome {
             FetchOutcome::InMemory(bytes) => bytes,
             FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+            FetchOutcome::Negative { status, body } => {
+                return Err(SpinelDBError::InvalidState(format!(
+                    "Origin responded with status {status}: {}",
+                    String::from_utf8_lossy(&body.unwrap_or_default())
+                )));
+            }
         };
 
         Ok(RouteResponse::Single(RespValue::BulkString(body_bytes)))
