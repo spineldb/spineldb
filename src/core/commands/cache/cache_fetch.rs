@@ -25,15 +25,17 @@ use tokio::fs::{File as TokioFile, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, warn};
 use uuid::Uuid;
+use wildmatch::WildMatch;
 
-/// The cloneable result of a shared origin fetch operation. This allows the outcome
-/// of a single fetch to be distributed to multiple waiting clients.
+/// The cloneable result of a shared origin fetch operation.
 #[derive(Debug, Clone)]
 pub enum FetchOutcome {
     /// The response body is small and held in memory.
     InMemory(Bytes),
     /// The response body was large and has been streamed to a file on disk.
     OnDisk { path: PathBuf, size: u64 },
+    /// The origin responded with a non-200 status, which has been negatively cached.
+    Negative { status: u16, body: Option<Bytes> },
 }
 
 /// Represents the `CACHE.FETCH` command with its parsed arguments.
@@ -47,6 +49,29 @@ pub struct CacheFetch {
     pub tags: Vec<Bytes>,
     pub vary: Option<Bytes>,
     pub headers: Option<Vec<(Bytes, Bytes)>>,
+}
+
+/// Parses Cache-Control header to extract max-age and stale-while-revalidate.
+fn parse_cache_control(header_value: &str) -> (Option<u64>, Option<u64>) {
+    let mut max_age = None;
+    let mut swr = None;
+    for directive in header_value.split(',') {
+        let parts: Vec<&str> = directive.trim().splitn(2, '=').collect();
+        if parts.len() == 2 {
+            let key = parts[0];
+            let value = parts[1];
+            if key.eq_ignore_ascii_case("max-age") || key.eq_ignore_ascii_case("s-maxage") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    max_age = Some(seconds);
+                }
+            } else if key.eq_ignore_ascii_case("stale-while-revalidate") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    swr = Some(seconds);
+                }
+            }
+        }
+    }
+    (max_age, swr)
 }
 
 impl ParseCommand for CacheFetch {
@@ -119,9 +144,6 @@ impl ParseCommand for CacheFetch {
 
 #[async_trait]
 impl ExecutableCommand for CacheFetch {
-    /// Executes `CACHE.FETCH`. This is a thin wrapper around `execute_and_stream` for
-    /// compatibility with the command trait, buffering any streaming responses. The command
-    /// router will prioritize calling `execute_and_stream` for optimal performance.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -180,12 +202,17 @@ impl CacheFetch {
                 self.url
             );
             let (outcome, _) = self.fetch_from_origin(&ctx.state, true).await?;
-            return Ok(RouteResponse::Single(RespValue::BulkString(
-                match outcome {
-                    FetchOutcome::InMemory(bytes) => bytes,
-                    FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
-                },
-            )));
+            let body_bytes = match outcome {
+                FetchOutcome::InMemory(bytes) => bytes,
+                FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
+                FetchOutcome::Negative { status, body } => {
+                    return Err(SpinelDBError::InvalidState(format!(
+                        "Origin responded with status {status}: {}",
+                        String::from_utf8_lossy(&body.unwrap_or_default())
+                    )));
+                }
+            };
+            return Ok(RouteResponse::Single(RespValue::BulkString(body_bytes)));
         }
 
         // Attempt an initial non-blocking read from the cache.
@@ -266,6 +293,12 @@ impl CacheFetch {
                         let resp_header = format!("${size}\r\n").into_bytes();
                         Ok(RouteResponse::StreamBody { resp_header, file })
                     }
+                    FetchOutcome::Negative { status, body } => {
+                        Err(SpinelDBError::InvalidState(format!(
+                            "Origin responded with status {status}: {}",
+                            String::from_utf8_lossy(&body.unwrap_or_default())
+                        )))
+                    }
                 }
             }
             Err(arc_err) => Err(SpinelDBError::clone(&*arc_err)),
@@ -278,7 +311,7 @@ impl CacheFetch {
         server_state: &Arc<ServerState>,
         mut bypass_store: bool,
     ) -> Result<(FetchOutcome, WriteOutcome), SpinelDBError> {
-        let (streaming_threshold, cache_path, negative_cache_ttl) = {
+        let (streaming_threshold, cache_path, global_negative_ttl) = {
             let config = server_state.config.lock().await;
             (
                 config.cache.streaming_threshold_bytes,
@@ -286,6 +319,15 @@ impl CacheFetch {
                 config.cache.negative_cache_ttl_seconds,
             )
         };
+
+        let key_str = String::from_utf8_lossy(&self.key);
+        let policies = server_state.cache.policies.read().await;
+        let matched_policy = policies
+            .iter()
+            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str));
+
+        let respect_origin = matched_policy.is_some_and(|p| p.respect_origin_headers);
+        let policy_negative_ttl = matched_policy.and_then(|p| p.negative_ttl);
 
         server_state.cache.increment_misses();
         let client = reqwest::Client::new();
@@ -297,9 +339,10 @@ impl CacheFetch {
 
         if res.status() != reqwest::StatusCode::OK {
             let status = res.status();
-            let error_message = format!("Origin server responded with status {status}");
+            let error_body = res.bytes().await.ok();
 
-            if !bypass_store && negative_cache_ttl > 0 {
+            let negative_ttl = policy_negative_ttl.unwrap_or(global_negative_ttl);
+            if !bypass_store && negative_ttl > 0 {
                 let db = server_state.get_db(0).unwrap();
                 let set_cmd_for_lock = Command::Cache(crate::core::commands::cache::Cache {
                     subcommand: crate::core::commands::cache::command::CacheSubcommand::Set(
@@ -314,37 +357,55 @@ impl CacheFetch {
                     session_id: 0,
                     authenticated_user: None,
                 };
-
                 let set_cmd_internal = CacheSet {
                     key: self.key.clone(),
-                    body_data: Bytes::from(status.as_u16().to_string()),
-                    ttl: Some(negative_cache_ttl),
-                    swr: Some(0),
-                    grace: Some(0),
+                    ttl: Some(negative_ttl),
                     tags: self.tags.clone(),
                     vary: self.vary.clone(),
                     headers: self.headers.clone(),
-                    etag: Some(Bytes::from_static(b"__NEGATIVE_CACHE__")),
                     ..Default::default()
                 };
-
                 let _ = set_cmd_internal
                     .execute_internal(
                         &mut temp_ctx,
-                        CacheBody::InMemory(set_cmd_internal.body_data.clone()),
+                        CacheBody::Negative {
+                            status: status.as_u16(),
+                            body: error_body.clone(),
+                        },
                     )
                     .await;
-
                 warn!(
                     "Stored negative cache entry for key '{}' due to origin status {}",
                     String::from_utf8_lossy(&self.key),
                     status
                 );
             }
-            return Err(SpinelDBError::Internal(error_message));
+            return Ok((
+                FetchOutcome::Negative {
+                    status: status.as_u16(),
+                    body: error_body,
+                },
+                WriteOutcome::DidNotWrite,
+            ));
         }
 
         let headers = res.headers().clone();
+
+        let (mut ttl_override, mut swr_override) = (self.ttl, self.swr);
+        if respect_origin {
+            if let Some(cc_header) = headers
+                .get(reqwest::header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+            {
+                let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
+                if parsed_ttl.is_some() {
+                    ttl_override = parsed_ttl;
+                }
+                if parsed_swr.is_some() {
+                    swr_override = parsed_swr;
+                }
+            }
+        }
 
         if headers
             .get(reqwest::header::VARY)
@@ -358,20 +419,22 @@ impl CacheFetch {
         let content_length = headers
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
+            .and_then(|s| s.parse::<usize>().ok());
+
+        let should_stream_to_disk = !bypass_store
+            && (content_length.is_none() || content_length.unwrap_or(0) >= streaming_threshold);
 
         let final_cache_body;
         let final_outcome_for_client;
 
-        if !bypass_store && content_length >= streaming_threshold {
+        if should_stream_to_disk {
             tokio::fs::create_dir_all(&cache_path).await?;
             let final_filename = Uuid::new_v4().to_string();
             let final_path = PathBuf::from(&cache_path).join(&final_filename);
 
             server_state
                 .cache
-                .log_manifest(ManifestState::Pending, final_path.clone())
+                .log_manifest(self.key.clone(), ManifestState::Pending, final_path.clone())
                 .await?;
 
             let mut temp_file = OpenOptions::new()
@@ -380,7 +443,6 @@ impl CacheFetch {
                 .truncate(true)
                 .open(&final_path)
                 .await?;
-
             let mut total_size = 0;
             while let Some(chunk) = res.chunk().await? {
                 temp_file.write_all(&chunk).await?;
@@ -389,14 +451,21 @@ impl CacheFetch {
             temp_file.sync_all().await?;
             drop(temp_file);
 
-            final_cache_body = CacheBody::OnDisk {
-                path: final_path.clone(),
-                size: total_size as u64,
-            };
-            final_outcome_for_client = FetchOutcome::OnDisk {
-                path: final_path,
-                size: total_size as u64,
-            };
+            if total_size < streaming_threshold {
+                let body_bytes = tokio::fs::read(&final_path).await?;
+                tokio::fs::remove_file(&final_path).await.ok();
+                final_cache_body = CacheBody::InMemory(body_bytes.clone().into());
+                final_outcome_for_client = FetchOutcome::InMemory(body_bytes.into());
+            } else {
+                final_cache_body = CacheBody::OnDisk {
+                    path: final_path.clone(),
+                    size: total_size as u64,
+                };
+                final_outcome_for_client = FetchOutcome::OnDisk {
+                    path: final_path,
+                    size: total_size as u64,
+                };
+            }
         } else {
             let body_bytes = res.bytes().await?;
             final_cache_body = CacheBody::InMemory(body_bytes.clone());
@@ -409,9 +478,9 @@ impl CacheFetch {
 
         let set_cmd_internal = CacheSet {
             key: self.key.clone(),
-            body_data: Bytes::new(), // Body is in final_cache_body, not needed here
-            ttl: self.ttl,
-            swr: self.swr,
+            body_data: Bytes::new(),
+            ttl: ttl_override,
+            swr: swr_override,
             grace: self.grace,
             revalidate_url: Some(self.url.clone()),
             etag: headers
@@ -423,6 +492,7 @@ impl CacheFetch {
             tags: self.tags.clone(),
             vary: self.vary.clone(),
             headers: self.headers.clone(),
+            ..Default::default()
         };
 
         let db = server_state.get_db(0).unwrap();
@@ -436,7 +506,7 @@ impl CacheFetch {
             locks: db.determine_locks_for_command(&set_cmd_for_lock).await,
             db: &db,
             command: Some(set_cmd_for_lock),
-            session_id: 0, // Internal operation
+            session_id: 0,
             authenticated_user: None,
         };
 
@@ -447,10 +517,9 @@ impl CacheFetch {
         if let CacheBody::OnDisk { path, .. } = final_cache_body {
             server_state
                 .cache
-                .log_manifest(ManifestState::Committed, path)
+                .log_manifest(set_cmd_internal.key.clone(), ManifestState::Committed, path)
                 .await?;
         }
-
         Ok((final_outcome_for_client, write_outcome))
     }
 }

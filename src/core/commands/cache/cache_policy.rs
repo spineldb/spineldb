@@ -20,7 +20,7 @@ use wildmatch::WildMatch;
 #[derive(Debug, Clone)]
 pub enum CachePolicySubcommand {
     /// Sets or updates a caching policy.
-    Set(CachePolicy),
+    Set(Box<CachePolicy>),
     /// Deletes a caching policy by name.
     Del(String),
     /// Retrieves the configuration of a specific policy.
@@ -73,14 +73,17 @@ impl ParseCommand for CachePolicyCmd {
                     disallow_status_codes: vec![],
                     max_size_bytes: None,
                     vary_on: vec![],
+                    respect_origin_headers: false,
+                    negative_ttl: None,
+                    priority: 0,
+                    compression: false,
+                    force_disk: false,
                 };
 
                 let mut parser = ArgParser::new(&command_args[3..]);
                 let mut tags_found = false;
                 let mut vary_on_found = false;
 
-                // Iteratively parse optional key-value and flag arguments.
-                // The loop breaks when it encounters a variadic argument list (TAGS or VARY_ON).
                 while !parser.remaining_args().is_empty() {
                     if tags_found || vary_on_found {
                         break;
@@ -91,8 +94,18 @@ impl ParseCommand for CachePolicyCmd {
                         policy.swr = Some(v);
                     } else if let Some(v) = parser.match_option("grace")? {
                         policy.grace = Some(v);
+                    } else if let Some(v) = parser.match_option("negative_ttl")? {
+                        policy.negative_ttl = Some(v);
+                    } else if let Some(v) = parser.match_option("priority")? {
+                        policy.priority = v;
+                    } else if parser.match_flag("compression") {
+                        policy.compression = true;
+                    } else if parser.match_flag("force-disk") {
+                        policy.force_disk = true;
                     } else if parser.match_flag("prewarm") {
                         policy.prewarm = true;
+                    } else if parser.match_flag("respect_origin_headers") {
+                        policy.respect_origin_headers = true;
                     } else if parser.match_flag("tags") {
                         tags_found = true;
                         break;
@@ -104,7 +117,6 @@ impl ParseCommand for CachePolicyCmd {
                     }
                 }
 
-                // Handle the final, variadic part of the command.
                 if vary_on_found {
                     policy.vary_on = parser
                         .remaining_args()
@@ -119,7 +131,7 @@ impl ParseCommand for CachePolicyCmd {
                         .collect::<Result<_, _>>()?;
                 }
 
-                CachePolicySubcommand::Set(policy)
+                CachePolicySubcommand::Set(Box::new(policy))
             }
             "del" => {
                 if command_args.len() != 1 {
@@ -165,21 +177,21 @@ impl ExecutableCommand for CachePolicyCmd {
         match &self.subcommand {
             CachePolicySubcommand::Set(policy_to_set) => {
                 let mut policies = ctx.state.cache.policies.write().await;
-                // Find and clone the old policy before modification for later comparison.
                 let old_policy = policies
                     .iter()
                     .find(|p| p.name == policy_to_set.name)
                     .cloned();
 
-                // Replace the existing policy or add a new one.
                 if let Some(existing) = policies.iter_mut().find(|p| p.name == policy_to_set.name) {
-                    *existing = policy_to_set.clone();
+                    *existing = (**policy_to_set).clone();
                 } else {
-                    policies.push(policy_to_set.clone());
+                    policies.push((**policy_to_set).clone());
                 }
-                drop(policies); // Release write lock
+                // Re-sort policies by priority after any modification.
+                policies.sort_by_key(|p| std::cmp::Reverse(p.priority));
+                drop(policies);
 
-                // If the prewarm status changed, clean up relevant keys from the prewarm set.
+                // If the `prewarm` flag changed, update the prewarm key set.
                 if let Some(old) = old_policy {
                     if old.prewarm && !policy_to_set.prewarm {
                         debug!(
@@ -204,9 +216,8 @@ impl ExecutableCommand for CachePolicyCmd {
                 let initial_len = policies.len();
                 policies.retain(|p| p.name != *name);
                 let removed_count = initial_len - policies.len();
-                drop(policies); // Release write lock
+                drop(policies);
 
-                // If the deleted policy was a prewarm policy, clean up its keys.
                 if let Some(deleted_policy) = policy_to_delete {
                     if deleted_policy.prewarm {
                         debug!(
@@ -247,6 +258,10 @@ impl ExecutableCommand for CachePolicyCmd {
                         info.push(RespValue::BulkString("grace".into()));
                         info.push(RespValue::Integer(v as i64));
                     }
+                    if let Some(v) = policy.negative_ttl {
+                        info.push(RespValue::BulkString("negative_ttl".into()));
+                        info.push(RespValue::Integer(v as i64));
+                    }
                     if !policy.tags.is_empty() {
                         info.push(RespValue::BulkString("tags".into()));
                         info.push(RespValue::BulkString(policy.tags.join(" ").into()));
@@ -257,6 +272,20 @@ impl ExecutableCommand for CachePolicyCmd {
                     }
                     if policy.prewarm {
                         info.push(RespValue::BulkString("prewarm".into()));
+                        info.push(RespValue::Integer(1));
+                    }
+                    if policy.respect_origin_headers {
+                        info.push(RespValue::BulkString("respect_origin_headers".into()));
+                        info.push(RespValue::Integer(1));
+                    }
+                    info.push(RespValue::BulkString("priority".into()));
+                    info.push(RespValue::Integer(policy.priority as i64));
+                    if policy.compression {
+                        info.push(RespValue::BulkString("compression".into()));
+                        info.push(RespValue::Integer(1));
+                    }
+                    if policy.force_disk {
+                        info.push(RespValue::BulkString("force-disk".into()));
                         info.push(RespValue::Integer(1));
                     }
                     Ok((RespValue::Array(info), WriteOutcome::DidNotWrite))
@@ -280,36 +309,25 @@ impl CommandSpec for CachePolicyCmd {
     fn name(&self) -> &'static str {
         "cache.policy"
     }
-
     fn arity(&self) -> i64 {
-        // Varies by subcommand
         -2
     }
-
     fn flags(&self) -> CommandFlags {
-        // Policy management is an administrative command and does not need to be replicated.
-        // It is handled via gossip in cluster mode.
         CommandFlags::ADMIN | CommandFlags::NO_PROPAGATE
     }
-
     fn first_key(&self) -> i64 {
-        0 // This command does not operate on keys in the keyspace.
+        0
     }
-
     fn last_key(&self) -> i64 {
         0
     }
-
     fn step(&self) -> i64 {
         0
     }
-
     fn get_keys(&self) -> Vec<Bytes> {
         vec![]
     }
-
     fn to_resp_args(&self) -> Vec<Bytes> {
-        // Not intended for replication, but implemented for completeness.
         vec![]
     }
 }

@@ -7,7 +7,7 @@ use super::stream::AnyStream;
 use crate::connection::ConnectionHandler;
 use crate::core::metrics;
 use crate::core::persistence::spldb_saver::SpldbSaverTask;
-use crate::core::state::{ClientInfo, ClientRole}; // Import ClientRole
+use crate::core::state::{ClientInfo, ClientRole};
 use anyhow::anyhow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -22,6 +22,7 @@ pub async fn run(mut ctx: ServerContext) {
     let mut session_id_counter: u64 = 0;
     let mut client_tasks = JoinSet::new();
 
+    // Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM.
     let mut sigint = signal(SignalKind::interrupt())
         .map_err(|e| anyhow!("Failed to register SIGINT handler: {}", e))
         .expect("Failed to create SIGINT stream");
@@ -31,8 +32,9 @@ pub async fn run(mut ctx: ServerContext) {
 
     loop {
         tokio::select! {
-            biased;
+            biased; // Prioritize shutdown signals over other events.
 
+            // Handle OS shutdown signals.
             _ = sigint.recv() => {
                 info!("SIGINT received, initiating graceful shutdown.");
                 break;
@@ -42,14 +44,16 @@ pub async fn run(mut ctx: ServerContext) {
                 break;
             }
 
+            // Monitor background tasks for unexpected termination.
             Some(res) = ctx.background_tasks.join_next() => {
                 match res {
-                    Ok(Ok(())) => warn!("A background task finished unexpectedly without an error."),
+                    Ok(Ok(())) => info!("A background task has completed. This is expected for tasks whose features are disabled."),
                     Ok(Err(e)) => { error!("CRITICAL: Background task failed: {}. Shutting down.", e); break; }
                     Err(e) => { error!("CRITICAL: Background task panicked: {e:?}. Shutting down."); break; }
                 }
             },
 
+            // Accept new incoming TCP connections.
             res = ctx.listener.accept() => {
                 if let Ok((socket, addr)) = res {
                     info!("Accepted new connection from: {}", addr);
@@ -61,9 +65,11 @@ pub async fn run(mut ctx: ServerContext) {
                     let session_id = session_id_counter;
                     let state_clone = ctx.state.clone();
 
+                    // Create per-connection and global shutdown channels.
                     let (conn_shutdown_tx, conn_shutdown_rx) = broadcast::channel(1);
                     let global_shutdown_rx = ctx.shutdown_tx.subscribe();
 
+                    // Register the new client in the global state.
                     let client_info = Arc::new(Mutex::new(ClientInfo {
                         addr,
                         session_id,
@@ -75,6 +81,7 @@ pub async fn run(mut ctx: ServerContext) {
                     }));
                     state_clone.clients.insert(session_id, (client_info, conn_shutdown_tx));
 
+                    // Spawn a task to handle the new connection, including TLS handshake if enabled.
                     if let Some(acceptor) = ctx.acceptor.clone() {
                         client_tasks.spawn(async move {
                             match acceptor.accept(socket).await {
@@ -101,6 +108,7 @@ pub async fn run(mut ctx: ServerContext) {
                 }
             },
 
+            // Reap completed client tasks.
             Some(res) = client_tasks.join_next() => {
                 if let Err(e) = res {
                     if e.is_panic() {
@@ -111,6 +119,7 @@ pub async fn run(mut ctx: ServerContext) {
         }
     }
 
+    // --- Graceful Shutdown Sequence ---
     info!("Shutting down. Sending signal to all tasks.");
     if ctx.shutdown_tx.send(()).is_err() {
         error!("Failed to send shutdown signal. Some tasks may not terminate gracefully.");
@@ -131,6 +140,7 @@ pub async fn run(mut ctx: ServerContext) {
         )
     };
 
+    // Perform a final SPLDB save if it's the only persistence method and there are unsaved changes.
     if spldb_enabled && !aof_enabled && dirty_keys > 0 {
         if let Some(handle) = ctx.state.persistence.bgsave_handle.lock().await.take() {
             info!("Waiting for in-progress BGSAVE to finish before final save...");
@@ -148,6 +158,7 @@ pub async fn run(mut ctx: ServerContext) {
         }
     }
 
+    // Wait for a potentially ongoing AOF rewrite to complete.
     if let Some(handle) = ctx.state.persistence.aof_rewrite_handle.lock().await.take() {
         info!("Waiting for AOF rewrite to complete...");
         if let Err(e) = handle.await {
@@ -157,11 +168,12 @@ pub async fn run(mut ctx: ServerContext) {
         }
     }
 
+    // Wait for critical operations like cluster resharding to finish.
     info!("Waiting for critical background operations (e.g., resharding) to finish...");
-    // Wait indefinitely for critical tasks to avoid data corruption on shutdown.
     ctx.state.critical_tasks.lock().await.shutdown().await;
     info!("Critical operations finished.");
 
+    // Wait for all other background tasks to terminate, with a timeout.
     info!("Waiting for background tasks to finish...");
     if tokio::time::timeout(Duration::from_secs(10), async {
         while ctx.background_tasks.join_next().await.is_some() {}

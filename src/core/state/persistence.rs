@@ -3,7 +3,7 @@
 //! Contains state definitions related to data persistence (AOF/SPLDB).
 
 use crate::core::events::PropagatedWork;
-use crate::core::storage::data_types::StoredValue;
+use crate::core::tasks::lazy_free::LazyFreeItem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -42,8 +42,8 @@ pub struct PersistenceState {
     pub aof_fsync_request_tx: mpsc::Sender<()>,
     /// A watch channel to notify the AOF writer that a rewrite has completed.
     pub aof_rewrite_complete_tx: tokio::sync::watch::Sender<()>,
-    /// A channel to send values for asynchronous deallocation (UNLINK).
-    pub lazy_free_tx: mpsc::Sender<Vec<StoredValue>>,
+    /// A channel to send (key, value) pairs for asynchronous deallocation (UNLINK).
+    pub lazy_free_tx: mpsc::Sender<Vec<LazyFreeItem>>,
     /// The size of the AOF file at the end of the last successful rewrite.
     /// Used by the auto-rewrite manager to calculate growth percentage.
     pub aof_last_rewrite_size: Arc<AtomicU64>,
@@ -54,7 +54,7 @@ impl PersistenceState {
     pub fn new(
         aof_fsync_request_tx: mpsc::Sender<()>,
         aof_rewrite_complete_tx: tokio::sync::watch::Sender<()>,
-        lazy_free_tx: mpsc::Sender<Vec<StoredValue>>,
+        lazy_free_tx: mpsc::Sender<Vec<LazyFreeItem>>,
     ) -> Self {
         Self {
             is_saving_spldb: Arc::new(AtomicBool::new(false)),

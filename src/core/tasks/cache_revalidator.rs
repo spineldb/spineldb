@@ -1,5 +1,4 @@
 // src/core/tasks/cache_revalidator.rs
-
 //! Implements the background worker and proactive revalidator tasks for the
 //! Intelligent Caching Engine.
 
@@ -137,9 +136,6 @@ impl CacheRevalidator {
                                 .cache
                                 .trigger_smart_background_revalidation(key_clone, variants_clone)
                                 .await;
-                            // `break` is used to move on to the next revalidation cycle
-                            // to avoid a burst of requests in a single cycle.
-                            break;
                         }
                     }
                 }

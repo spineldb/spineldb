@@ -1,10 +1,10 @@
 // src/core/commands/cache/cache_get.rs
-
 //! Implements the `CACHE.GET` command, which retrieves a cached object.
 //! This implementation supports content variants via the `Vary` header,
 //! and advanced stale content serving strategies like stale-while-revalidate.
 
 use super::helpers::calculate_variant_hash;
+use crate::core::commands::cache::cache_set::apply_ttl_options;
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
@@ -13,7 +13,7 @@ use crate::core::commands::helpers::{ArgParser, extract_bytes};
 use crate::core::handler::command_router::RouteResponse;
 use crate::core::protocol::RespFrame;
 use crate::core::state::ServerState;
-use crate::core::storage::cache_types::CacheBody;
+use crate::core::storage::cache_types::{CacheBody, CachePolicy};
 use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
@@ -23,9 +23,10 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, IF_MODIFIED_SINCE, IF_
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::File as TokioFile;
-use tokio::io::copy as tokio_copy;
+use tokio::io::{AsyncReadExt, copy as tokio_copy};
 use tokio::sync::MutexGuard;
 use tracing::{debug, warn};
+use wildmatch::WildMatch;
 
 /// Represents the `CACHE.GET` command with its parsed options.
 #[derive(Debug, Clone, Default)]
@@ -82,11 +83,32 @@ impl ParseCommand for CacheGet {
     }
 }
 
+/// Parses Cache-Control header to extract max-age and stale-while-revalidate.
+fn parse_cache_control(header_value: &str) -> (Option<u64>, Option<u64>) {
+    let mut max_age = None;
+    let mut swr = None;
+    for directive in header_value.split(',') {
+        let parts: Vec<&str> = directive.trim().splitn(2, '=').collect();
+        if parts.len() == 2 {
+            let key = parts[0];
+            let value = parts[1];
+            if key.eq_ignore_ascii_case("max-age") || key.eq_ignore_ascii_case("s-maxage") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    max_age = Some(seconds);
+                }
+            } else if key.eq_ignore_ascii_case("stale-while-revalidate") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    swr = Some(seconds);
+                }
+            }
+        }
+    }
+    (max_age, swr)
+}
+
 #[async_trait]
 impl ExecutableCommand for CacheGet {
-    /// Executes `CACHE.GET`. This is a thin wrapper around `execute_and_stream`
-    /// for compatibility with the command trait. It buffers streaming responses,
-    /// while the router can handle them directly for optimal performance.
+    /// Executes `CACHE.GET`, buffering any streaming responses.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -118,12 +140,190 @@ impl CacheGet {
         let state = ctx.state.clone();
         let (_shard, guard) = ctx.get_single_shard_context_mut()?;
 
-        // --- Force Revalidation Path ---
+        // Handle forced revalidation first.
         if self.force_revalidate {
-            let Some(entry) = guard.peek(&self.key) else {
-                state.cache.increment_misses();
-                return Ok(RouteResponse::NoOp);
-            };
+            return self.handle_force_revalidate(state, guard).await;
+        }
+
+        // Check if the entry is valid (not expired and not invalidated by tags).
+        if !self.is_entry_valid(&state, guard) {
+            guard.pop(&self.key);
+            crate::core::metrics::CACHE_MISSES_TOTAL
+                .with_label_values(&["none"])
+                .inc();
+            state.cache.increment_misses();
+            return Ok(RouteResponse::NoOp);
+        }
+
+        // Determine the cache state (fresh, SWR, grace) based on TTLs.
+        let now = Instant::now();
+        let entry_expiry = guard.peek(&self.key).unwrap().expiry;
+        let entry_swr_expiry = guard.peek(&self.key).unwrap().stale_revalidate_expiry;
+        let entry_grace_expiry = guard.peek(&self.key).unwrap().grace_expiry;
+
+        // State 1: Fresh content.
+        if entry_expiry.is_some_and(|exp| exp > now) {
+            return self.serve_fresh_content(state, guard).await;
+        }
+
+        // State 2: Stale, but within the SWR window.
+        if entry_swr_expiry.is_some_and(|exp| exp > now) {
+            return self.serve_stale_and_revalidate(state, guard).await;
+        }
+
+        // State 3: Stale and past SWR, but within the grace window or revalidate requested.
+        if self.revalidate_url.is_some() || entry_grace_expiry.is_some_and(|exp| exp > now) {
+            return self.serve_from_grace_or_revalidate(state, guard).await;
+        }
+
+        // State 4: Expired completely.
+        state.cache.increment_misses();
+        crate::core::metrics::CACHE_MISSES_TOTAL
+            .with_label_values(&["none"])
+            .inc();
+        guard.pop(&self.key);
+        Ok(RouteResponse::NoOp)
+    }
+
+    /// Serves fresh content and handles conditional GETs (`If-None-Match`, etc.).
+    async fn serve_fresh_content<'b>(
+        &self,
+        state: Arc<ServerState>,
+        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+    ) -> Result<RouteResponse, SpinelDBError> {
+        let entry = guard.get_mut(&self.key).unwrap();
+        let DataValue::HttpCache {
+            variants, vary_on, ..
+        } = &mut entry.data
+        else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let variant_hash = calculate_variant_hash(vary_on, &self.headers);
+        let Some(variant) = variants.get_mut(&variant_hash) else {
+            state.cache.increment_misses();
+            crate::core::metrics::CACHE_MISSES_TOTAL
+                .with_label_values(&["none"])
+                .inc();
+            return Ok(RouteResponse::NoOp);
+        };
+        variant.last_accessed = Instant::now();
+
+        if let CacheBody::Negative { status, body } = &variant.body {
+            return Ok(RouteResponse::Single(RespValue::Array(vec![
+                RespValue::Integer(*status as i64),
+                RespValue::Array(vec![]),
+                RespValue::BulkString(body.clone().unwrap_or_default()),
+            ])));
+        }
+
+        if let Some(req_etag) = &self.if_none_match {
+            if variant.metadata.etag.as_ref() == Some(req_etag) {
+                return Ok(RouteResponse::NoOp); // 304 Not Modified
+            }
+        }
+        if let Some(req_ims) = &self.if_modified_since {
+            if variant.metadata.last_modified.as_ref() == Some(req_ims) {
+                return Ok(RouteResponse::NoOp); // 304 Not Modified
+            }
+        }
+
+        state.cache.increment_hits();
+        crate::core::metrics::CACHE_HITS_TOTAL
+            .with_label_values(&["none"])
+            .inc();
+
+        let body_response = Self::create_body_response(&variant.body).await?;
+        let final_body = match body_response {
+            RouteResponse::Single(RespValue::BulkString(bytes)) => bytes,
+            RouteResponse::StreamBody { mut file, .. } => {
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer).await?;
+                Bytes::from(buffer)
+            }
+            _ => {
+                return Err(SpinelDBError::Internal(
+                    "Unexpected response type from create_body_response".into(),
+                ));
+            }
+        };
+
+        Ok(RouteResponse::Single(RespValue::Array(vec![
+            RespValue::Integer(200),
+            RespValue::Array(vec![]),
+            RespValue::BulkString(final_body),
+        ])))
+    }
+
+    /// Serves stale content while triggering a background revalidation.
+    async fn serve_stale_and_revalidate<'b>(
+        &self,
+        state: Arc<ServerState>,
+        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+    ) -> Result<RouteResponse, SpinelDBError> {
+        state.cache.increment_stale_hits();
+        let entry = guard.get_mut(&self.key).unwrap();
+        let DataValue::HttpCache {
+            variants, vary_on, ..
+        } = &mut entry.data
+        else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let variant_hash = calculate_variant_hash(vary_on, &self.headers);
+        let Some(variant) = variants.get_mut(&variant_hash) else {
+            state.cache.increment_misses();
+            crate::core::metrics::CACHE_MISSES_TOTAL
+                .with_label_values(&["none"])
+                .inc();
+            return Ok(RouteResponse::NoOp);
+        };
+        let revalidate_url_from_cache = variant.metadata.revalidate_url.clone();
+        variant.last_accessed = Instant::now();
+
+        if let Some(url) = self.revalidate_url.clone().or(revalidate_url_from_cache) {
+            let swr_lock = state
+                .cache
+                .swr_locks
+                .entry(self.key.clone())
+                .or_default()
+                .clone();
+            if swr_lock.try_lock().is_ok() {
+                debug!(
+                    "Acquired SWR lock for key '{}'. Spawning background revalidation.",
+                    String::from_utf8_lossy(&self.key)
+                );
+                let state_clone = state.clone();
+                let key_clone = self.key.clone();
+                let headers_clone = self.headers.clone();
+                tokio::spawn(async move {
+                    let db = state_clone.get_db(0).unwrap();
+                    let shard_index = db.get_shard_index(&key_clone);
+                    let mut task_guard = db.get_shard(shard_index).entries.lock().await;
+                    if let Err(e) = revalidate_and_update_cache(
+                        state_clone,
+                        key_clone,
+                        url,
+                        variant_hash,
+                        headers_clone,
+                        &mut task_guard,
+                    )
+                    .await
+                    {
+                        warn!("Background cache revalidation failed: {}", e);
+                    }
+                });
+            }
+        }
+        Self::create_body_response(&variant.body).await
+    }
+
+    /// Serves content from its grace period after a failed revalidation attempt.
+    async fn serve_from_grace_or_revalidate<'b>(
+        &self,
+        state: Arc<ServerState>,
+        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+    ) -> Result<RouteResponse, SpinelDBError> {
+        let (revalidate_url_from_cache, variant_hash) = {
+            let entry = guard.peek(&self.key).unwrap();
             let DataValue::HttpCache {
                 variants, vary_on, ..
             } = &entry.data
@@ -131,262 +331,151 @@ impl CacheGet {
                 return Err(SpinelDBError::WrongType);
             };
             let variant_hash = calculate_variant_hash(vary_on, &self.headers);
-            let Some(variant) = variants.get(&variant_hash) else {
-                state.cache.increment_misses();
-                return Ok(RouteResponse::NoOp);
-            };
-            let url = self
-                .revalidate_url
-                .clone()
-                .or_else(|| variant.metadata.revalidate_url.clone())
-                .ok_or_else(|| {
-                    SpinelDBError::InvalidState(
-                        "FORCE-REVALIDATE requires a revalidation URL".into(),
-                    )
-                })?;
-
-            let reval_result = revalidate_and_update_cache(
-                state.clone(),
-                self.key.clone(),
-                url,
+            let variant = variants.get(&variant_hash);
+            (
+                variant.and_then(|v| v.metadata.revalidate_url.clone()),
                 variant_hash,
-                self.headers.clone(),
-                guard,
             )
-            .await;
+        };
 
-            // Re-acquire the entry after a potential modification.
-            let entry = guard.peek(&self.key).ok_or(SpinelDBError::KeyNotFound)?;
-            let DataValue::HttpCache { variants, .. } = &entry.data else {
-                return Err(SpinelDBError::WrongType);
-            };
-            let variant = variants.get(&variant_hash).ok_or_else(|| {
-                SpinelDBError::Internal("Variant vanished after revalidation".into())
+        let url = self
+            .revalidate_url
+            .clone()
+            .or(revalidate_url_from_cache)
+            .ok_or_else(|| {
+                SpinelDBError::InvalidState(
+                    "REVALIDATE-URL is required to serve content in its grace period".into(),
+                )
             })?;
+        let reval_result = revalidate_and_update_cache(
+            state.clone(),
+            self.key.clone(),
+            url,
+            variant_hash,
+            self.headers.clone(),
+            guard,
+        )
+        .await;
 
-            return match reval_result {
-                Ok(Some(new_body)) => Self::create_body_response(&new_body).await,
-                Ok(None) => Self::create_body_response(&variant.body).await,
-                Err(e) => Err(e),
-            };
-        }
+        let entry = guard.peek(&self.key).ok_or(SpinelDBError::KeyNotFound)?;
+        let DataValue::HttpCache { variants, .. } = &entry.data else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let variant = variants
+            .get(&variant_hash)
+            .ok_or_else(|| SpinelDBError::Internal("Variant vanished after revalidation".into()))?;
 
-        // --- Standard Path (not force-revalidate) ---
-        let is_valid_entry = {
-            let Some(entry) = guard.peek(&self.key) else {
-                state.cache.increment_misses();
-                return Ok(RouteResponse::NoOp);
-            };
-            if entry.is_expired() {
-                false
-            } else {
-                let DataValue::HttpCache { tags_epoch, .. } = &entry.data else {
-                    return Err(SpinelDBError::WrongType);
-                };
-                if state.cluster.is_some() {
-                    let tags: Vec<Bytes> = guard.get_tags_for_key(&self.key);
-                    for tag in tags {
-                        if let Some(purge_epoch_entry) = state.cache.tag_purge_epochs.get(&tag) {
-                            if *tags_epoch < *purge_epoch_entry.value() {
-                                debug!(
-                                    "Stale cache entry '{}' due to purged tag '{}'. Deleting.",
-                                    String::from_utf8_lossy(&self.key),
-                                    String::from_utf8_lossy(&tag)
-                                );
-                                return Ok(RouteResponse::NoOp);
-                            }
-                        }
-                    }
+        match reval_result {
+            Ok(Some(new_body)) => return Self::create_body_response(&new_body).await,
+            Ok(None) => return Self::create_body_response(&variant.body).await,
+            Err(_) => {
+                let now = Instant::now();
+                if entry.grace_expiry.is_some_and(|exp| exp > now) {
+                    state.cache.increment_stale_hits();
+                    return Self::create_body_response(&variant.body).await;
                 }
-                true
             }
         };
 
-        if !is_valid_entry {
-            guard.pop(&self.key);
-            state.cache.increment_misses();
-            return Ok(RouteResponse::NoOp);
-        }
-
-        let now = Instant::now();
-        let entry_expiry = guard.peek(&self.key).unwrap().expiry;
-        let entry_swr_expiry = guard.peek(&self.key).unwrap().stale_revalidate_expiry;
-        let entry_grace_expiry = guard.peek(&self.key).unwrap().grace_expiry;
-
-        // State 1: Fresh content
-        if entry_expiry.is_some_and(|exp| exp > now) {
-            let entry = guard.get_mut(&self.key).unwrap();
-            let DataValue::HttpCache {
-                variants, vary_on, ..
-            } = &mut entry.data
-            else {
-                return Err(SpinelDBError::WrongType);
-            };
-            let variant_hash = calculate_variant_hash(vary_on, &self.headers);
-            let Some(variant) = variants.get_mut(&variant_hash) else {
-                state.cache.increment_misses();
-                return Ok(RouteResponse::NoOp);
-            };
-            variant.last_accessed = Instant::now();
-
-            if variant.metadata.etag.as_deref() == Some(b"__NEGATIVE_CACHE__") {
-                if let CacheBody::InMemory(body_bytes) = &variant.body {
-                    if let Ok(status_str) = std::str::from_utf8(body_bytes) {
-                        if let Ok(status_code) = status_str.parse::<u16>() {
-                            debug!(
-                                "Serving negative cache entry for key '{}'",
-                                String::from_utf8_lossy(&self.key)
-                            );
-                            return Err(SpinelDBError::Internal(format!(
-                                "Origin server responded with status {status_code}"
-                            )));
-                        }
-                    }
-                }
-                return Err(SpinelDBError::Internal(
-                    "Failed to fetch from origin (cached failure)".into(),
-                ));
-            }
-
-            if let Some(req_etag) = &self.if_none_match {
-                if variant.metadata.etag.as_ref() == Some(req_etag) {
-                    return Ok(RouteResponse::NoOp);
-                }
-            }
-            if let Some(req_ims) = &self.if_modified_since {
-                if variant.metadata.last_modified.as_ref() == Some(req_ims) {
-                    return Ok(RouteResponse::NoOp);
-                }
-            }
-
-            state.cache.increment_hits();
-            return Self::create_body_response(&variant.body).await;
-        }
-
-        // State 2: Stale, but in SWR window
-        if entry_swr_expiry.is_some_and(|exp| exp > now) {
-            state.cache.increment_stale_hits();
-            let entry = guard.get_mut(&self.key).unwrap();
-            let DataValue::HttpCache {
-                variants, vary_on, ..
-            } = &mut entry.data
-            else {
-                return Err(SpinelDBError::WrongType);
-            };
-            let variant_hash = calculate_variant_hash(vary_on, &self.headers);
-            let Some(variant) = variants.get_mut(&variant_hash) else {
-                state.cache.increment_misses();
-                return Ok(RouteResponse::NoOp);
-            };
-            let revalidate_url_from_cache = variant.metadata.revalidate_url.clone();
-            variant.last_accessed = Instant::now();
-
-            if let Some(url) = self.revalidate_url.clone().or(revalidate_url_from_cache) {
-                let swr_lock = state
-                    .cache
-                    .swr_locks
-                    .entry(self.key.clone())
-                    .or_default()
-                    .clone();
-                if swr_lock.try_lock().is_ok() {
-                    debug!(
-                        "Acquired SWR lock for key '{}'. Spawning background revalidation.",
-                        String::from_utf8_lossy(&self.key)
-                    );
-                    let state_clone = state.clone();
-                    let key_clone = self.key.clone();
-                    let headers_clone = self.headers.clone();
-                    tokio::spawn(async move {
-                        let db = state_clone.get_db(0).unwrap();
-                        let shard_index = db.get_shard_index(&key_clone);
-                        let mut task_guard = db.get_shard(shard_index).entries.lock().await;
-                        if let Err(e) = revalidate_and_update_cache(
-                            state_clone,
-                            key_clone,
-                            url,
-                            variant_hash,
-                            headers_clone,
-                            &mut task_guard,
-                        )
-                        .await
-                        {
-                            warn!("Background cache revalidation failed: {}", e);
-                        }
-                    });
-                } else {
-                    debug!(
-                        "SWR lock for key '{}' is already held. Skipping revalidation.",
-                        String::from_utf8_lossy(&self.key)
-                    );
-                }
-            }
-            return Self::create_body_response(&variant.body).await;
-        }
-
-        // State 3: Stale and past SWR, but in grace window OR explicit revalidate requested
-        if self.revalidate_url.is_some() || entry_grace_expiry.is_some_and(|exp| exp > now) {
-            let (revalidate_url_from_cache, variant_hash) = {
-                let entry = guard.peek(&self.key).unwrap();
-                let DataValue::HttpCache {
-                    variants, vary_on, ..
-                } = &entry.data
-                else {
-                    return Err(SpinelDBError::WrongType);
-                };
-                let variant_hash = calculate_variant_hash(vary_on, &self.headers);
-                let variant = variants.get(&variant_hash);
-                (
-                    variant.and_then(|v| v.metadata.revalidate_url.clone()),
-                    variant_hash,
-                )
-            };
-
-            let url = self
-                .revalidate_url
-                .clone()
-                .or(revalidate_url_from_cache)
-                .ok_or_else(|| {
-                    SpinelDBError::InvalidState(
-                        "REVALIDATE-URL is required to serve content in its grace period".into(),
-                    )
-                })?;
-            let reval_result = revalidate_and_update_cache(
-                state.clone(),
-                self.key.clone(),
-                url,
-                variant_hash,
-                self.headers.clone(),
-                guard,
-            )
-            .await;
-
-            let entry = guard.peek(&self.key).ok_or(SpinelDBError::KeyNotFound)?;
-            let DataValue::HttpCache { variants, .. } = &entry.data else {
-                return Err(SpinelDBError::WrongType);
-            };
-            let variant = variants.get(&variant_hash).ok_or_else(|| {
-                SpinelDBError::Internal("Variant vanished after revalidation".into())
-            })?;
-
-            match reval_result {
-                Ok(Some(new_body)) => return Self::create_body_response(&new_body).await,
-                Ok(None) => return Self::create_body_response(&variant.body).await,
-                Err(_) => {
-                    if entry_grace_expiry.is_some_and(|exp| exp > now) {
-                        state.cache.increment_stale_hits();
-                        return Self::create_body_response(&variant.body).await;
-                    }
-                }
-            };
-        }
-
-        // State 4: Expired completely (past grace period)
+        // If revalidation failed and we're outside the grace period, it's a miss.
         state.cache.increment_misses();
+        crate::core::metrics::CACHE_MISSES_TOTAL
+            .with_label_values(&["none"])
+            .inc();
         guard.pop(&self.key);
         Ok(RouteResponse::NoOp)
     }
 
-    /// Helper to create the correct RouteResponse based on body location.
+    /// Handles the `FORCE-REVALIDATE` logic.
+    async fn handle_force_revalidate<'b>(
+        &self,
+        state: Arc<ServerState>,
+        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+    ) -> Result<RouteResponse, SpinelDBError> {
+        let Some(entry) = guard.peek(&self.key) else {
+            state.cache.increment_misses();
+            return Ok(RouteResponse::NoOp);
+        };
+        let DataValue::HttpCache {
+            variants, vary_on, ..
+        } = &entry.data
+        else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let variant_hash = calculate_variant_hash(vary_on, &self.headers);
+        let Some(variant) = variants.get(&variant_hash) else {
+            state.cache.increment_misses();
+            return Ok(RouteResponse::NoOp);
+        };
+
+        let url = self
+            .revalidate_url
+            .clone()
+            .or_else(|| variant.metadata.revalidate_url.clone())
+            .ok_or_else(|| {
+                SpinelDBError::InvalidState("FORCE-REVALIDATE requires a revalidation URL".into())
+            })?;
+        let reval_result = revalidate_and_update_cache(
+            state.clone(),
+            self.key.clone(),
+            url,
+            variant_hash,
+            self.headers.clone(),
+            guard,
+        )
+        .await;
+
+        let entry = guard.peek(&self.key).ok_or(SpinelDBError::KeyNotFound)?;
+        let DataValue::HttpCache { variants, .. } = &entry.data else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let variant = variants
+            .get(&variant_hash)
+            .ok_or_else(|| SpinelDBError::Internal("Variant vanished after revalidation".into()))?;
+
+        match reval_result {
+            Ok(Some(new_body)) => Self::create_body_response(&new_body).await,
+            Ok(None) => Self::create_body_response(&variant.body).await, // 304 Not Modified
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Checks if a cache entry is valid by checking its TTL and tags.
+    fn is_entry_valid<'b>(
+        &self,
+        state: &Arc<ServerState>,
+        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+    ) -> bool {
+        let Some(entry) = guard.peek(&self.key) else {
+            return false;
+        };
+        if entry.is_expired() {
+            return false;
+        }
+
+        let DataValue::HttpCache { tags_epoch, .. } = &entry.data else {
+            return false;
+        };
+
+        if state.cluster.is_some() {
+            let tags: Vec<Bytes> = guard.get_tags_for_key(&self.key);
+            for tag in tags {
+                if let Some(purge_epoch_entry) = state.cache.tag_purge_epochs.get(&tag) {
+                    if *tags_epoch < *purge_epoch_entry.value() {
+                        debug!(
+                            "Stale cache entry '{}' due to purged tag '{}'.",
+                            String::from_utf8_lossy(&self.key),
+                            String::from_utf8_lossy(&tag)
+                        );
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Creates a `RouteResponse` from a `CacheBody`, handling decompression if necessary.
     async fn create_body_response(body: &CacheBody) -> Result<RouteResponse, SpinelDBError> {
         match body {
             CacheBody::InMemory(bytes) => {
@@ -399,12 +488,22 @@ impl CacheGet {
                 let resp_header = format!("${size}\r\n").into_bytes();
                 Ok(RouteResponse::StreamBody { resp_header, file })
             }
+            CacheBody::CompressedInMemory { data, .. } => {
+                let decompressed = zstd::decode_all(data.as_ref()).map_err(|e| {
+                    SpinelDBError::Internal(format!("Failed to decompress cache body: {e}"))
+                })?;
+                Ok(RouteResponse::Single(RespValue::BulkString(Bytes::from(
+                    decompressed,
+                ))))
+            }
+            CacheBody::Negative { .. } => Err(SpinelDBError::Internal(
+                "Negative cache entry should not reach create_body_response".into(),
+            )),
         }
     }
 }
 
 /// Performs a conditional HTTP GET to revalidate a cache entry and updates it in place.
-/// It takes a mutable reference to the shard guard to avoid a deadlock.
 pub(crate) async fn revalidate_and_update_cache<'a>(
     state: Arc<ServerState>,
     key: Bytes,
@@ -420,6 +519,15 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
         variant_hash,
         url
     );
+
+    let matched_policy = {
+        let key_str = String::from_utf8_lossy(&key);
+        let policies = state.cache.policies.read().await;
+        policies
+            .iter()
+            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str))
+            .cloned()
+    };
 
     let Some(entry) = guard.get_mut(&key) else {
         return Err(SpinelDBError::KeyNotFound);
@@ -480,7 +588,15 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
 
     if status == reqwest::StatusCode::NOT_MODIFIED {
         state.cache.increment_hits();
-        update_ttls_from_headers(entry, &res_headers);
+        crate::core::metrics::CACHE_HITS_TOTAL
+            .with_label_values(&["none"])
+            .inc();
+        update_ttls_from_policy_and_headers(entry, matched_policy.as_ref(), &res_headers);
+        if let DataValue::HttpCache { variants, .. } = &mut entry.data {
+            if let Some(variant) = variants.get_mut(&variant_hash) {
+                variant.last_accessed = Instant::now();
+            }
+        }
         entry.version += 1;
         return Ok(None);
     }
@@ -489,6 +605,16 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
         let new_body_bytes = res.bytes().await?;
         let new_body = CacheBody::InMemory(new_body_bytes);
 
+        let DataValue::HttpCache { variants, .. } = &mut entry.data else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let Some(variant) = variants.get_mut(&variant_hash) else {
+            return Err(SpinelDBError::Internal(
+                "Cache variant disappeared during revalidation".into(),
+            ));
+        };
+
+        variant.last_accessed = Instant::now();
         variant.body = new_body.clone();
         variant.metadata.etag = res_headers
             .get(reqwest::header::ETAG)
@@ -497,7 +623,7 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
             .get(reqwest::header::LAST_MODIFIED)
             .map(|v| Bytes::from(v.as_bytes().to_vec()));
 
-        update_ttls_from_headers(entry, &res_headers);
+        update_ttls_from_policy_and_headers(entry, matched_policy.as_ref(), &res_headers);
         entry.size = entry.data.memory_usage();
         entry.version += 1;
 
@@ -519,43 +645,36 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
     )))
 }
 
-/// Parses Cache-Control headers from the origin's response to update TTLs.
-fn update_ttls_from_headers(entry: &mut StoredValue, headers: &HeaderMap) {
-    let now = Instant::now();
-    let mut fresh_duration_secs = 0;
+/// Parses Cache-Control headers and combines with policy to update TTLs.
+fn update_ttls_from_policy_and_headers(
+    entry: &mut StoredValue,
+    policy: Option<&CachePolicy>,
+    headers: &HeaderMap,
+) {
+    let (mut final_ttl, mut final_swr, final_grace) = if let Some(p) = policy {
+        (p.ttl, p.swr, p.grace)
+    } else {
+        (None, None, None)
+    };
 
-    if let Some(cc_header) = headers
-        .get(reqwest::header::CACHE_CONTROL)
-        .and_then(|v| v.to_str().ok())
-    {
-        for part in cc_header.split(',') {
-            if let Some(val_str) = part.trim().strip_prefix("max-age=") {
-                if let Ok(secs) = val_str.parse::<u64>() {
-                    fresh_duration_secs = secs;
-                }
+    let respect_origin = policy.is_some_and(|p| p.respect_origin_headers);
+
+    if respect_origin {
+        if let Some(cc_header) = headers
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+        {
+            let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
+            if parsed_ttl.is_some() {
+                final_ttl = parsed_ttl;
+            }
+            if parsed_swr.is_some() {
+                final_swr = parsed_swr;
             }
         }
     }
 
-    if fresh_duration_secs > 0 {
-        let fresh_duration = Duration::from_secs(fresh_duration_secs);
-        let old_swr = entry
-            .stale_revalidate_expiry
-            .zip(entry.expiry)
-            .and_then(|(swr, exp)| swr.checked_duration_since(exp));
-        let old_grace = entry
-            .grace_expiry
-            .zip(entry.stale_revalidate_expiry)
-            .and_then(|(grace, swr)| grace.checked_duration_since(swr));
-
-        entry.expiry = Some(now + fresh_duration);
-        if let Some(swr) = old_swr {
-            entry.stale_revalidate_expiry = Some(now + fresh_duration + swr);
-        }
-        if let (Some(swr), Some(grace)) = (old_swr, old_grace) {
-            entry.grace_expiry = Some(now + fresh_duration + swr + grace);
-        }
-    }
+    apply_ttl_options(entry, final_ttl, final_swr, final_grace);
 }
 
 impl CommandSpec for CacheGet {
@@ -566,8 +685,6 @@ impl CommandSpec for CacheGet {
         -2
     }
     fn flags(&self) -> CommandFlags {
-        // Can result in a write during revalidation, but is mostly a read operation.
-        // We mark it as WRITE to ensure correct propagation behavior if revalidation happens.
         CommandFlags::WRITE | CommandFlags::MOVABLEKEYS
     }
     fn first_key(&self) -> i64 {

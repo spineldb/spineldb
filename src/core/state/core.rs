@@ -18,9 +18,9 @@ use crate::core::latency::LatencyMonitor;
 use crate::core::pubsub::PubSubManager;
 use crate::core::replication::backlog::ReplicationBacklog;
 use crate::core::scripting::lua_manager::LuaManager;
-use crate::core::storage::data_types::StoredValue;
 use crate::core::storage::db::Db;
 use crate::core::stream_blocking::StreamBlockerManager;
+use crate::core::tasks::lazy_free::LazyFreeItem;
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -41,8 +41,8 @@ pub struct ServerInit {
     pub aof_fsync_request_rx: mpsc::Receiver<()>,
     /// A watch channel to notify the AOF writer that a rewrite has completed.
     pub aof_rewrite_complete_rx: watch::Receiver<()>,
-    /// A channel to send values for asynchronous deallocation (e.g., from `UNLINK`).
-    pub lazy_free_rx: mpsc::Receiver<Vec<StoredValue>>,
+    /// A channel to send items for asynchronous deallocation (e.g., from `UNLINK`).
+    pub lazy_free_rx: mpsc::Receiver<Vec<LazyFreeItem>>,
     /// A channel for command handlers to send messages to the cluster gossip task.
     pub cluster_gossip_rx: mpsc::Receiver<GossipTaskMessage>,
     /// A broadcast channel to signal replication workers to reconfigure (e.g., after failover).

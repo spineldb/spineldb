@@ -8,21 +8,27 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// Represents the location of a cache body, either in RAM or on disk.
+/// Represents the location and state of a cache body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheBody {
     /// The cache body is stored in memory.
     InMemory(Bytes),
     /// The cache body is stored on disk at the specified path.
     OnDisk { path: PathBuf, size: u64 },
+    /// Represents a negatively cached response (e.g., from a 404 or 500 origin error).
+    Negative { status: u16, body: Option<Bytes> },
+    /// The cache body is stored compressed (zstd) in memory.
+    CompressedInMemory { original_size: usize, data: Bytes },
 }
 
 impl CacheBody {
-    /// Returns the size of the cache body in bytes.
+    /// Returns the original, uncompressed size of the cache body in bytes.
     pub fn len(&self) -> usize {
         match self {
             CacheBody::InMemory(b) => b.len(),
             CacheBody::OnDisk { size, .. } => *size as usize,
+            CacheBody::Negative { body, .. } => body.as_ref().map_or(0, |b| b.len()),
+            CacheBody::CompressedInMemory { original_size, .. } => *original_size,
         }
     }
 
@@ -41,6 +47,8 @@ pub struct HttpMetadata {
     pub last_modified: Option<Bytes>,
     /// The URL used to fetch/revalidate this content, essential for proactive revalidation.
     pub revalidate_url: Option<String>,
+    /// The content encoding used if the body is compressed (e.g., "zstd").
+    pub content_encoding: Option<Bytes>,
 }
 
 impl HttpMetadata {
@@ -49,7 +57,8 @@ impl HttpMetadata {
         let etag_size = self.etag.as_ref().map_or(0, |b| b.len());
         let lm_size = self.last_modified.as_ref().map_or(0, |b| b.len());
         let url_size = self.revalidate_url.as_ref().map_or(0, |s| s.len());
-        etag_size + lm_size + url_size
+        let encoding_size = self.content_encoding.as_ref().map_or(0, |b| b.len());
+        etag_size + lm_size + url_size + encoding_size
     }
 }
 
@@ -77,7 +86,8 @@ pub struct CachePolicy {
     pub name: String,
     /// A glob pattern that matches cache keys this policy applies to.
     pub key_pattern: String,
-    /// A URL template for fetching content from the origin.
+    /// A URL template for fetching content from the origin. Can contain placeholders
+    /// from the key pattern (e.g., `{1}`) or request headers (e.g., `{hdr:Header-Name}`).
     pub url_template: String,
     /// The time-to-live in seconds for fresh content.
     pub ttl: Option<u64>,
@@ -101,6 +111,20 @@ pub struct CachePolicy {
     /// CACHE.PROXY will automatically use these headers to create cache variants.
     #[serde(default)]
     pub vary_on: Vec<String>,
+    /// If true, the server will try to parse Cache-Control headers from the origin.
+    #[serde(default)]
+    pub respect_origin_headers: bool,
+    /// A policy-specific TTL for negative caching.
+    pub negative_ttl: Option<u64>,
+    /// The priority of the policy (higher numbers are checked first) when a key matches multiple policies.
+    #[serde(default)]
+    pub priority: u8,
+    /// If true, enables transparent compression (zstd) for items cached under this policy.
+    #[serde(default)]
+    pub compression: bool,
+    /// If true, forces items to be stored on disk, even if smaller than the streaming threshold.
+    #[serde(default)]
+    pub force_disk: bool,
 }
 
 /// The persistent state of an on-disk cache file, logged in the manifest.
@@ -123,4 +147,6 @@ pub struct ManifestEntry {
     pub state: ManifestState,
     /// The path to the on-disk cache file.
     pub path: PathBuf,
+    /// The key associated with this file, used for eviction.
+    pub key: Bytes,
 }

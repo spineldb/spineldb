@@ -4,7 +4,7 @@
 
 use super::context::ServerContext;
 use super::metrics_server;
-use crate::config::AppendFsync;
+use crate::config::{AppendFsync, ReplicationConfig};
 use crate::core::cluster;
 use crate::core::persistence::AofWriterTask;
 use crate::core::persistence::spldb_saver::SpldbSaverTask;
@@ -19,6 +19,7 @@ use crate::core::tasks::{
     cache_tag_validator::CacheTagValidatorTask,
     eviction::EvictionManager,
     lazy_free::LazyFreeManager,
+    on_disk_cache_eviction::OnDiskCacheEvictionTask,
     persistence::AofRewriteManager,
     replica_quorum_validator::ReplicaQuorumValidatorTask,
 };
@@ -32,6 +33,7 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
     let shutdown_tx = &ctx.shutdown_tx;
     let background_tasks = &mut ctx.background_tasks;
 
+    // Consume the one-shot initialization channels.
     let server_init = std::mem::replace(
         &mut ctx.init_channels,
         crate::core::state::ServerInit {
@@ -117,6 +119,15 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
             gc_task.run(shutdown_rx_gc).await;
             Ok(())
         });
+
+        if config_clone.cache.max_disk_size > 0 {
+            let eviction_task = OnDiskCacheEvictionTask::new(server_state.clone());
+            let shutdown_rx_evict = shutdown_tx.subscribe();
+            background_tasks.spawn(async move {
+                eviction_task.run(shutdown_rx_evict).await;
+                Ok(())
+            });
+        }
     }
 
     let cache_purger = CachePurgerTask::new(server_state.clone());
@@ -126,7 +137,6 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         Ok(())
     });
 
-    // Spawn the cache lock cleaner task to prevent memory leaks.
     let cache_lock_cleaner = CacheLockCleanerTask::new(server_state.clone());
     let shutdown_rx_lock_cleaner = shutdown_tx.subscribe();
     background_tasks.spawn(async move {
@@ -134,13 +144,16 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         Ok(())
     });
 
-    // Spawn the cache tag validator task for cluster mode.
-    let cache_validator = CacheTagValidatorTask::new(server_state.clone());
-    let shutdown_rx_cache_validate = shutdown_tx.subscribe();
-    background_tasks.spawn(async move {
-        cache_validator.run(shutdown_rx_cache_validate).await;
-        Ok(())
-    });
+    if config_clone.cluster.enabled {
+        let cache_validator = CacheTagValidatorTask::new(server_state.clone());
+        let shutdown_rx_cache_validate = shutdown_tx.subscribe();
+        background_tasks.spawn(async move {
+            cache_validator.run(shutdown_rx_cache_validate).await;
+            Ok(())
+        });
+    } else {
+        info!("Cache tag validator runs only in cluster mode. Task will not start.");
+    }
 
     // --- Persistence Tasks ---
     if config_clone.persistence.aof_enabled {
@@ -200,15 +213,21 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
         });
     }
 
-    // --- Replication & Cluster Task ---
-    let replica_quorum_validator = ReplicaQuorumValidatorTask::new(server_state.clone());
-    let shutdown_rx_quorum_validator = shutdown_tx.subscribe();
-    background_tasks.spawn(async move {
-        replica_quorum_validator
-            .run(shutdown_rx_quorum_validator)
-            .await;
-        Ok(())
-    });
+    // --- Replication & Cluster Tasks ---
+    if let ReplicationConfig::Primary(primary_config) = &config_clone.replication {
+        if primary_config.fencing_on_replica_disconnect {
+            let replica_quorum_validator = ReplicaQuorumValidatorTask::new(server_state.clone());
+            let shutdown_rx_quorum_validator = shutdown_tx.subscribe();
+            background_tasks.spawn(async move {
+                replica_quorum_validator
+                    .run(shutdown_rx_quorum_validator)
+                    .await;
+                Ok(())
+            });
+        } else {
+            info!("Replica quorum fencing is disabled. Validator task will not run.");
+        }
+    }
 
     if config_clone.cluster.enabled {
         let state_clone = server_state.clone();

@@ -7,7 +7,8 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    Counter, Gauge, Histogram, TextEncoder, register_counter, register_gauge, register_histogram,
+    Counter, CounterVec, Gauge, Histogram, TextEncoder, register_counter, register_counter_vec,
+    register_gauge, register_histogram,
 };
 
 lazy_static! {
@@ -45,12 +46,12 @@ lazy_static! {
 
 
     // --- Cache Counters ---
-    /// The total number of successful cache lookups.
-    pub static ref CACHE_HITS_TOTAL: Counter =
-        register_counter!("spineldb_cache_hits_total", "Total number of cache hits.").unwrap();
-    /// The total number of failed cache lookups.
-    pub static ref CACHE_MISSES_TOTAL: Counter =
-        register_counter!("spineldb_cache_misses_total", "Total number of cache misses.").unwrap();
+    /// The total number of successful cache lookups, labeled by the cache policy used.
+    pub static ref CACHE_HITS_TOTAL: CounterVec =
+        register_counter_vec!("spineldb_cache_hits_total", "Total number of cache hits, labeled by policy.", &["policy"]).unwrap();
+    /// The total number of failed cache lookups, labeled by the cache policy used.
+    pub static ref CACHE_MISSES_TOTAL: CounterVec =
+        register_counter_vec!("spineldb_cache_misses_total", "Total number of cache misses, labeled by policy.", &["policy"]).unwrap();
     /// The total number of cache items evicted due to memory pressure.
     pub static ref CACHE_EVICTIONS_TOTAL: Counter =
         register_counter!("spineldb_cache_evictions_total", "Total number of cache keys evicted.").unwrap();

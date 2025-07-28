@@ -39,7 +39,13 @@ async fn main() -> Result<()> {
         // It defaults to a more verbose level for sentinel-specific modules.
         let log_level = std::env::var("RUST_LOG")
             .unwrap_or_else(|_| "info,spineldb::core::warden=debug".to_string());
-        tracing_subscriber::fmt().with_env_filter(log_level).init();
+
+        // Setup logging with compact format and ANSI colors for Warden mode.
+        tracing_subscriber::fmt()
+            .with_env_filter(log_level)
+            .compact()
+            .with_ansi(true)
+            .init();
 
         info!("Starting SpinelDB in Warden mode...");
 
@@ -78,21 +84,25 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Setup logging with reloading capabilities
-        // Get initial log level from env var or config
+        // Setup logging with reloading capabilities.
+        // Get initial log level from env var or config.
         let initial_log_level =
             std::env::var("RUST_LOG").unwrap_or_else(|_| config.log_level.clone());
 
-        // Create a reloadable filter layer
+        // Create a reloadable filter layer.
         let (filter, reload_handle) = reload::Layer::new(EnvFilter::new(initial_log_level));
 
-        // Initialize the global subscriber with the reload layer
+        // Initialize the global subscriber with the reload and formatting layers.
         tracing_subscriber::registry()
             .with(filter)
-            .with(tracing_subscriber::fmt::layer())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .compact() // Use the compact, single-line format.
+                    .with_ansi(true), // Enable ANSI color codes for log levels.
+            )
             .init();
 
-        // Store the handle in an Arc to be used later
+        // Store the handle in an Arc to be used for dynamic log level changes.
         let reload_handle = Arc::new(reload_handle);
 
         // Pass the handle to server::run
