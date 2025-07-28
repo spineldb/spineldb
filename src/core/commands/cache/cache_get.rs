@@ -1,10 +1,10 @@
 // src/core/commands/cache/cache_get.rs
-
 //! Implements the `CACHE.GET` command, which retrieves a cached object.
 //! This implementation supports content variants via the `Vary` header,
 //! and advanced stale content serving strategies like stale-while-revalidate.
 
 use super::helpers::calculate_variant_hash;
+use crate::core::commands::cache::cache_set::apply_ttl_options;
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
@@ -13,7 +13,7 @@ use crate::core::commands::helpers::{ArgParser, extract_bytes};
 use crate::core::handler::command_router::RouteResponse;
 use crate::core::protocol::RespFrame;
 use crate::core::state::ServerState;
-use crate::core::storage::cache_types::CacheBody;
+use crate::core::storage::cache_types::{CacheBody, CachePolicy};
 use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
@@ -23,9 +23,10 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, IF_MODIFIED_SINCE, IF_
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::File as TokioFile;
-use tokio::io::copy as tokio_copy;
+use tokio::io::{AsyncReadExt, copy as tokio_copy};
 use tokio::sync::MutexGuard;
 use tracing::{debug, warn};
+use wildmatch::WildMatch;
 
 /// Represents the `CACHE.GET` command with its parsed options.
 #[derive(Debug, Clone, Default)]
@@ -80,6 +81,29 @@ impl ParseCommand for CacheGet {
         }
         Ok(cmd)
     }
+}
+
+/// Parses Cache-Control header to extract max-age and stale-while-revalidate.
+fn parse_cache_control(header_value: &str) -> (Option<u64>, Option<u64>) {
+    let mut max_age = None;
+    let mut swr = None;
+    for directive in header_value.split(',') {
+        let parts: Vec<&str> = directive.trim().splitn(2, '=').collect();
+        if parts.len() == 2 {
+            let key = parts[0];
+            let value = parts[1];
+            if key.eq_ignore_ascii_case("max-age") || key.eq_ignore_ascii_case("s-maxage") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    max_age = Some(seconds);
+                }
+            } else if key.eq_ignore_ascii_case("stale-while-revalidate") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    swr = Some(seconds);
+                }
+            }
+        }
+    }
+    (max_age, swr)
 }
 
 #[async_trait]
@@ -185,10 +209,11 @@ impl CacheGet {
         variant.last_accessed = Instant::now();
 
         if let CacheBody::Negative { status, body } = &variant.body {
-            return Err(SpinelDBError::InvalidState(format!(
-                "Origin responded with status {status}: {}",
-                String::from_utf8_lossy(body.as_ref().unwrap_or(&Bytes::new()))
-            )));
+            return Ok(RouteResponse::Single(RespValue::Array(vec![
+                RespValue::Integer(*status as i64),
+                RespValue::Array(vec![]),
+                RespValue::BulkString(body.clone().unwrap_or_default()),
+            ])));
         }
 
         if let Some(req_etag) = &self.if_none_match {
@@ -206,7 +231,27 @@ impl CacheGet {
         crate::core::metrics::CACHE_HITS_TOTAL
             .with_label_values(&["none"])
             .inc();
-        Self::create_body_response(&variant.body).await
+
+        let body_response = Self::create_body_response(&variant.body).await?;
+        let final_body = match body_response {
+            RouteResponse::Single(RespValue::BulkString(bytes)) => bytes,
+            RouteResponse::StreamBody { mut file, .. } => {
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer).await?;
+                Bytes::from(buffer)
+            }
+            _ => {
+                return Err(SpinelDBError::Internal(
+                    "Unexpected response type from create_body_response".into(),
+                ));
+            }
+        };
+
+        Ok(RouteResponse::Single(RespValue::Array(vec![
+            RespValue::Integer(200),
+            RespValue::Array(vec![]),
+            RespValue::BulkString(final_body),
+        ])))
     }
 
     /// Serves stale content while triggering a background revalidation.
@@ -475,6 +520,15 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
         url
     );
 
+    let matched_policy = {
+        let key_str = String::from_utf8_lossy(&key);
+        let policies = state.cache.policies.read().await;
+        policies
+            .iter()
+            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str))
+            .cloned()
+    };
+
     let Some(entry) = guard.get_mut(&key) else {
         return Err(SpinelDBError::KeyNotFound);
     };
@@ -537,7 +591,12 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
         crate::core::metrics::CACHE_HITS_TOTAL
             .with_label_values(&["none"])
             .inc();
-        update_ttls_from_headers(entry, &res_headers);
+        update_ttls_from_policy_and_headers(entry, matched_policy.as_ref(), &res_headers);
+        if let DataValue::HttpCache { variants, .. } = &mut entry.data {
+            if let Some(variant) = variants.get_mut(&variant_hash) {
+                variant.last_accessed = Instant::now();
+            }
+        }
         entry.version += 1;
         return Ok(None);
     }
@@ -546,6 +605,16 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
         let new_body_bytes = res.bytes().await?;
         let new_body = CacheBody::InMemory(new_body_bytes);
 
+        let DataValue::HttpCache { variants, .. } = &mut entry.data else {
+            return Err(SpinelDBError::WrongType);
+        };
+        let Some(variant) = variants.get_mut(&variant_hash) else {
+            return Err(SpinelDBError::Internal(
+                "Cache variant disappeared during revalidation".into(),
+            ));
+        };
+
+        variant.last_accessed = Instant::now();
         variant.body = new_body.clone();
         variant.metadata.etag = res_headers
             .get(reqwest::header::ETAG)
@@ -554,7 +623,7 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
             .get(reqwest::header::LAST_MODIFIED)
             .map(|v| Bytes::from(v.as_bytes().to_vec()));
 
-        update_ttls_from_headers(entry, &res_headers);
+        update_ttls_from_policy_and_headers(entry, matched_policy.as_ref(), &res_headers);
         entry.size = entry.data.memory_usage();
         entry.version += 1;
 
@@ -576,43 +645,36 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
     )))
 }
 
-/// Parses Cache-Control headers from the origin's response to update TTLs.
-fn update_ttls_from_headers(entry: &mut StoredValue, headers: &HeaderMap) {
-    let now = Instant::now();
-    let mut fresh_duration_secs = 0;
+/// Parses Cache-Control headers and combines with policy to update TTLs.
+fn update_ttls_from_policy_and_headers(
+    entry: &mut StoredValue,
+    policy: Option<&CachePolicy>,
+    headers: &HeaderMap,
+) {
+    let (mut final_ttl, mut final_swr, final_grace) = if let Some(p) = policy {
+        (p.ttl, p.swr, p.grace)
+    } else {
+        (None, None, None)
+    };
 
-    if let Some(cc_header) = headers
-        .get(reqwest::header::CACHE_CONTROL)
-        .and_then(|v| v.to_str().ok())
-    {
-        for part in cc_header.split(',') {
-            if let Some(val_str) = part.trim().strip_prefix("max-age=") {
-                if let Ok(secs) = val_str.parse::<u64>() {
-                    fresh_duration_secs = secs;
-                }
+    let respect_origin = policy.is_some_and(|p| p.respect_origin_headers);
+
+    if respect_origin {
+        if let Some(cc_header) = headers
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+        {
+            let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
+            if parsed_ttl.is_some() {
+                final_ttl = parsed_ttl;
+            }
+            if parsed_swr.is_some() {
+                final_swr = parsed_swr;
             }
         }
     }
 
-    if fresh_duration_secs > 0 {
-        let fresh_duration = Duration::from_secs(fresh_duration_secs);
-        let old_swr = entry
-            .stale_revalidate_expiry
-            .zip(entry.expiry)
-            .and_then(|(swr, exp)| swr.checked_duration_since(exp));
-        let old_grace = entry
-            .grace_expiry
-            .zip(entry.stale_revalidate_expiry)
-            .and_then(|(grace, swr)| grace.checked_duration_since(swr));
-
-        entry.expiry = Some(now + fresh_duration);
-        if let Some(swr) = old_swr {
-            entry.stale_revalidate_expiry = Some(now + fresh_duration + swr);
-        }
-        if let (Some(swr), Some(grace)) = (old_swr, old_grace) {
-            entry.grace_expiry = Some(now + fresh_duration + swr + grace);
-        }
-    }
+    apply_ttl_options(entry, final_ttl, final_swr, final_grace);
 }
 
 impl CommandSpec for CacheGet {

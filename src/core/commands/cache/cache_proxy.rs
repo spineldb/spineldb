@@ -1,5 +1,4 @@
 // src/core/commands/cache/cache_proxy.rs
-
 //! Implements the `CACHE.PROXY` command, which provides a convenient
 //! get-or-fetch pattern. It attempts to retrieve a key, and if it's a
 //! cache miss, it automatically fetches from an origin and caches the result.
@@ -313,18 +312,28 @@ impl CacheProxy {
 
         let (outcome, _write_outcome) = fetch_cmd.fetch_from_origin(&ctx.state, false).await?;
 
-        let body_bytes = match outcome {
-            FetchOutcome::InMemory(bytes) => bytes,
-            FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
-            FetchOutcome::Negative { status, body } => {
-                return Err(SpinelDBError::InvalidState(format!(
-                    "Origin responded with status {status}: {}",
-                    String::from_utf8_lossy(&body.unwrap_or_default())
-                )));
+        match outcome {
+            FetchOutcome::InMemory(bytes) => Ok(RouteResponse::Single(RespValue::Array(vec![
+                RespValue::Integer(200),
+                RespValue::Array(vec![]),
+                RespValue::BulkString(bytes),
+            ]))),
+            FetchOutcome::OnDisk { path, .. } => {
+                let body = tokio::fs::read(&path).await?.into();
+                Ok(RouteResponse::Single(RespValue::Array(vec![
+                    RespValue::Integer(200),
+                    RespValue::Array(vec![]),
+                    RespValue::BulkString(body),
+                ])))
             }
-        };
-
-        Ok(RouteResponse::Single(RespValue::BulkString(body_bytes)))
+            FetchOutcome::Negative { status, body } => {
+                Ok(RouteResponse::Single(RespValue::Array(vec![
+                    RespValue::Integer(status as i64),
+                    RespValue::Array(vec![]),
+                    RespValue::BulkString(body.unwrap_or_default()),
+                ])))
+            }
+        }
     }
 }
 

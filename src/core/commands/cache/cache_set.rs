@@ -1,5 +1,4 @@
 // src/core/commands/cache/cache_set.rs
-
 //! Implements the `CACHE.SET` command, which stores an object in the cache with
 //! advanced options for TTL, tagging, and content negotiation.
 
@@ -120,6 +119,33 @@ impl ParseCommand for CacheSet {
         }
 
         Ok(cmd)
+    }
+}
+
+/// Sets the expiry, SWR, and Grace timestamps on a StoredValue based on command options.
+pub(super) fn apply_ttl_options(
+    value: &mut StoredValue,
+    ttl: Option<u64>,
+    swr: Option<u64>,
+    grace: Option<u64>,
+) {
+    let now = Instant::now();
+    if let Some(ttl_seconds) = ttl {
+        if ttl_seconds > 0 {
+            let fresh_duration = Duration::from_secs(ttl_seconds);
+            value.expiry = Some(now + fresh_duration);
+
+            let swr_duration = Duration::from_secs(swr.unwrap_or(0));
+            value.stale_revalidate_expiry = Some(now + fresh_duration + swr_duration);
+
+            let grace_duration = Duration::from_secs(grace.unwrap_or(0));
+            value.grace_expiry = Some(now + fresh_duration + swr_duration + grace_duration);
+        } else {
+            // A TTL of 0 means the item has no expiry.
+            value.expiry = None;
+            value.stale_revalidate_expiry = None;
+            value.grace_expiry = None;
+        }
     }
 }
 
@@ -290,21 +316,7 @@ impl CacheSet {
             tags_epoch,
         });
 
-        let now = Instant::now();
-        if let Some(ttl_seconds) = self.ttl {
-            if ttl_seconds > 0 {
-                let fresh_duration = Duration::from_secs(ttl_seconds);
-                new_stored_value.expiry = Some(now + fresh_duration);
-
-                let swr_duration = Duration::from_secs(self.swr.unwrap_or(0));
-                new_stored_value.stale_revalidate_expiry =
-                    Some(now + fresh_duration + swr_duration);
-
-                let grace_duration = Duration::from_secs(self.grace.unwrap_or(0));
-                new_stored_value.grace_expiry =
-                    Some(now + fresh_duration + swr_duration + grace_duration);
-            }
-        }
+        apply_ttl_options(&mut new_stored_value, self.ttl, self.swr, self.grace);
 
         guard.remove_key_from_tags(&self.key);
         guard.add_tags_for_key(self.key.clone(), &self.tags);
