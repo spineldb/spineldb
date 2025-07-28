@@ -24,6 +24,8 @@ use super::cache_proxy::CacheProxy;
 use super::cache_purge::CachePurge;
 use super::cache_purgetag::CachePurgeTag;
 use super::cache_set::CacheSet;
+use super::cache_softpurge::CacheSoftPurge;
+use super::cache_softpurgetag::CacheSoftPurgeTag;
 use super::cache_stats::CacheStats;
 
 /// Enum to hold all possible parsed `CACHE` subcommands.
@@ -41,6 +43,8 @@ pub enum CacheSubcommand {
     Unlock(CacheLock),
     Bypass(CacheBypass),
     Info(CacheInfo),
+    SoftPurge(CacheSoftPurge),
+    SoftPurgeTag(CacheSoftPurgeTag),
 }
 
 /// The main `Cache` command struct that holds a specific subcommand.
@@ -90,6 +94,10 @@ impl ParseCommand for Cache {
             ])?),
             "bypass" => CacheSubcommand::Bypass(CacheBypass::parse(command_args)?),
             "info" => CacheSubcommand::Info(CacheInfo::parse(command_args)?),
+            "softpurge" => CacheSubcommand::SoftPurge(CacheSoftPurge::parse(command_args)?),
+            "softpurgetag" => {
+                CacheSubcommand::SoftPurgeTag(CacheSoftPurgeTag::parse(command_args)?)
+            }
             _ => return Err(SpinelDBError::UnknownCommand(format!("CACHE {sub_str}"))),
         };
 
@@ -117,6 +125,8 @@ impl ExecutableCommand for Cache {
             CacheSubcommand::Unlock(cmd) => cmd.execute(ctx).await,
             CacheSubcommand::Bypass(cmd) => cmd.execute(ctx).await,
             CacheSubcommand::Info(cmd) => cmd.execute(ctx).await,
+            CacheSubcommand::SoftPurge(cmd) => cmd.execute(ctx).await,
+            CacheSubcommand::SoftPurgeTag(cmd) => cmd.execute(ctx).await,
         }
     }
 }
@@ -145,6 +155,8 @@ impl CommandSpec for Cache {
             CacheSubcommand::Unlock(cmd) => cmd.flags(),
             CacheSubcommand::Bypass(cmd) => cmd.flags(),
             CacheSubcommand::Info(cmd) => cmd.flags(),
+            CacheSubcommand::SoftPurge(cmd) => cmd.flags(),
+            CacheSubcommand::SoftPurgeTag(cmd) => cmd.flags(),
         }
     }
 
@@ -157,9 +169,11 @@ impl CommandSpec for Cache {
             | CacheSubcommand::Bypass(_)
             | CacheSubcommand::Info(_) => 2,
             CacheSubcommand::Lock(cmd) | CacheSubcommand::Unlock(cmd) => cmd.first_key(),
+            CacheSubcommand::SoftPurge(cmd) => cmd.first_key(),
             CacheSubcommand::PurgeTag(_)
             | CacheSubcommand::Stats(_)
             | CacheSubcommand::Policy(_)
+            | CacheSubcommand::SoftPurgeTag(_)
             | CacheSubcommand::Purge(_) => 0,
         }
     }
@@ -173,6 +187,7 @@ impl CommandSpec for Cache {
             | CacheSubcommand::Bypass(_)
             | CacheSubcommand::Info(_) => 2,
             CacheSubcommand::Lock(cmd) | CacheSubcommand::Unlock(cmd) => cmd.last_key(),
+            CacheSubcommand::SoftPurge(cmd) => cmd.last_key(),
             _ => 0,
         }
     }
@@ -186,6 +201,7 @@ impl CommandSpec for Cache {
             | CacheSubcommand::Bypass(_)
             | CacheSubcommand::Info(_) => 1,
             CacheSubcommand::Lock(cmd) | CacheSubcommand::Unlock(cmd) => cmd.step(),
+            CacheSubcommand::SoftPurge(cmd) => cmd.step(),
             _ => 0,
         }
     }
@@ -204,6 +220,8 @@ impl CommandSpec for Cache {
             CacheSubcommand::Unlock(cmd) => cmd.get_keys(),
             CacheSubcommand::Bypass(cmd) => cmd.get_keys(),
             CacheSubcommand::Info(cmd) => cmd.get_keys(),
+            CacheSubcommand::SoftPurge(cmd) => cmd.get_keys(),
+            CacheSubcommand::SoftPurgeTag(cmd) => cmd.get_keys(),
         }
     }
 
@@ -266,6 +284,16 @@ impl CommandSpec for Cache {
             }
             CacheSubcommand::Info(cmd) => {
                 let mut args = vec![Bytes::from_static(b"INFO")];
+                args.extend(cmd.to_resp_args());
+                args
+            }
+            CacheSubcommand::SoftPurge(cmd) => {
+                let mut args = vec![Bytes::from_static(b"SOFTPURGE")];
+                args.extend(cmd.to_resp_args());
+                args
+            }
+            CacheSubcommand::SoftPurgeTag(cmd) => {
+                let mut args = vec![Bytes::from_static(b"SOFTPURGETAG")];
                 args.extend(cmd.to_resp_args());
                 args
             }

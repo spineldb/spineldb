@@ -1,5 +1,7 @@
 // src/core/commands/cache/cache_info.rs
 
+//! Implements the `CACHE.INFO` command for detailed cache entry introspection.
+
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
@@ -13,6 +15,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::time::Instant;
 
+/// Represents the `CACHE.INFO` command.
 #[derive(Debug, Clone, Default)]
 pub struct CacheInfo {
     pub key: Bytes,
@@ -29,6 +32,7 @@ impl ParseCommand for CacheInfo {
 
 #[async_trait]
 impl ExecutableCommand for CacheInfo {
+    /// Executes the command, gathering detailed information about a cache entry.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -38,34 +42,47 @@ impl ExecutableCommand for CacheInfo {
             return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
         };
         if entry.is_expired() {
+            // Return Null for expired keys, as they are effectively non-existent.
             return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
         }
 
         if let DataValue::HttpCache {
-            variants, vary_on, ..
+            variants,
+            vary_on,
+            tags_epoch,
         } = &entry.data
         {
             let mut info = Vec::new();
             let now = Instant::now();
 
+            // --- Top-Level Information ---
             if let Some(exp) = entry.expiry {
                 info.push(RespValue::BulkString("ttl".into()));
                 info.push(RespValue::Integer(
                     exp.saturating_duration_since(now).as_secs() as i64,
                 ));
+            } else {
+                info.push(RespValue::BulkString("ttl".into()));
+                info.push(RespValue::Integer(-1)); // No expiry
             }
+
             if let Some(exp) = entry.stale_revalidate_expiry {
                 info.push(RespValue::BulkString("swr_ttl".into()));
                 info.push(RespValue::Integer(
                     exp.saturating_duration_since(now).as_secs() as i64,
                 ));
             }
+
             if let Some(exp) = entry.grace_expiry {
                 info.push(RespValue::BulkString("grace_ttl".into()));
                 info.push(RespValue::Integer(
                     exp.saturating_duration_since(now).as_secs() as i64,
                 ));
             }
+
+            info.push(RespValue::BulkString("tags_epoch".into()));
+            info.push(RespValue::Integer(*tags_epoch as i64));
+
             info.push(RespValue::BulkString("variants_count".into()));
             info.push(RespValue::Integer(variants.len() as i64));
 
@@ -77,6 +94,7 @@ impl ExecutableCommand for CacheInfo {
             info.push(RespValue::BulkString("vary_on".into()));
             info.push(RespValue::BulkString(vary_on_str.into()));
 
+            // --- Per-Variant Information ---
             let variants_info: Vec<RespValue> = variants
                 .iter()
                 .map(|(hash, variant)| {
@@ -94,15 +112,25 @@ impl ExecutableCommand for CacheInfo {
                             })
                             .into(),
                         ),
+                        RespValue::BulkString("last_accessed_seconds_ago".into()),
+                        RespValue::Integer(variant.last_accessed.elapsed().as_secs() as i64),
                     ];
                     if let Some(etag) = &variant.metadata.etag {
                         variant_details.push(RespValue::BulkString("etag".into()));
                         variant_details.push(RespValue::BulkString(etag.clone()));
                     }
-                    variant_details
+                    if let Some(lm) = &variant.metadata.last_modified {
+                        variant_details.push(RespValue::BulkString("last-modified".into()));
+                        variant_details.push(RespValue::BulkString(lm.clone()));
+                    }
+                    if let Some(url) = &variant.metadata.revalidate_url {
+                        variant_details.push(RespValue::BulkString("revalidate_url".into()));
+                        variant_details.push(RespValue::BulkString(url.clone().into()));
+                    }
+                    RespValue::Array(variant_details)
                 })
-                .map(RespValue::Array)
                 .collect();
+
             info.push(RespValue::BulkString("variants".into()));
             info.push(RespValue::Array(variants_info));
 

@@ -10,5 +10,6 @@ pub mod cache_revalidator;
 pub mod cache_tag_validator;
 pub mod eviction;
 pub mod lazy_free;
+pub mod on_disk_cache_eviction;
 pub mod persistence;
 pub mod replica_quorum_validator;

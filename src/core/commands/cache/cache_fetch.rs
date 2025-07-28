@@ -25,6 +25,7 @@ use tokio::fs::{File as TokioFile, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, warn};
 use uuid::Uuid;
+use wildmatch::WildMatch;
 
 /// The cloneable result of a shared origin fetch operation. This allows the outcome
 /// of a single fetch to be distributed to multiple waiting clients.
@@ -47,6 +48,29 @@ pub struct CacheFetch {
     pub tags: Vec<Bytes>,
     pub vary: Option<Bytes>,
     pub headers: Option<Vec<(Bytes, Bytes)>>,
+}
+
+/// Parses Cache-Control header to extract max-age and stale-while-revalidate.
+fn parse_cache_control(header_value: &str) -> (Option<u64>, Option<u64>) {
+    let mut max_age = None;
+    let mut swr = None;
+    for directive in header_value.split(',') {
+        let parts: Vec<&str> = directive.trim().splitn(2, '=').collect();
+        if parts.len() == 2 {
+            let key = parts[0];
+            let value = parts[1];
+            if key.eq_ignore_ascii_case("max-age") || key.eq_ignore_ascii_case("s-maxage") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    max_age = Some(seconds);
+                }
+            } else if key.eq_ignore_ascii_case("stale-while-revalidate") {
+                if let Ok(seconds) = value.parse::<u64>() {
+                    swr = Some(seconds);
+                }
+            }
+        }
+    }
+    (max_age, swr)
 }
 
 impl ParseCommand for CacheFetch {
@@ -278,7 +302,7 @@ impl CacheFetch {
         server_state: &Arc<ServerState>,
         mut bypass_store: bool,
     ) -> Result<(FetchOutcome, WriteOutcome), SpinelDBError> {
-        let (streaming_threshold, cache_path, negative_cache_ttl) = {
+        let (streaming_threshold, cache_path, global_negative_ttl) = {
             let config = server_state.config.lock().await;
             (
                 config.cache.streaming_threshold_bytes,
@@ -286,6 +310,16 @@ impl CacheFetch {
                 config.cache.negative_cache_ttl_seconds,
             )
         };
+
+        // Find a matching policy to get additional options
+        let key_str = String::from_utf8_lossy(&self.key);
+        let policies = server_state.cache.policies.read().await;
+        let matched_policy = policies
+            .iter()
+            .find(|p| WildMatch::new(&p.key_pattern).matches(&key_str));
+
+        let respect_origin = matched_policy.is_some_and(|p| p.respect_origin_headers);
+        let policy_negative_ttl = matched_policy.and_then(|p| p.negative_ttl);
 
         server_state.cache.increment_misses();
         let client = reqwest::Client::new();
@@ -299,7 +333,8 @@ impl CacheFetch {
             let status = res.status();
             let error_message = format!("Origin server responded with status {status}");
 
-            if !bypass_store && negative_cache_ttl > 0 {
+            let negative_ttl = policy_negative_ttl.unwrap_or(global_negative_ttl);
+            if !bypass_store && negative_ttl > 0 {
                 let db = server_state.get_db(0).unwrap();
                 let set_cmd_for_lock = Command::Cache(crate::core::commands::cache::Cache {
                     subcommand: crate::core::commands::cache::command::CacheSubcommand::Set(
@@ -314,11 +349,10 @@ impl CacheFetch {
                     session_id: 0,
                     authenticated_user: None,
                 };
-
                 let set_cmd_internal = CacheSet {
                     key: self.key.clone(),
                     body_data: Bytes::from(status.as_u16().to_string()),
-                    ttl: Some(negative_cache_ttl),
+                    ttl: Some(negative_ttl),
                     swr: Some(0),
                     grace: Some(0),
                     tags: self.tags.clone(),
@@ -327,14 +361,12 @@ impl CacheFetch {
                     etag: Some(Bytes::from_static(b"__NEGATIVE_CACHE__")),
                     ..Default::default()
                 };
-
                 let _ = set_cmd_internal
                     .execute_internal(
                         &mut temp_ctx,
                         CacheBody::InMemory(set_cmd_internal.body_data.clone()),
                     )
                     .await;
-
                 warn!(
                     "Stored negative cache entry for key '{}' due to origin status {}",
                     String::from_utf8_lossy(&self.key),
@@ -345,6 +377,22 @@ impl CacheFetch {
         }
 
         let headers = res.headers().clone();
+
+        let (mut ttl_override, mut swr_override) = (self.ttl, self.swr);
+        if respect_origin {
+            if let Some(cc_header) = headers
+                .get(reqwest::header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+            {
+                let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
+                if parsed_ttl.is_some() {
+                    ttl_override = parsed_ttl;
+                }
+                if parsed_swr.is_some() {
+                    swr_override = parsed_swr;
+                }
+            }
+        }
 
         if headers
             .get(reqwest::header::VARY)
@@ -371,7 +419,7 @@ impl CacheFetch {
 
             server_state
                 .cache
-                .log_manifest(ManifestState::Pending, final_path.clone())
+                .log_manifest(self.key.clone(), ManifestState::Pending, final_path.clone())
                 .await?;
 
             let mut temp_file = OpenOptions::new()
@@ -380,7 +428,6 @@ impl CacheFetch {
                 .truncate(true)
                 .open(&final_path)
                 .await?;
-
             let mut total_size = 0;
             while let Some(chunk) = res.chunk().await? {
                 temp_file.write_all(&chunk).await?;
@@ -409,9 +456,9 @@ impl CacheFetch {
 
         let set_cmd_internal = CacheSet {
             key: self.key.clone(),
-            body_data: Bytes::new(), // Body is in final_cache_body, not needed here
-            ttl: self.ttl,
-            swr: self.swr,
+            body_data: Bytes::new(),
+            ttl: ttl_override,
+            swr: swr_override,
             grace: self.grace,
             revalidate_url: Some(self.url.clone()),
             etag: headers
@@ -436,7 +483,7 @@ impl CacheFetch {
             locks: db.determine_locks_for_command(&set_cmd_for_lock).await,
             db: &db,
             command: Some(set_cmd_for_lock),
-            session_id: 0, // Internal operation
+            session_id: 0,
             authenticated_user: None,
         };
 
@@ -447,10 +494,9 @@ impl CacheFetch {
         if let CacheBody::OnDisk { path, .. } = final_cache_body {
             server_state
                 .cache
-                .log_manifest(ManifestState::Committed, path)
+                .log_manifest(set_cmd_internal.key.clone(), ManifestState::Committed, path)
                 .await?;
         }
-
         Ok((final_outcome_for_client, write_outcome))
     }
 }

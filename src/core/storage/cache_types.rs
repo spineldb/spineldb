@@ -101,6 +101,11 @@ pub struct CachePolicy {
     /// CACHE.PROXY will automatically use these headers to create cache variants.
     #[serde(default)]
     pub vary_on: Vec<String>,
+    /// If true, the server will try to parse Cache-Control headers from the origin.
+    #[serde(default)]
+    pub respect_origin_headers: bool,
+    /// A policy-specific TTL for negative caching.
+    pub negative_ttl: Option<u64>,
 }
 
 /// The persistent state of an on-disk cache file, logged in the manifest.
@@ -123,4 +128,6 @@ pub struct ManifestEntry {
     pub state: ManifestState,
     /// The path to the on-disk cache file.
     pub path: PathBuf,
+    /// The key associated with this file, used for eviction.
+    pub key: Bytes,
 }

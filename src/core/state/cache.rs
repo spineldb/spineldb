@@ -102,6 +102,7 @@ impl CacheState {
     /// Logs an entry to the on-disk cache manifest file.
     pub async fn log_manifest(
         &self,
+        key: Bytes,
         state: ManifestState,
         path: PathBuf,
     ) -> Result<(), SpinelDBError> {
@@ -114,6 +115,7 @@ impl CacheState {
                     .as_secs(),
                 state,
                 path,
+                key,
             };
             let mut line = serde_json::to_vec(&entry)?;
             line.push(b'\n');

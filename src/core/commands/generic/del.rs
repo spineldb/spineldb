@@ -6,8 +6,9 @@ use crate::core::commands::command_trait::{
 };
 use crate::core::commands::helpers::extract_bytes;
 use crate::core::protocol::RespFrame;
-use crate::core::storage::data_types::{DataValue, StoredValue};
+use crate::core::storage::data_types::DataValue;
 use crate::core::storage::db::{ExecutionContext, ExecutionLocks};
+use crate::core::tasks::lazy_free::LazyFreeItem;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,6 +16,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::error;
 
+/// Represents the `DEL` command.
 #[derive(Debug, Clone, Default)]
 pub struct Del {
     pub keys: Vec<Bytes>,
@@ -35,6 +37,7 @@ impl ParseCommand for Del {
 
 #[async_trait]
 impl ExecutableCommand for Del {
+    /// Executes the DEL command, with logic to auto-UNLINK large values.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -49,10 +52,9 @@ impl ExecutableCommand for Del {
             .safety
             .auto_unlink_on_del_threshold;
 
-        // Collect tasks to be performed after releasing the database locks
-        // to prevent deadlocks with other locking mechanisms (e.g., BlockerManager).
+        // Collect tasks to be performed after releasing the database locks.
         let mut post_lock_tasks: Vec<(Bytes, DataValue)> = Vec::new();
-        let mut values_to_unlink: Vec<StoredValue> = Vec::new();
+        let mut items_to_unlink: Vec<LazyFreeItem> = Vec::new();
 
         // --- Start of Locking Scope ---
         {
@@ -87,7 +89,8 @@ impl ExecutableCommand for Del {
                                 || matches!(popped_value.data, DataValue::HttpCache { .. });
 
                             if should_unlink {
-                                values_to_unlink.push(popped_value);
+                                // Send both key and value to the lazy-free manager.
+                                items_to_unlink.push((key.clone(), popped_value));
                             }
                         }
                     }
@@ -111,21 +114,19 @@ impl ExecutableCommand for Del {
         }
 
         // Dispatch values to the lazy-free thread if necessary.
-        if !values_to_unlink.is_empty() {
+        if !items_to_unlink.is_empty() {
             let state_clone = ctx.state.clone();
             // Spawn a new task to send to the lazy-free channel.
-            // This prevents the command from blocking if the channel is full.
             tokio::spawn(async move {
                 let send_timeout = Duration::from_secs(5);
 
                 // Use a timeout to prevent indefinite blocking if the lazy-free task is stuck.
                 if tokio::time::timeout(
                     send_timeout,
-                    state_clone.persistence.lazy_free_tx.send(values_to_unlink),
+                    state_clone.persistence.lazy_free_tx.send(items_to_unlink),
                 )
                 .await
                 .is_err()
-                // This catches both timeout and channel send errors.
                 {
                     error!(
                         "Failed to send to lazy-free channel within 5 seconds. The task may be unresponsive or have panicked."
