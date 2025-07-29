@@ -21,7 +21,7 @@ Designed for today's architectures, SpinelDB is more than just a key-value store
 SpinelDB combines the beloved simplicity and speed of Redis with the next-generation features and reliability that modern systems demand.
 
 🧠 **Intelligent Caching Engine**
-A built-in, HTTP-aware caching engine. It natively supports **Stale-While-Revalidate (SWR)**, **grace periods**, **`Vary` header** content negotiation, efficient **tag-based invalidation (`CACHE.PURGETAG`)** across a cluster, **conditional revalidation (`IF-NONE-MATCH`, `IF-MODIFIED-SINCE`)**, **forced revalidation (`FORCE-REVALIDATE`)**, and **negative caching**. Offload complex caching logic from your application directly to the database.
+A built-in, HTTP-aware caching engine. It natively supports **Stale-While-Revalidate (SWR)**, **grace periods**, **`Vary` header** content negotiation, efficient **tag-based invalidation (`CACHE.PURGETAG`)** across a cluster, **conditional revalidation (`IF-NONE-MATCH`, `IF-MODIFIED-SINCE`)**, **forced revalidation (`FORCE-REVALIDATE`)**, **negative caching**, and **explicit on-disk storage (`FORCE-DISK`)**. It also allows storing and retrieving **HTTP headers** (`HEADERS` option) with cached content. Offload complex caching logic from your application directly to the database.
 
 🛡️ **Security-First by Design**
 Cluster communications are authenticated with **HMAC-SHA256** to prevent spoofing. User authentication is powered by a modern, rule-based Access Control List (ACL) system with strong **Argon2** password hashing.
@@ -54,7 +54,7 @@ _"Stop building boilerplate caching and data consistency logic in your applicati
 
 *   **Intelligent Caching Engine:**
     *   **`CACHE.PROXY`:** The ultimate get-or-fetch command with declarative policy support.
-    *   **`CACHE.SET/GET`:** Fine-grained control with TTL, Stale-While-Revalidate (SWR), Grace Periods, **conditional revalidation (`IF-NONE-MATCH`, `IF-MODIFIED-SINCE`)**, and **negative caching**.
+    *   **`CACHE.SET/GET`:** Fine-grained control with TTL, Stale-While-Revalidate (SWR), Grace Periods, **conditional revalidation (`IF-NONE-MATCH`, `IF-MODIFIED-SINCE`)**, **negative caching**, **explicit on-disk storage (`FORCE-DISK`)**, and the ability to store and retrieve **HTTP headers** (`HEADERS` option).
     *   **`CACHE.PURGETAG`:** Blazingly fast, tag-based invalidation of multiple keys in a single atomic operation.
     *   **`Vary` Header Support:** Serve different versions of the same resource based on request headers (e.g., `Accept-Language`).
     *   **On-Disk Streaming:** Automatically streams large cache objects to disk to protect memory, with zero performance impact for the client.

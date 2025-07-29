@@ -9,6 +9,14 @@
 
 ---
 
+## 📚 Command Reference
+
+For a complete list of all commands supported by SpinelDB, categorized by their functionality, please refer to the dedicated command reference:
+
+*   ➡️ **[0. Full Command List](./00-command-reference.md)**
+
+---
+
 ## 🚀 Chapter 1: Getting Started
 
 This is the essential starting point for all new users. We'll get you up and running in minutes.

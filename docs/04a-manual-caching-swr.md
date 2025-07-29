@@ -20,7 +20,17 @@ In a traditional cache, an item is either fresh (valid) or expired (invalid). Sp
 
 The `CACHE.SET` command is the primary way to manually place an item into the cache. It's similar to the standard `SET` command but includes options specific to the caching engine.
 
-**Command:** `CACHE.SET key value [TTL seconds] [SWR seconds] [GRACE seconds] [REVALIDATE-URL url]`
+**Command:** `CACHE.SET key value [TTL seconds] [SWR seconds] [GRACE seconds] [REVALIDATE-URL url] [ETAG etag] [LAST-MODIFIED date] [VARY header-name] [COMPRESSION] [FORCE-DISK] [HEADERS key value ...] [TAGS tag1 tag2 ...]`
+
+### Options Explained
+
+*   **`ETAG etag`**: Specifies an ETag for the cached content. Useful for conditional requests and revalidation.
+*   **`LAST-MODIFIED date`**: Specifies a Last-Modified date for the cached content. Also used for conditional requests.
+*   **`VARY header-name`**: Indicates that the cached response varies depending on the specified request header(s). This allows SpinelDB to store multiple variants of the same key based on client request headers (e.g., `Accept-Encoding`).
+*   **`COMPRESSION`**: If present, the `value` will be compressed using ZSTD before being stored in memory. This can save significant RAM for compressible content.
+*   **`FORCE-DISK`**: If present, the `value` will be stored on disk instead of in memory, regardless of its size. This requires `cache.on_disk_path` to be configured.
+*   **`HEADERS key value ...`**: Allows you to store arbitrary HTTP headers alongside the cached content. These can be used for `VARY` negotiation or simply for informational purposes. Provide key-value pairs.
+*   **`TAGS tag1 tag2 ...`**: Associates one or more tags with the cached item. Tags are crucial for tag-based invalidation across a cluster.
 
 ### Example Session
 
@@ -44,7 +54,19 @@ OK
 
 The `CACHE.GET` command retrieves an item. Its behavior intelligently changes based on the item's state (fresh, stale, or grace).
 
-**Command:** `CACHE.GET key [REVALIDATE url] [IF-NONE-MATCH etag] [IF-MODIFIED-SINCE date] [FORCE-REVALIDATE]`
+**Command:** `CACHE.GET key [REVALIDATE url] [IF-NONE-MATCH etag] [IF-MODIFIED-SINCE date] [FORCE-REVALIDATE] [HEADERS key value ...]`
+
+### Response Format
+
+Unlike a simple `GET` command, `CACHE.GET` returns a RESP Array with three elements:
+
+1.  **Status Code (Integer):** The HTTP status code of the cached response (e.g., `200` for OK, `404` for Not Found if negatively cached).
+2.  **Headers (Array of Bulk Strings):** An array of key-value pairs representing the HTTP headers of the cached response (e.g., `["Content-Type", "application/json", "ETag", "\"abc\""]`).
+3.  **Body (Bulk String):** The actual cached content.
+
+If the item is not found or fully expired, `CACHE.GET` returns `(nil)`.
+
+### The Role of `REVALIDATE-URL`
 
 ### The Role of `REVALIDATE-URL`
 
@@ -82,20 +104,33 @@ SpinelDB can also cache negative responses (e.g., 404 Not Found, 500 Internal Se
 Let's continue with our previous example, assuming we set the revalidation URL initially.
 
 ```shell
-# Set the item with its revalidation source
-127.0.0.1:7878> CACHE.SET user:1:profile '{"id": 1, "name": "Alice"}' TTL 60 SWR 300 REVALIDATE-URL "https://api.myapp.com/users/1"
+# Set the item with its revalidation source, including a header and a tag
+127.0.0.1:7878> CACHE.SET user:1:profile '{"id": 1, "name": "Alice"}' TTL 60 SWR 300 REVALIDATE-URL "https://api.myapp.com/users/1" HEADERS Content-Type application/json TAGS user-data
 OK
 
 # --- Within the first 60 seconds ---
 127.0.0.1:7878> CACHE.GET user:1:profile
-"{\"id\": 1, \"name\": \"Alice\"}"
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json"
+3) "{\"id\": 1, \"name\": \"Alice\"}"
 # (This is a cache hit)
 
 # --- After 60 seconds have passed (item is now in SWR period) ---
 127.0.0.1:7878> CACHE.GET user:1:profile
-"{\"id\": 1, \"name\": \"Alice\"}"
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json"
+3) "{\"id\": 1, \"name\": \"Alice\"}"
 # (This is a STALE cache hit. The user gets the old data instantly,
 # and SpinelDB is now fetching "https://api.myapp.com/users/1" in the background.)
+
+# --- Example of a negatively cached response ---
+# Assume a previous CACHE.FETCH or CACHE.PROXY to a non-existent URL resulted in a 404
+127.0.0.1:7878> CACHE.GET non-existent-resource
+1) (integer) 404
+2) (empty array)
+3) "Not Found"
 ```
 
 This powerful combination of `TTL`, `SWR`, and `GRACE` gives you a robust defense against latency spikes and origin downtime, directly improving the user experience.
