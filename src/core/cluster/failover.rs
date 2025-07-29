@@ -255,8 +255,22 @@ pub async fn handle_auth_ack(state: &Arc<ServerState>, sender_id: String, ack_ep
     }
 }
 
+use anyhow::Result;
+use tracing::error;
+
 /// Promotes this node from a replica to a master after winning an election.
 async fn promote_to_master(state: &Arc<ServerState>) {
+    if let Err(e) = promote_to_master_internal(state).await {
+        error!(
+            "Failed to promote to master: {}. The node might be in an inconsistent state.",
+            e
+        );
+        // In a real-world scenario, we might want to trigger a shutdown
+        // or enter a safe mode here to prevent further issues.
+    }
+}
+
+async fn promote_to_master_internal(state: &Arc<ServerState>) -> Result<()> {
     let cluster = state
         .cluster
         .as_ref()
@@ -264,13 +278,25 @@ async fn promote_to_master(state: &Arc<ServerState>) {
     let my_old_master_id = cluster.get_my_config().node_info.replica_of.clone();
 
     let election_epoch = cluster.failover_auth_epoch.load(Ordering::Relaxed);
-    cluster.update_my_role_to_master(election_epoch);
 
-    if let Some(old_master_id) = my_old_master_id {
-        cluster.take_over_slots_from(&old_master_id);
-    }
+    // --- Start of Critical Section ---
+    // The goal is to persist the new role to disk *before* changing behavior in memory.
 
-    // Update the main server configuration to reflect the new role.
+    // 1. Create a new in-memory representation of the cluster state with this node as master.
+    let new_cluster_nodes_config =
+        cluster.prepare_promotion_config(election_epoch, my_old_master_id.as_deref());
+
+    // 2. Persist the new configuration to disk atomically.
+    cluster
+        .save_config_atomically(&new_cluster_nodes_config)
+        .await?;
+    info!("Successfully persisted new master configuration to disk.");
+
+    // 3. Now that the state is safely on disk, apply the changes to the live server.
+    cluster.apply_promotion_in_memory(&new_cluster_nodes_config);
+    info!("Applied new master configuration to in-memory state.");
+
+    // 4. Update the main server configuration to reflect the new role.
     // This is critical for the server to start its replication backlog feeder
     // and accept PSYNC requests from other replicas.
     {
@@ -279,12 +305,12 @@ async fn promote_to_master(state: &Arc<ServerState>) {
         info!("Updated main server config to PRIMARY role.");
     }
 
-    // Signal the replication worker to reconfigure.
+    // 5. Signal the replication worker to reconfigure.
     // The worker should see the new config and terminate, allowing the main
     // server task spawner to start the backlog feeder.
     if state.replication_reconfigure_tx.send(()).is_err() {
         warn!("Could not send reconfigure signal to replication worker after promotion.");
     }
 
-    let _ = cluster.save_config();
+    Ok(())
 }

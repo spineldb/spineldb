@@ -12,7 +12,7 @@ use tracing::debug;
 #[derive(Debug, Default, Clone)]
 pub struct TransactionState {
     pub commands: Vec<Command>,
-    pub watched_keys: HashMap<Bytes, u64>,
+    pub watched_keys: HashMap<Bytes, Option<u64>>,
     /// Flag to indicate that `MULTI` has been called and the session is in a transaction.
     pub in_transaction: bool,
     /// Flag to mark the transaction as aborted due to an invalid command
@@ -75,15 +75,14 @@ impl Db {
             let shard_index = self.get_shard_index(key);
             if let Some(guard) = guards.get(&shard_index) {
                 // Get the version of the key if it exists and is not expired.
-                // If it doesn't exist, its effective version for WATCH is 0.
-                let version = guard
+                let version_opt = guard
                     .peek(key)
                     .filter(|e| !e.is_expired())
-                    .map_or(0, |v| v.version);
-                tx_state.watched_keys.insert(key.clone(), version);
+                    .map(|v| v.version);
+                tx_state.watched_keys.insert(key.clone(), version_opt);
                 debug!(
-                    "Session {}: Watched key {:?} with version {}.",
-                    session_id, key, version
+                    "Session {}: Watched key {:?} with version {:?}.",
+                    session_id, key, version_opt
                 );
             }
         }

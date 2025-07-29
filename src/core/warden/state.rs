@@ -66,7 +66,7 @@ pub enum FailoverState {
     None,
     /// Waiting for a timeout before starting the failover (e.g., failover-timeout).
     Wait,
-    /// [NEW] The Warden is in the process of leader election by gathering votes.
+    /// The Warden is in the process of leader election by gathering votes.
     Vote,
     /// The failover process has been triggered and is starting.
     Start,
@@ -111,8 +111,11 @@ pub struct MasterState {
     pub votes: HashMap<String, Instant>,
     /// The last time a failover was successfully completed for this master.
     pub last_failover_time: Instant,
-    /// [NEW] The last epoch this Warden has cast a vote for, preventing duplicate voting.
+    /// The last epoch this Warden has cast a vote for, preventing duplicate voting.
     pub last_voted_epoch: u64,
+    /// Tracks ongoing reconfiguration tasks to prevent spawning duplicate tasks for the same replica.
+    /// Key: Replica address. Value: A cloneable mutex acting as a lock.
+    pub reconfigurations_in_progress: HashMap<SocketAddr, Arc<Mutex<()>>>,
 }
 
 impl MasterState {
@@ -137,8 +140,8 @@ impl MasterState {
             votes: HashMap::new(),
             // Initialize with a time far in the past to allow the first failover immediately.
             last_failover_time: Instant::now() - Duration::from_secs(3600 * 24),
-            // [NEW] Initialize voting epoch to 0.
             last_voted_epoch: 0,
+            reconfigurations_in_progress: HashMap::new(),
         }
     }
 
@@ -149,6 +152,8 @@ impl MasterState {
         self.failover_start_time = None;
         self.promotion_candidate = None;
         self.votes.clear();
+        // Also clear any in-progress reconfiguration locks.
+        self.reconfigurations_in_progress.clear();
     }
 }
 

@@ -205,7 +205,7 @@ async fn run_reshard_orchestrator(
             "[RESHARD SLOT {}] Step 5/5: Saving new cluster configuration.",
             slot
         );
-        cluster.save_config()?;
+        cluster.save_config().await?;
         info!("[RESHARD SLOT {}] Resharding complete for this slot.", slot);
     }
 

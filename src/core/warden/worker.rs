@@ -165,6 +165,7 @@ impl MasterMonitor {
             RespFrame::BulkString(VOTES_CHANNEL.into()),
         ]);
 
+        // Expect 3 successful subscription confirmations.
         for _ in 0..3 {
             client.send_and_receive(cmd.clone()).await?;
         }
@@ -250,7 +251,6 @@ impl MasterMonitor {
             return;
         };
 
-        // Ignore messages from self or for a different master.
         if hello.run_id == self.global_state.my_run_id || hello.master_name != self.master_name {
             return;
         }
@@ -278,12 +278,10 @@ impl MasterMonitor {
 
         if self.ping_instance(master_addr).await.is_err() {
             let mut state = self.state.lock();
-            // If the master is down, start the timer.
             if state.primary_state.down_since.is_none() {
                 state.primary_state.down_since = Some(Instant::now());
             }
 
-            // If the timer has exceeded the `down_after` threshold, mark as SDOWN.
             if state
                 .primary_state
                 .down_since
@@ -299,7 +297,6 @@ impl MasterMonitor {
                 state.status = MasterStatus::Sdown;
             }
         } else {
-            // If the master is back online, reset its state.
             let mut state = self.state.lock();
             if state.primary_state.down_since.is_some() {
                 info!(
@@ -365,62 +362,47 @@ impl MasterMonitor {
             )
         };
 
-        // Do nothing if the master's runid is not yet known.
         if current_master_runid == "?" {
             return;
         }
 
         for replica_addr in replicas_to_check {
-            let current_master_addr_clone = current_master_addr;
-            let current_master_runid_clone = current_master_runid.clone();
+            let should_spawn = {
+                let mut state = self.state.lock();
+                let lock_arc = state
+                    .reconfigurations_in_progress
+                    .entry(replica_addr)
+                    .or_insert_with(|| Arc::new(Mutex::new(())))
+                    .clone();
+                // Attempt to acquire the lock. If it succeeds, we can spawn a task.
+                // The lock guard is immediately dropped, but the Arc's strong count
+                // signals that a task is "running".
+                lock_arc.try_lock().is_some()
+            };
 
-            tokio::spawn(async move {
-                if let Ok(mut client) = WardenClient::connect(replica_addr).await {
-                    if let Ok(info_str) = client.info_replication().await {
-                        let mut replica_role = "";
-                        let mut replica_master_runid = "";
-                        for line in info_str.lines() {
-                            if let Some(val) = line.strip_prefix("role:") {
-                                replica_role = val.trim();
-                            }
-                            if let Some(val) = line.strip_prefix("master_replid:") {
-                                replica_master_runid = val.trim();
-                            }
-                        }
+            if should_spawn {
+                let state_clone = self.state.clone();
+                let master_addr_clone = current_master_addr;
+                let master_runid_clone = current_master_runid.clone();
 
-                        if replica_role == "slave"
-                            && replica_master_runid != current_master_runid_clone
-                        {
-                            warn!(
-                                "Detected stale replica {} pointing to master '{}' (should be '{}'). Reconfiguring.",
-                                replica_addr, replica_master_runid, current_master_runid_clone
-                            );
+                tokio::spawn(async move {
+                    reconfigure_and_verify_stale_replica_task(
+                        replica_addr,
+                        master_addr_clone,
+                        master_runid_clone,
+                    )
+                    .await;
 
-                            let reconfigure_cmd = RespFrame::Array(vec![
-                                RespFrame::BulkString("REPLICAOF".into()),
-                                RespFrame::BulkString(
-                                    current_master_addr_clone.ip().to_string().into(),
-                                ),
-                                RespFrame::BulkString(
-                                    current_master_addr_clone.port().to_string().into(),
-                                ),
-                            ]);
-
-                            if let Err(e) = client.send_and_receive(reconfigure_cmd).await {
-                                warn!(
-                                    "Failed to send REPLICAOF to stale replica {}: {}",
-                                    replica_addr, e
-                                );
-                            } else {
-                                info!(
-                                    "Successfully sent REPLICAOF to stale replica {}",
-                                    replica_addr
-                                );
-                            }
-                        }
-                    }
-                }
-            });
+                    // After the task is done, remove the lock entry to allow future tasks.
+                    let mut state = state_clone.lock();
+                    state.reconfigurations_in_progress.remove(&replica_addr);
+                });
+            } else {
+                debug!(
+                    "Reconfiguration for replica {} is already in progress. Skipping.",
+                    replica_addr
+                );
+            }
         }
     }
 
@@ -554,7 +536,6 @@ impl MasterMonitor {
             return;
         }
 
-        // Handle a VOTE-REQUEST from a peer.
         if msg_type == "VOTE-REQUEST" {
             let mut state = self.state.lock();
             if epoch > state.last_voted_epoch {
@@ -578,7 +559,6 @@ impl MasterMonitor {
                     }
                 });
             }
-        // Handle a VOTE-ACK that was cast for this Warden.
         } else if msg_type == "VOTE-ACK"
             && msg_parts.len() == 5
             && msg_parts[3] == self.global_state.my_run_id
@@ -640,9 +620,55 @@ impl MasterMonitor {
                 }
             }
         }
-        // Remove any replicas that are no longer reported by the master.
         state
             .replicas
             .retain(|addr, _| discovered_replicas.contains(addr));
+    }
+}
+
+/// The actual logic of the reconfiguration task, extracted to be `Send`.
+async fn reconfigure_and_verify_stale_replica_task(
+    replica_addr: SocketAddr,
+    current_master_addr: SocketAddr,
+    current_master_runid: String,
+) {
+    if let Ok(mut client) = WardenClient::connect(replica_addr).await {
+        if let Ok(info_str) = client.info_replication().await {
+            let mut replica_role = "";
+            let mut replica_master_runid = "";
+            for line in info_str.lines() {
+                if let Some(val) = line.strip_prefix("role:") {
+                    replica_role = val.trim();
+                }
+                if let Some(val) = line.strip_prefix("master_replid:") {
+                    replica_master_runid = val.trim();
+                }
+            }
+
+            if replica_role == "slave" && replica_master_runid != current_master_runid {
+                warn!(
+                    "Detected stale replica {} pointing to master '{}' (should be '{}'). Reconfiguring.",
+                    replica_addr, replica_master_runid, current_master_runid
+                );
+
+                let reconfigure_cmd = RespFrame::Array(vec![
+                    RespFrame::BulkString("REPLICAOF".into()),
+                    RespFrame::BulkString(current_master_addr.ip().to_string().into()),
+                    RespFrame::BulkString(current_master_addr.port().to_string().into()),
+                ]);
+
+                if let Err(e) = client.send_and_receive(reconfigure_cmd).await {
+                    warn!(
+                        "Failed to send REPLICAOF to stale replica {}: {}",
+                        replica_addr, e
+                    );
+                } else {
+                    info!(
+                        "Successfully sent REPLICAOF to stale replica {}",
+                        replica_addr
+                    );
+                }
+            }
+        }
     }
 }

@@ -239,22 +239,22 @@ impl<'a> TransactionHandler<'a> {
     /// Checks if any watched keys have been modified since `WATCH` was called.
     fn check_watched_keys(
         &self,
-        watched_keys: &HashMap<Bytes, u64>,
+        watched_keys: &HashMap<Bytes, Option<u64>>,
         guards: &BTreeMap<usize, MutexGuard<ShardCache>>,
     ) -> bool {
         if watched_keys.is_empty() {
             return true;
         }
 
-        for (key, original_version) in watched_keys {
+        for (key, original_version_opt) in watched_keys {
             let shard_index = self.db.get_shard_index(key);
             if let Some(guard) = guards.get(&shard_index) {
-                let current_version = guard
+                let current_version_opt = guard
                     .peek(key)
                     .filter(|e| !e.is_expired())
-                    .map_or(0, |v| v.version);
+                    .map(|v| v.version);
 
-                if current_version != *original_version {
+                if current_version_opt != *original_version_opt {
                     return false; // Key was modified, abort.
                 }
             } else {
