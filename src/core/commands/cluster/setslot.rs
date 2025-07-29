@@ -68,7 +68,7 @@ pub async fn execute(
         }
     }
 
-    cluster.save_config()?;
+    cluster.save_config().await?;
 
     Ok((
         RespValue::SimpleString("OK".into()),

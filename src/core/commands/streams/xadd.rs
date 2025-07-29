@@ -5,23 +5,6 @@
 //! The `XADD` command is the fundamental write operation for the Stream data type.
 //! It appends a new entry, consisting of one or more field-value pairs, to a specified stream.
 //! Each entry is assigned a unique, monotonically increasing ID.
-//!
-//! # Command Syntax
-//! `XADD key [NOMKSTREAM] [MAXLEN|MINID [= | ~] count] <* | id> field value [field value ...]`
-//!
-//! ## Options
-//! - **key**: The name of the stream.
-//! - **NOMKSTREAM**: If specified, the command will not create the stream if it doesn't already exist.
-//! - **MAXLEN**: Trims the stream to a specified number of entries.
-//! - **MINID**: Trims the stream to entries with an ID greater than or equal to the specified ID.
-//! - **~ (approximate trimming)**: Can be used with `MAXLEN` or `MINID` for more efficient, but not perfectly exact, trimming.
-//! - **id | \***: The ID for the new entry. `*` directs the server to auto-generate an ID.
-//! - **field value ...**: One or more pairs of field names and their corresponding values that make up the entry.
-//!
-//! # Return Value
-//! - On success, returns a Bulk String representing the unique ID of the newly added entry.
-//! - If `NOMKSTREAM` is used and the stream does not exist, returns a Null reply.
-//! - Returns an error if the key holds a value that is not a stream, or if the specified ID is invalid.
 
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
@@ -209,30 +192,44 @@ impl ExecutableCommand for XAdd {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        // Phase 1: Check memory and evict if necessary, BEFORE taking the final lock.
-        // This avoids holding locks during potentially slow eviction cycles.
-        if let Some(maxmem) = ctx.state.config.lock().await.maxmemory {
-            const MAX_EVICTION_ATTEMPTS: usize = 10;
-            for _ in 0..MAX_EVICTION_ATTEMPTS {
-                let new_entry_size: usize = self
-                    .options
-                    .fields
-                    .iter()
-                    .map(|(k, v)| k.len() + v.len())
-                    .sum();
-                let total_memory: usize =
-                    ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
+        // Phase 1: Pre-flight check and eviction (best-effort, outside lock).
+        // This loop attempts to make space before acquiring the final write lock.
+        let (maxmemory, policy) = {
+            let config = ctx.state.config.lock().await;
+            (config.maxmemory, config.maxmemory_policy)
+        };
 
-                if total_memory.saturating_add(new_entry_size) <= maxmem {
-                    break;
-                }
+        if let Some(maxmem) = maxmemory {
+            if policy != crate::config::EvictionPolicy::NoEviction {
+                const MAX_EVICTION_ATTEMPTS: usize = 10;
+                for _ in 0..MAX_EVICTION_ATTEMPTS {
+                    let total_memory: usize =
+                        ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
+                    let new_entry_size: usize = self
+                        .options
+                        .fields
+                        .iter()
+                        .map(|(k, v)| k.len() + v.len())
+                        .sum();
 
-                if !ctx.db.evict_one_key(&ctx.state).await {
-                    break; // Stop trying if eviction fails to remove a key
+                    if total_memory.saturating_add(new_entry_size) <= maxmem {
+                        break;
+                    }
+
+                    if !ctx.db.evict_one_key(&ctx.state).await {
+                        break; // Stop trying if eviction fails to remove a key.
+                    }
                 }
             }
+        }
 
-            // Re-check after eviction attempts.
+        // Phase 2: Acquire lock and perform final, atomic checks.
+        let shard_index = ctx.db.get_shard_index(&self.key);
+        let shard = ctx.db.get_shard(shard_index);
+        let mut guard = shard.entries.lock().await;
+
+        // Final OOM Check (inside lock): This is the authoritative check.
+        if let Some(maxmem) = maxmemory {
             let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
             let new_entry_size: usize = self
                 .options
@@ -245,18 +242,15 @@ impl ExecutableCommand for XAdd {
             }
         }
 
-        // Phase 2: Now it's safe to take the lock and perform the write.
-        let (shard, guard) = ctx.get_single_shard_context_mut()?;
-
-        // Moved NOMKSTREAM check inside the lock to prevent race conditions.
-        // This ensures the check and potential creation are atomic.
+        // NOMKSTREAM Check (inside lock): Atomically check existence.
         if self.options.nomkstream && guard.peek(&self.key).is_none_or(|e| e.is_expired()) {
             return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
         }
 
-        let (resp, outcome, _) = self.execute_with_guard(shard, guard).await?;
+        // Phase 3: Execute the command's core logic.
+        let (resp, outcome, _) = self.execute_with_guard(shard, &mut guard).await?;
 
-        // Notify any waiting XREAD clients.
+        // Phase 4: Post-execution actions.
         ctx.state.stream_blocker_manager.notify(&self.key);
         Ok((resp, outcome))
     }
@@ -266,24 +260,31 @@ impl CommandSpec for XAdd {
     fn name(&self) -> &'static str {
         "xadd"
     }
+
     fn arity(&self) -> i64 {
         -5
     }
+
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::MOVABLEKEYS
     }
+
     fn first_key(&self) -> i64 {
         1
     }
+
     fn last_key(&self) -> i64 {
         1
     }
+
     fn step(&self) -> i64 {
         1
     }
+
     fn get_keys(&self) -> Vec<Bytes> {
         vec![self.key.clone()]
     }
+
     fn to_resp_args(&self) -> Vec<Bytes> {
         let mut args = vec![self.key.clone()];
         if self.options.nomkstream {

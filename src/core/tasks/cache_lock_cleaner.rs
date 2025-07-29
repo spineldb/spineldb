@@ -1,3 +1,5 @@
+// src/core/tasks/cache_lock_cleaner.rs
+
 use crate::core::state::ServerState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,10 +34,11 @@ impl CacheLockCleanerTask {
             tokio::select! {
                 _ = interval.tick() => {
                     let swr_cleaned = self.clean_swr_locks();
-                    if swr_cleaned > 0 {
+                    let manual_cleaned = self.clean_manual_locks();
+                    if swr_cleaned > 0 || manual_cleaned > 0 {
                         debug!(
-                            "Cache lock cleaner: removed {} stale SWR locks.",
-                            swr_cleaned
+                            "Cache lock cleaner: removed {} stale SWR locks and {} expired manual locks.",
+                            swr_cleaned, manual_cleaned
                         );
                     }
                 }
@@ -48,9 +51,12 @@ impl CacheLockCleanerTask {
     }
 
     /// Removes SWR lock entries that are no longer being waited on.
-    /// The logic relies on checking the `Arc` strong count. A strong count of 1
+    ///
+    /// NOTE: This logic relies on checking the `Arc` strong count. A strong count of 1
     /// indicates that only the `DashMap` itself holds a reference to the lock,
-    /// meaning no task is currently holding or waiting for it.
+    /// meaning no task is currently holding or waiting for it. This is an efficient
+    /// but fragile pattern. Care must be taken not to store clones of these Arcs
+    /// elsewhere long-term, as it would prevent cleanup and cause a memory leak.
     fn clean_swr_locks(&self) -> usize {
         let before_count = self.state.cache.swr_locks.len();
         if before_count == 0 {
@@ -63,6 +69,23 @@ impl CacheLockCleanerTask {
             .retain(|_key, lock_arc| Arc::strong_count(lock_arc) > 1);
 
         let after_count = self.state.cache.swr_locks.len();
+        before_count - after_count
+    }
+
+    /// Removes expired manual locks from `CACHE.LOCK`.
+    fn clean_manual_locks(&self) -> usize {
+        let before_count = self.state.cache.manual_locks.len();
+        if before_count == 0 {
+            return 0;
+        }
+
+        let now = std::time::Instant::now();
+        self.state
+            .cache
+            .manual_locks
+            .retain(|_key, expiry| *expiry > now);
+
+        let after_count = self.state.cache.manual_locks.len();
         before_count - after_count
     }
 }

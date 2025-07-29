@@ -411,21 +411,22 @@ impl BlockerManager {
         }
     }
 
-    /// Called by list write commands (`LPUSH`/`RPUSH`). It attempts to hand off a value
-    /// to a waiting client. If successful, the value bypasses the list entirely.
-    /// Returns true if a waiter was notified and the value was consumed.
-    pub fn notify_and_consume_for_push(&self, key: &Bytes, value: Bytes) -> bool {
+    /// Called by list write commands (`LPUSH`/`RPUSH`). It attempts to hand off values
+    /// to waiting clients. If successful, the value bypasses the list entirely.
+    /// Returns the new list length if a waiter was notified and the value was consumed.
+    pub fn notify_and_consume_for_push(&self, key: &Bytes, values: &[Bytes]) -> Option<usize> {
         loop {
             let waiter_info = if let Some(mut queue) = self.waiters.get_mut(key) {
                 if queue.is_empty() {
-                    return false;
+                    return None; // No one is waiting.
                 } else if queue.front().unwrap().waker.lock().unwrap().is_none() {
+                    // Waker has already been used; clean it up and retry.
                     queue.pop_front();
                     continue;
                 }
                 queue.pop_front()
             } else {
-                return false;
+                return None; // No one is waiting for this key.
             };
 
             if let Some(info) = waiter_info {
@@ -438,18 +439,20 @@ impl BlockerManager {
                 if let Some(waker) = waker {
                     let popped_value = PoppedValue {
                         key: key.clone(),
-                        value: value.clone(),
+                        value: values[0].clone(),
                     };
                     if waker.send(WokenValue::List(popped_value)).is_ok() {
                         tracing::debug!(
                             "Atomically handed off value to a waiter for list key '{}'",
                             String::from_utf8_lossy(key)
                         );
-                        return true;
+                        // The first value was consumed. Return the number of remaining values
+                        // that will be added to the list (which is the new length for an empty list).
+                        return Some(values.len() - 1);
                     }
                 }
             } else {
-                return false;
+                return None;
             }
         }
     }

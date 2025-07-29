@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use tokio::fs;
 use tracing::{error, info, warn};
 
 /// The role of a node in the cluster.
@@ -95,7 +96,7 @@ pub struct NodeRuntimeState {
 
 /// A helper struct for serializing the essential cluster state to a file.
 #[derive(Debug, Serialize, Deserialize)]
-struct SerializableClusterState {
+pub struct SerializableClusterState {
     my_id: String,
     current_epoch: u64,
     nodes: Vec<ClusterNode>,
@@ -286,8 +287,8 @@ impl ClusterState {
         })
     }
 
-    /// Saves the current cluster configuration to the `nodes.conf` file atomically.
-    pub fn save_config(&self) -> Result<(), SpinelDBError> {
+    /// Saves the current cluster configuration to the `nodes.conf` file.
+    pub async fn save_config(&self) -> Result<(), SpinelDBError> {
         let nodes_vec: Vec<ClusterNode> = self
             .nodes
             .iter()
@@ -299,13 +300,86 @@ impl ClusterState {
             current_epoch: self.current_epoch.load(Ordering::Relaxed),
             nodes: nodes_vec,
         };
+        self.save_config_content(&serializable).await
+    }
 
-        let content = serde_json::to_string_pretty(&serializable)
+    /// Serializes the given state and saves it to disk atomically.
+    pub async fn save_config_atomically(
+        &self,
+        serializable_state: &SerializableClusterState,
+    ) -> Result<(), SpinelDBError> {
+        let content = serde_json::to_string_pretty(serializable_state)
             .map_err(|e| SpinelDBError::Internal(e.to_string()))?;
 
         let temp_path = format!("{}.tmp-{}", self.config_file_path, rand::random::<u32>());
         std::fs::write(&temp_path, content)?;
         std::fs::rename(temp_path, &self.config_file_path)?;
+        info!("Cluster config saved to {}", self.config_file_path);
+        Ok(())
+    }
+
+    /// Prepares a new cluster configuration for promotion without modifying the current state.
+    pub fn prepare_promotion_config(
+        &self,
+        new_epoch: u64,
+        old_master_id: Option<&str>,
+    ) -> SerializableClusterState {
+        let mut new_nodes: Vec<ClusterNode> = self
+            .nodes
+            .iter()
+            .map(|e| e.value().node_info.clone())
+            .collect();
+
+        let mut slots_to_claim = BTreeSet::new();
+        if let Some(old_master_id) = old_master_id {
+            if let Some(old_master_node) = new_nodes.iter_mut().find(|n| n.id == old_master_id) {
+                slots_to_claim = old_master_node.slots.clone();
+                old_master_node.slots.clear();
+            }
+        }
+
+        if let Some(myself) = new_nodes.iter_mut().find(|n| n.id == self.my_id) {
+            let mut flags = myself.get_flags();
+            flags.remove(NodeFlags::REPLICA);
+            flags.insert(NodeFlags::PRIMARY);
+            myself.set_flags(flags);
+            myself.replica_of = None;
+            myself.config_epoch = new_epoch;
+            myself.slots.extend(slots_to_claim);
+        }
+
+        SerializableClusterState {
+            my_id: self.my_id.clone(),
+            current_epoch: new_epoch,
+            nodes: new_nodes,
+        }
+    }
+
+    /// Applies a prepared promotion configuration to the live, in-memory state.
+    pub fn apply_promotion_in_memory(&self, new_config: &SerializableClusterState) {
+        for node_config in &new_config.nodes {
+            if let Some(mut runtime_state) = self.nodes.get_mut(&node_config.id) {
+                runtime_state.node_info = node_config.clone();
+            }
+            for &slot in &node_config.slots {
+                *self.slots_map[slot as usize].write() = Some(node_config.id.clone());
+            }
+        }
+        self.current_epoch
+            .store(new_config.current_epoch, Ordering::Relaxed);
+    }
+
+    /// Saves the current cluster configuration to the `nodes.conf` file atomically.
+    async fn save_config_content(
+        &self,
+        serializable: &SerializableClusterState,
+    ) -> Result<(), SpinelDBError> {
+        let content = serde_json::to_string_pretty(serializable)
+            .map_err(|e| SpinelDBError::Internal(e.to_string()))?;
+
+        let temp_path = format!("{}.tmp-{}", self.config_file_path, rand::random::<u32>());
+        fs::write(&temp_path, content).await?;
+        fs::rename(temp_path, &self.config_file_path).await?;
         info!("Cluster config saved to {}", self.config_file_path);
         Ok(())
     }
@@ -361,7 +435,7 @@ impl ClusterState {
     }
 
     /// Promotes a node from PFAIL to FAIL if a majority of masters agree.
-    pub fn promote_pfail_to_fail(&self, node_id: &str) -> bool {
+    pub async fn promote_pfail_to_fail(&self, node_id: &str) -> bool {
         let needed = (self.count_online_masters() / 2) + 1;
         if let Some(mut node) = self.nodes.get_mut(node_id) {
             if node.pfail_reports.len() >= needed {
@@ -373,7 +447,7 @@ impl ClusterState {
                 flags.remove(NodeFlags::PFAIL);
                 flags.insert(NodeFlags::FAIL);
                 node.node_info.set_flags(flags);
-                let _ = self.save_config();
+                let _ = self.save_config().await;
                 return true;
             }
         }
@@ -559,7 +633,7 @@ impl ClusterState {
             myself.node_info.slots.clear();
         }
 
-        self.save_config()?;
+        self.save_config().await?;
 
         state.set_quorum_loss_read_only(false, "Reconfiguring as a replica.");
 

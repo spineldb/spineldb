@@ -8,7 +8,7 @@ use crate::core::handler::command_router::{RouteResponse, Router};
 use crate::core::protocol::{RespFrame, RespFrameCodec};
 use crate::core::pubsub::handler::PubSubModeHandler;
 use crate::core::replication::handler::ReplicaHandler;
-use crate::core::state::{ClientRole, ServerState}; // Import ClientRole
+use crate::core::state::{ClientRole, ServerState};
 use crate::core::{Command, SpinelDBError};
 use crate::server::AnyStream;
 use futures::{SinkExt, StreamExt, stream};
@@ -83,6 +83,7 @@ impl ConnectionHandler {
             }
 
             tokio::select! {
+                // Prioritize shutdown signals over other events.
                 biased;
                 _ = self.global_shutdown_rx.recv() => {
                     info!("Connection handler for {} received GLOBAL shutdown signal.", self.addr);
@@ -113,6 +114,15 @@ impl ConnectionHandler {
                                     break 'main_loop;
                                 }
                                 Err(e) => {
+                                    // If an error occurs while in a transaction, the transaction must be aborted.
+                                    // This handles errors from ACL, cluster redirection, OOM, etc.
+                                    if self.session.is_in_transaction {
+                                        if let Some(db) = self.state.get_db(self.session.current_db_index) {
+                                            if let Some(mut tx_state) = db.tx_states.get_mut(&self.session_id) {
+                                                tx_state.has_error = true;
+                                            }
+                                        }
+                                    }
                                     self.send_error_to_client(e).await?;
                                 }
                             }
@@ -156,6 +166,7 @@ impl ConnectionHandler {
     ) -> Result<NextAction, SpinelDBError> {
         let command_result = Command::try_from(frame);
 
+        // If command parsing itself fails, mark the transaction as errored.
         if let Err(e) = &command_result {
             if self.session.is_in_transaction {
                 if let Some(db) = self.state.get_db(self.session.current_db_index) {
@@ -174,6 +185,7 @@ impl ConnectionHandler {
             command.name()
         );
 
+        // PSYNC is a special command that triggers a protocol switch and handoff.
         if let Command::Psync(psync) = command {
             return self.handle_replica_handoff(psync, conn_guard).await;
         }
@@ -226,6 +238,7 @@ impl ConnectionHandler {
             }
         }
 
+        // If SUBSCRIBE or PSUBSCRIBE was successful, transition to Pub/Sub mode.
         if self.session.is_subscribed || self.session.is_pattern_subscribed {
             Ok(NextAction::EnterPubSub)
         } else {
@@ -299,6 +312,7 @@ impl ConnectionHandler {
         );
         let result = pubsub_handler.run().await;
 
+        // Clean up all subscription state upon exiting Pub/Sub mode.
         self.session.is_subscribed = false;
         self.session.is_pattern_subscribed = false;
         self.session.subscribed_channels.clear();

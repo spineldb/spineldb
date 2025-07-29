@@ -26,7 +26,7 @@ pub async fn execute(
         my_runtime_state.node_info.slots.insert(slot);
     }
 
-    cluster.save_config()?;
+    cluster.save_config().await?;
 
     Ok((
         RespValue::SimpleString("OK".into()),

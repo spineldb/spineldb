@@ -16,7 +16,7 @@ pub(crate) async fn list_push_logic<'a>(
     values: &[Bytes],
     direction: PushDirection,
 ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-    // If no values are provided, return the current length of the list, or 0 if it doesn't exist.
+    // If no values are provided, the command returns the current length of the list.
     if values.is_empty() {
         let (_, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
         let len = if let Some(entry) = shard_cache_guard.get(key) {
@@ -35,15 +35,14 @@ pub(crate) async fn list_push_logic<'a>(
 
     let state = ctx.state.clone();
 
-    // Atomically hand off the first value to a waiting client if one exists.
-    let was_consumed_by_waiter = state
+    // Attempt to atomically hand off the first value to a waiting client (from BLPOP etc.).
+    // This bypasses the list storage entirely for that value if successful.
+    if let Some(final_len) = state
         .blocker_manager
-        .notify_and_consume_for_push(key, values[0].clone());
-
-    // If a waiter consumed the value, it bypassed the list entirely.
-    // To ensure state consistency, we must manually propagate a transaction
-    // that mimics this atomic operation (PUSH followed by a POP) to replicas/AOF.
-    if was_consumed_by_waiter {
+        .notify_and_consume_for_push(key, values)
+    {
+        // A waiter consumed the value, so it bypassed the list. To ensure state consistency,
+        // manually propagate a transaction that mimics this atomic operation (PUSH then POP).
         let push_cmd = match direction {
             PushDirection::Left => Command::LPush(crate::core::commands::list::LPush {
                 key: key.clone(),
@@ -55,7 +54,7 @@ pub(crate) async fn list_push_logic<'a>(
             }),
         };
 
-        // The corresponding pop operation to maintain state consistency.
+        // The corresponding pop operation to maintain state consistency in AOF/replication.
         let pop_cmd = match direction {
             PushDirection::Left => {
                 Command::LPop(crate::core::commands::list::LPop { key: key.clone() })
@@ -65,44 +64,25 @@ pub(crate) async fn list_push_logic<'a>(
             }
         };
 
-        // The transaction must contain all commands for AOF, but only writes for replication.
         let tx_data = TransactionData {
             all_commands: vec![push_cmd.clone(), pop_cmd.clone()],
             write_commands: vec![push_cmd, pop_cmd],
         };
 
-        // Manually publish the synthetic transaction.
+        // Manually publish the synthetic transaction to the event bus.
         ctx.state
             .event_bus
             .publish(UnitOfWork::Transaction(Box::new(tx_data)), &ctx.state);
 
-        // The list length is determined after the remaining items (if any) are pushed.
-        let final_len = if let Ok(guard) = ctx
-            .db
-            .get_shard(ctx.db.get_shard_index(key))
-            .entries
-            .try_lock()
-        {
-            guard
-                .peek(key)
-                .map(|e| match &e.data {
-                    DataValue::List(l) => l.len() + values.len() - 1,
-                    _ => values.len() - 1,
-                })
-                .unwrap_or(values.len() - 1)
-        } else {
-            values.len() - 1 // A reasonable fallback
-        };
-
-        // Since the state change was manually propagated, we return DidNotWrite
-        // to prevent the command router from propagating it again.
+        // The length of the list is returned directly from the notifier, ensuring an
+        // accurate value without race conditions.
         return Ok((
             RespValue::Integer(final_len as i64),
-            WriteOutcome::DidNotWrite,
+            WriteOutcome::DidNotWrite, // Propagation is handled manually.
         ));
     }
 
-    // Standard path: no waiter was available, so we modify the list in storage.
+    // Standard path: no waiter was available, so modify the list in storage.
     let (shard, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
     let entry = shard_cache_guard.get_or_insert_with_mut(key.clone(), || {
         StoredValue::new(DataValue::List(VecDeque::new()))

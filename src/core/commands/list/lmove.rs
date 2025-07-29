@@ -143,9 +143,13 @@ pub(crate) async fn lmove_logic<'a>(
     }
 
     // --- Step 4: Notify blockers on destination key and finish ---
+    // A client might be blocking on the destination key (e.g., via BLPOP).
+    // Since we've just added an element, we should wake up any potential waiters.
+    // wake_waiters_for_modification is suitable here; it signals that the list has changed,
+    // and the woken client will re-attempt its pop operation.
     ctx.state
         .blocker_manager
-        .notify_and_consume_for_push(dest_key, value_to_move.clone());
+        .wake_waiters_for_modification(dest_key);
 
     Ok((
         RespValue::BulkString(value_to_move),

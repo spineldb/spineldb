@@ -69,10 +69,20 @@ impl ExecutableCommand for Failover {
                     .as_secs();
                 let expiry_timestamp = now_unix_secs + ttl_secs;
 
+                // Use the entry API to ensure the poison TTL is only ever extended, not shortened.
+                // This prevents a late or misconfigured command from reducing the safety window.
                 ctx.state
                     .replication
                     .poisoned_masters
-                    .insert(run_id.clone(), expiry_timestamp);
+                    .entry(run_id.clone())
+                    .and_modify(|current_expiry| {
+                        // If an entry exists, only update it if the new expiry is later.
+                        if expiry_timestamp > *current_expiry {
+                            *current_expiry = expiry_timestamp;
+                        }
+                    })
+                    // If the entry does not exist, insert it with the new expiry.
+                    .or_insert(expiry_timestamp);
 
                 // Persist the new state to disk.
                 if let Err(e) = ctx.state.replication.save_poisoned_masters_to_disk() {

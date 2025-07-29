@@ -143,6 +143,6 @@ async fn run_fix_orchestrator(state: Arc<ServerState>) -> Result<Vec<String>, an
     }
 
     // Persist any changes made to the local node's state.
-    cluster.save_config()?;
+    cluster.save_config().await?;
     Ok(fixes_log)
 }

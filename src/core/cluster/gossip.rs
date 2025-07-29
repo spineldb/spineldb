@@ -359,7 +359,7 @@ async fn check_for_failed_nodes(state: &Arc<ServerState>, socket: &Arc<UdpSocket
             }
         }
 
-        if flags.contains(NodeFlags::PFAIL) && cluster.promote_pfail_to_fail(&node_id) {
+        if flags.contains(NodeFlags::PFAIL) && cluster.promote_pfail_to_fail(&node_id).await {
             info!("Broadcasting FAIL report for node {}", node_id);
             let fail_report_msg = GossipMessage::FailReport {
                 sender_id: cluster.my_id.clone(),

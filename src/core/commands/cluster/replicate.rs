@@ -88,7 +88,7 @@ pub async fn execute(
     myself.node_info.set_flags(flags);
     myself.node_info.replica_of = Some(master_id.to_string());
     // Persist the change to `nodes.conf` to make it durable across restarts.
-    cluster.save_config()?;
+    cluster.save_config().await?;
 
     // --- Trigger Reconfiguration ---
 

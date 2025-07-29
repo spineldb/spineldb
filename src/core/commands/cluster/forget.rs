@@ -35,7 +35,7 @@ pub async fn execute(
         }
 
         // Persist the change to the configuration file.
-        cluster.save_config()?;
+        cluster.save_config().await?;
 
         Ok((
             RespValue::SimpleString("OK".into()),
