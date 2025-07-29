@@ -15,43 +15,74 @@ If the user updates their profile, you would need to manually invalidate all thr
 
 With tags, you can associate multiple cache entries with a single tag. Then, you can invalidate all entries associated with that tag in a single command.
 
-### Using Tags with `CACHE.PROXY`
+### Using Tags with `CACHE.SET` and `CACHE.PROXY`
 
-You can specify tags when defining a cache policy. All cache entries created using that policy will be associated with the specified tags.
+You can associate tags with a cached item in two primary ways:
 
-**1. Define a Cache Policy with Tags**
+1.  **Manually with `CACHE.SET`**: When you directly store an item using `CACHE.SET`, you can provide tags as part of the command.
+2.  **Declaratively with `CACHE.PROXY` and Policies**: When using `CACHE.PROXY`, tags can be automatically applied based on a matching `CachePolicy`.
 
-Let's create a policy for user-related data, and associate it with a tag based on the user's ID.
+Tags can be static (e.g., `"product-category:electronics"`) or dynamic, using placeholders from the cache key pattern (e.g., `"user:{1}"`).
 
-```
-> CACHE.POLICY user_data_policy TTL 3600 TAGS "user:{id}"
+### Example: Associating Tags
+
+#### 1. Using `CACHE.SET` with explicit tags
+
+You can directly associate tags when manually setting a cache entry:
+
+```shell
+127.0.0.1:7878> CACHE.SET user:123:profile '{"id": 123, "name": "Alice"}' TTL 3600 TAGS user:123 profile-data
+OK
+127.0.0.1:7878> CACHE.SET user:123:orders '[{"order_id": "A1", "item": "Book"}]' TTL 3600 TAGS user:123 order-data
 OK
 ```
 
-**2. Use `CACHE.PROXY` with the Tagged Policy**
+#### 2. Using `CACHE.PROXY` with a `CachePolicy` for dynamic tags
 
-Now, when you use `CACHE.PROXY` with this policy, the tags will be automatically applied.
+First, define a policy that generates dynamic tags based on the key pattern:
 
-```
-> CACHE.PROXY user_data_policy GET user:123
-...
-
-> CACHE.PROXY user_data_policy LGET orders:user:123
-...
+```shell
+# Policy to cache product details, with a dynamic tag based on product ID
+127.0.0.1:7878> CACHE.POLICY product-details KEY-PATTERN "product:*:details" URL-TEMPLATE "https://api.example.com/products/{1}/details" TTL 300 TAGS "product:{1}"
+OK
 ```
 
-**3. Invalidate by Tag**
+Now, when you use `CACHE.PROXY` with a key matching this policy, the tag will be automatically applied:
 
-Now, if user `123` updates their profile, you can invalidate all related cache entries with a single command:
-
+```shell
+127.0.0.1:7878> CACHE.PROXY product:456:details
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json"
+3) "{"id": 456, "name": "Example Product"}"
+# This entry is now tagged with "product:456"
 ```
-> CACHE.PURGETAG "user:123"
-(integer) 2
+
+---
+
+## Invalidate by Tag with `CACHE.PURGETAG`
+
+When the underlying data changes, you can invalidate all associated cache entries using the `CACHE.PURGETAG` command. This command is designed for **cluster-wide invalidation**.
+
+**Command:** `CACHE.PURGETAG tag1 [tag2 ...]`
+
+### Example: Purging User Data
+
+If user `123` updates their profile, you can invalidate all related cache entries (both `user:123:profile` and `user:123:orders`) with a single command:
+
+```shell
+127.0.0.1:7878> CACHE.PURGETAG user:123
+(integer) 2 # Indicates 2 tags were processed (in this simple case, just one tag was given)
 ```
 
-This command will invalidate the cached results for both `GET user:123` and `LGET orders:user:123`, ensuring that the next time they are requested, fresh data will be fetched.
+**How `CACHE.PURGETAG` Works (Cluster-Wide):
 
-Tag-based invalidation simplifies cache management and reduces the risk of stale data.
+1.  **Tag Epoch Update:** When `CACHE.PURGETAG` is executed on any node in the cluster, SpinelDB updates a cluster-wide logical clock (an "epoch") for that specific tag. This new epoch is then gossiped to all other nodes in the cluster.
+2.  **Lazy Invalidation:** Cache entries are *not* immediately deleted. Instead, each cached item has its own `tags_epoch` (the epoch of its associated tags at the time of caching).
+3.  **Validation on Access:** When a `CACHE.GET` or `CACHE.PROXY` request comes in, SpinelDB compares the cached item's `tags_epoch` with the current `latest_purge_epoch` for all its associated tags. If the item's `tags_epoch` is older than any of its tags' `latest_purge_epoch`, the item is considered stale and will be treated as a cache miss (triggering a revalidation or fetch from origin).
+4.  **Background Cleanup:** A dedicated background task (`CacheTagValidatorTask`) periodically samples cache entries. If it finds an entry whose `tags_epoch` is older than the current `latest_purge_epoch` for any of its tags, it will proactively delete that entry from the cache. This ensures that stale entries are eventually removed, even if they are not accessed.
+
+This lazy, cluster-aware invalidation mechanism ensures that your cache remains consistent across all nodes without requiring expensive, blocking operations.
 
 ---
 

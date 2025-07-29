@@ -1,58 +1,117 @@
 # Chapter 4b: Declarative Caching with CACHE.PROXY
 
-SpinelDB provides a powerful and easy-to-use caching mechanism through the `CACHE.PROXY` command. Instead of manually managing `CACHE.GET` and `CACHE.SET` logic in your application, you can delegate the entire caching process to SpinelDB.
+The `CACHE.PROXY` command is a powerful feature that allows SpinelDB to act as a smart caching proxy, implementing a "get-or-fetch" pattern. Instead of your application manually checking the cache, fetching from an origin on a miss, and then storing the result, `CACHE.PROXY` automates this entire workflow.
 
-This feature acts as a "proxy" or "wrapper" for other commands. When you execute a command through `CACHE.PROXY`, SpinelDB will:
-1.  Create a unique cache key based on the command you provide.
-2.  Check if there is a valid result in the cache for that key.
-3.  If so, the cached result is returned immediately.
-4.  If not, SpinelDB will execute the original command you provided.
-5.  The result of the original command is then stored in the cache according to the policy you specify, and returned to you.
+When you execute `CACHE.PROXY`, SpinelDB will:
+1.  Attempt to retrieve the content for the given `key` from its cache (similar to `CACHE.GET`).
+2.  If a fresh or stale (within SWR/Grace) entry is found, it's returned immediately.
+3.  If there's a cache miss (no entry, or fully expired), SpinelDB will:
+    *   **Resolve the origin URL and caching options:** It will look for a matching `CachePolicy` based on the `key`. If a policy is found, it will use the policy's `url_template` and other caching directives (TTL, SWR, Grace, Tags, Vary). If no policy matches, you must provide the `url` directly in the `CACHE.PROXY` command.
+    *   **Fetch from the origin:** It will perform an HTTP GET request to the resolved URL.
+    *   **Store the result:** The fetched content (and its associated metadata) will be stored in the cache under the specified `key`, adhering to the resolved caching options.
+    *   **Return the result:** The newly fetched and cached content is returned to the client.
 
-This drastically simplifies application logic and ensures caching consistency.
+This significantly simplifies your application logic, offloading complex caching decisions and network interactions to SpinelDB.
+
+---
 
 ## Command Syntax
 
 The basic syntax for `CACHE.PROXY` is as follows:
 
 ```
-CACHE.PROXY <policy_name> <command_to_execute> [args...]
+CACHE.PROXY key [url] [TTL seconds] [SWR seconds] [GRACE seconds] [TAGS tag1 tag2 ...] [VARY header-name] [HEADERS key value ...]
 ```
 
-*   `policy_name`: The name of the caching policy you have previously defined (using `CACHE.POLICY`). This policy determines the TTL, eviction strategy (LRU/LFU), and other parameters.
-*   `command_to_execute`: The command whose result you want to cache.
-*   `[args...]`: The arguments for the `command_to_execute`.
+*   **`key`**: The cache key for the item. This key is used to look up existing cache entries and to match against configured `CachePolicy` patterns.
+*   **`url` (Optional)**: The URL of the origin server to fetch content from if there's a cache miss. If a matching `CachePolicy` is configured with a `url_template`, this argument can be omitted.
+*   **`TTL seconds`**: The Time-To-Live for the fresh content.
+*   **`SWR seconds`**: The Stale-While-Revalidate period.
+*   **`GRACE seconds`**: The Grace period.
+*   **`TAGS tag1 tag2 ...`**: Associates tags with the cached item for tag-based invalidation.
+*   **`VARY header-name`**: Specifies HTTP request headers that influence the cached response, allowing for content negotiation.
+*   **`HEADERS key value ...`**: Allows you to pass arbitrary HTTP headers to the origin request. These can also be used for `VARY` negotiation.
+
+**Note:** `TTL`, `SWR`, `GRACE`, `TAGS`, `VARY`, and `HEADERS` can be explicitly provided in the `CACHE.PROXY` command, or they can be inherited from a matching `CachePolicy`. Command-line arguments take precedence over policy settings.
+
+---
+
+## How Policies Work with `CACHE.PROXY`
+
+`CACHE.PROXY` is designed to work seamlessly with **`CachePolicy`** definitions (configured via the `CACHE.POLICY` command, detailed in a later chapter). A `CachePolicy` allows you to define declarative rules for caching, including:
+*   A `key_pattern` (e.g., `products:*:details`) to match cache keys.
+*   A `url_template` (e.g., `https://api.example.com/products/{1}/details`) that can dynamically construct the origin URL based on the cache key or client request headers.
+*   Default `TTL`, `SWR`, `GRACE` periods.
+*   Automatic `tags` generation.
+*   `Vary` headers to consider.
+*   Whether to `prewarm` the cache.
+
+When `CACHE.PROXY` is called, SpinelDB will automatically find the highest-priority `CachePolicy` whose `key_pattern` matches the provided `key`. If a match is found, the policy's settings will be used to guide the fetch and caching process.
+
+---
 
 ## Usage Example
 
-Let's look at a practical example. Imagine you have an e-commerce application and want to cache the list of best-selling products, which is obtained from the `ZREVRANGE products:sales 0 9` command.
+Let's set up a `CachePolicy` first (you'd typically do this once in your configuration or via `CACHE.POLICY` command):
 
-**1. Define a Cache Policy**
-
-First, we create a cache policy with a TTL of 60 seconds.
-
-```
-> CACHE.POLICY my_policy TTL 60
+```shell
+# Example Policy: Cache product details
+# Matches keys like "product:123:details"
+# Fetches from "https://api.example.com/products/123/details"
+# Sets TTL=300s, SWR=60s, GRACE=30s
+# Adds a dynamic tag "product:{1}"
+127.0.0.1:7878> CACHE.POLICY product-details KEY-PATTERN "product:*:details" URL-TEMPLATE "https://api.example.com/products/{1}/details" TTL 300 SWR 60 GRACE 30 TAGS "product:{1}"
 OK
 ```
 
-**2. Use CACHE.PROXY**
+Now, let's use `CACHE.PROXY` for a product details key:
 
-Now, we use `CACHE.PROXY` to execute and cache the `ZREVRANGE` command.
+```shell
+# First call for a new key
+127.0.0.1:7878> CACHE.PROXY product:123:details
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json"
+3) "{\"id\": 123, \"name\": \"Example Product\"}"
+# Analysis:
+# 1. Cache miss for "product:123:details".
+# 2. SpinelDB matches the "product-details" policy.
+# 3. It constructs the URL: "https://api.example.com/products/123/details".
+# 4. Fetches content from the origin.
+# 5. Stores the content in cache with TTL=300, SWR=60, GRACE=30, and tag "product:123".
+# 6. Returns the fetched content.
 
+# Subsequent call (within TTL)
+127.0.0.1:7878> CACHE.PROXY product:123:details
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json"
+3) "{\"id\": 123, \"name\": \"Example Product\"}"
+# Analysis:
+# 1. Cache hit for "product:123:details".
+# 2. Content is served directly from cache, no origin fetch.
+
+# Call with explicit TTL (overrides policy)
+127.0.0.1:7878> CACHE.PROXY product:456:details TTL 600
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json"
+3) "{\"id\": 456, \"name\": \"Another Product\"}"
+# Analysis:
+# 1. Cache miss for "product:456:details".
+# 2. SpinelDB matches the "product-details" policy for URL and tags.
+# 3. However, the explicit TTL 600s from the command overrides the policy's TTL 300s.
+# 4. Fetches, stores with TTL 600s, and returns.
 ```
-> CACHE.PROXY my_policy ZREVRANGE products:sales 0 9
-1) "product:123"
-2) "product:456"
-...
-```
 
-**Analysis:**
-*   **First Call**: SpinelDB does not find a cache for this command. It will execute `ZREVRANGE products:sales 0 9`, store the result under the `my_policy` policy, and then return the result.
-*   **Subsequent Calls (within 60 seconds)**: SpinelDB will find a valid cache entry and immediately return the result without having to run the potentially expensive `ZREVRANGE` command again.
-*   **After 60 seconds**: The cache will expire. The next call will again execute the original command and store the result back in the cache.
+### Advanced Features of `CACHE.PROXY`
 
-With `CACHE.PROXY`, you get the benefits of high-performance caching without having to write complex `if/else` logic in your application code.
+*   **Cache Stampede Protection:** If multiple clients request the same missing key simultaneously, `CACHE.PROXY` ensures that only *one* request goes to the origin. Subsequent requests for that key will wait for the first fetch to complete and then receive the same result, preventing your origin from being overwhelmed.
+*   **Lazy Lock Release:** When a cache miss occurs and an origin fetch is initiated, SpinelDB intelligently releases the database locks before performing the potentially long-running HTTP request. This maximizes concurrency and keeps the database responsive.
+*   **Dynamic URL Construction:** The `url_template` in `CachePolicy` supports placeholders like `{N}` (from key pattern captures) and `{hdr:Header-Name}` (from client request headers), allowing for highly dynamic origin URLs.
+*   **Negative Caching:** If the origin responds with a non-200 status (e.g., 404, 500), SpinelDB can cache this negative response for a configurable period, preventing repeated requests to a failing or non-existent endpoint.
+
+`CACHE.PROXY` empowers you to build highly efficient and resilient applications by centralizing and automating your caching logic within SpinelDB.
 
 ---
 

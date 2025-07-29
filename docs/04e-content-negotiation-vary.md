@@ -17,12 +17,35 @@ SpinelDB solves this by natively supporting the `Vary` HTTP header. The `Vary` h
 
 When you store a cache item with a `Vary` directive, SpinelDB creates a **variant map** for that key. Instead of storing a single body, it stores multiple bodies, each corresponding to a unique combination of the specified header values.
 
+### Variant Management
+
+To prevent unbounded growth of variants for a single key, SpinelDB allows you to configure a `max_variants_per_key` limit in your `config.toml` (under the `[cache]` section). If this limit is reached when a new variant is being added, the **least recently accessed (LRU)** variant for that key will be automatically evicted to make space.
+
 **Workflow:**
 1.  **`CACHE.SET` with `VARY`:** You store an object and specify which headers it varies on (e.g., `VARY "Accept-Encoding"`). You also provide the request headers that led to this specific response (e.g., `HEADERS "Accept-Encoding" "gzip, deflate, br"`).
 2.  **Variant Hash:** SpinelDB calculates a unique hash based on the values of the `Vary` headers and any additional `HEADERS` provided. This hash ensures that each unique combination of request headers (relevant to the `Vary` directive) maps to a distinct cached variant.
 3.  **Store Variant:** The response body is stored in a map under this hash.
 4.  **`CACHE.GET` with `HEADERS`:** When a client requests the object, they provide their own set of request headers (e.g., `HEADERS "Accept-Encoding" "deflate"`).
 5.  **Hash and Lookup:** SpinelDB calculates a new hash from the incoming headers and looks for a matching variant in the map. If a match is found, that specific version is served. If not, it's a cache miss for that variant.
+
+---
+
+### Using `Vary` with `CACHE.PROXY` and `CachePolicy`
+
+For declarative caching with `CACHE.PROXY`, you can define the `vary_on` headers directly in your `CachePolicy`.
+
+```shell
+# Example Policy: Cache images, varying on Accept-Encoding
+127.0.0.1:7878> CACHE.POLICY images KEY-PATTERN "images:*" URL-TEMPLATE "https://cdn.example.com/{1}.jpg" TTL 86400 VARY-ON "Accept-Encoding"
+OK
+```
+
+When a `CACHE.PROXY` request matches this policy, SpinelDB will automatically:
+1.  Extract the `Accept-Encoding` header from the client's request.
+2.  Include this header when fetching from the origin.
+3.  Use this header to determine the correct variant for caching and retrieval.
+
+This allows you to define complex content negotiation rules once in your policies, and `CACHE.PROXY` will handle the rest transparently.
 
 ---
 
