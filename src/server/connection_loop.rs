@@ -26,17 +26,19 @@ use tokio::signal::unix::{SignalKind, signal};
 /// On Windows, it listens for Ctrl+C.
 async fn await_shutdown_signal() {
     #[cfg(unix)]
-    let mut sigint = signal(SignalKind::interrupt()).expect("Failed to create SIGINT stream");
-    #[cfg(unix)]
-    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to create SIGTERM stream");
+    {
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to create SIGINT stream");
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to create SIGTERM stream");
+        tokio::select! {
+            _ = sigint.recv() => info!("SIGINT received, initiating graceful shutdown."),
+            _ = sigterm.recv() => info!("SIGTERM received, initiating graceful shutdown."),
+        }
+    }
 
     #[cfg(windows)]
-    let mut ctrl_c = signal::ctrl_c().expect("Failed to create Ctrl+C stream");
-
-    tokio::select! {
-        _ = async { #[cfg(unix)] { sigint.recv().await; info!("SIGINT received, initiating graceful shutdown."); } } => {},
-        _ = async { #[cfg(unix)] { sigterm.recv().await; info!("SIGTERM received, initiating graceful shutdown."); } } => {},
-        _ = async { #[cfg(windows)] { ctrl_c.await; info!("Ctrl-C received, initiating graceful shutdown."); } } => {},
+    {
+        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        info!("Ctrl-C received, initiating graceful shutdown.");
     }
 }
 
