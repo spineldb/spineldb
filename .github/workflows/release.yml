@@ -67,6 +67,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mingw-w64
 
+      - name: Install cross
+        uses: taiki-e/install-action@cross
+
       - name: Build binary (non-aarch64-linux)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --target ${{ matrix.target }}
@@ -76,11 +79,7 @@ jobs:
 
       - name: Build binary (aarch64-linux)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package the artifact
         shell: bash
