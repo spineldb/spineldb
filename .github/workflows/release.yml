@@ -131,6 +131,9 @@ jobs:
     permissions:
       contents: write # Required to create a release
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all release assets
         uses: actions/download-artifact@v4
         with:
@@ -138,23 +141,11 @@ jobs:
           pattern: release-assets-*
           merge-multiple: true
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+      - name: Create Release and Upload Assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-      - name: Upload Release Assets
-        shell: bash
         run: |
+          gh release create ${{ github.ref_name }} --generate-notes
           for file in release-assets/*; do
-            asset_name=$(basename "$file")
             gh release upload ${{ github.ref_name }} "$file" --clobber
           done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
