@@ -10,6 +10,7 @@ use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
+#[cfg(unix)]
 use std::process;
 
 use tracing::info;
