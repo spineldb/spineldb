@@ -45,23 +45,38 @@ get_os_arch() {
   ARCH_TYPE="$(uname -m)"
   PLATFORM=""
 
-  case "$OS_TYPE" in
-    Linux)
-      case "$ARCH_TYPE" in
-        x86_64) PLATFORM="x86_64-linux" ;;
-        aarch64) PLATFORM="aarch64-linux" ;; # Assuming you have aarch64 linux builds
-        *) err_exit "Unsupported Linux Architecture: $ARCH_TYPE" ;;
-      esac
-      ;;
-    Darwin)
-      case "$ARCH_TYPE" in
-        x86_64) PLATFORM="x86_64-macos" ;;
-        arm64 | aarch64) PLATFORM="aarch64-macos" ;;
-        *) err_exit "Unsupported macOS Architecture: $ARCH_TYPE" ;;
-      esac
-      ;;
-    *) err_exit "Unsupported Operating System: $OS_TYPE" ;;
-  esac
+  # Check for Termux environment first
+  if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux/files/usr" ]; then
+    case "$ARCH_TYPE" in
+      aarch64) PLATFORM="aarch64-termux" ;;
+      *) err_exit "Unsupported Termux Architecture: $ARCH_TYPE. Only aarch64 is supported." ;;
+    esac
+  else
+    case "$OS_TYPE" in
+      Linux)
+        case "$ARCH_TYPE" in
+          x86_64) PLATFORM="x86_64-linux" ;;
+          aarch64) PLATFORM="aarch64-linux" ;;
+          *) err_exit "Unsupported Linux Architecture: $ARCH_TYPE" ;;
+        esac
+        ;;
+      Darwin)
+        case "$ARCH_TYPE" in
+          x86_64) PLATFORM="x86_64-macos" ;;
+          arm64 | aarch64) PLATFORM="aarch64-macos" ;;
+          *) err_exit "Unsupported macOS Architecture: $ARCH_TYPE" ;;
+        esac
+        ;;
+      MINGW64* | CYGWIN* | MSYS*)
+        case "$ARCH_TYPE" in
+          x86_64) PLATFORM="x86_64-windows" ;;
+          aarch64) PLATFORM="aarch64-windows" ;;
+          *) err_exit "Unsupported Windows Architecture: $ARCH_TYPE" ;;
+        esac
+        ;;
+      *) err_exit "Unsupported Operating System: $OS_TYPE" ;;
+    esac
+  fi
   echo "$PLATFORM"
 }
 
@@ -122,8 +137,7 @@ main() {
   if [ ! -f "$EXTRACTED_BINARY_PATH" ]; then
     err_exit "Binary '$BINARY_NAME' not found after extraction at $EXTRACTED_BINARY_PATH."
   fi
-  chmod +x "$EXTRACTED_BINARY_PATH"
-  msg "Binary extracted and made executable."
+  msg "Binary extracted."
 
   # Installation
   SUDO_CMD=""
@@ -141,15 +155,8 @@ main() {
   if ! ${SUDO_CMD} mv "$EXTRACTED_BINARY_PATH" "$DEST_PATH"; then
     err_exit "Failed to install the binary to $DEST_PATH. (Command: ${SUDO_CMD} mv \"$EXTRACTED_BINARY_PATH\" \"$DEST_PATH\")"
   fi
-
-  msg ""
-  msg "SpinelDB was successfully installed to $DEST_PATH"
-  if has_command "$BINARY_NAME"; then
-    msg "You can now run '$BINARY_NAME'. Try '$BINARY_NAME --version'."
-  else
-    msg "Please open a new terminal or run 'source ~/.bashrc' (or your shell's equivalent config file) for the command to be available."
-    msg "Then, try running: $BINARY_NAME --version"
-  fi
+  ${SUDO_CMD} chmod 755 "$DEST_PATH"
+  msg "Binary installed and made executable."
 }
 
 # Run the main function
