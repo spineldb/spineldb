@@ -9,6 +9,7 @@ jobs:
   build_release_assets:
     name: Build Release Assets
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-pc-windows-gnu
@@ -36,6 +37,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
