@@ -27,6 +27,11 @@ jobs:
             archive_name: spineldb-${{ github.ref_name }}-x86_64-macos
             asset_name: spineldb
             archive_extension: .tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_name: spineldb-${{ github.ref_name }}-aarch64-linux
+            asset_name: spineldb
+            archive_extension: .tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
             archive_name: spineldb-${{ github.ref_name }}-aarch64-macos
