@@ -39,6 +39,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && steps.cache-zigbuild.outputs.cache-hit != 'true'
         run: cargo install --locked cargo-zigbuild
 
+      - name: Install OpenSSL dev package
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Run GoReleaser to build Linux artifacts
         if: matrix.os == 'ubuntu-latest'
         uses: goreleaser/goreleaser-action@v6
