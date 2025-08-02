@@ -8,41 +8,53 @@ use crate::connection::ConnectionHandler;
 use crate::core::metrics;
 use crate::core::persistence::spldb_saver::SpldbSaverTask;
 use crate::core::state::{ClientInfo, ClientRole};
-use anyhow::anyhow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
+
+// Platform-specific signal handling imports
+#[cfg(windows)]
+use tokio::signal;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+
+/// Waits for a shutdown signal based on the operating system.
+/// On Unix, it listens for SIGINT and SIGTERM.
+/// On Windows, it listens for Ctrl+C.
+async fn await_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to create SIGINT stream");
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to create SIGTERM stream");
+        tokio::select! {
+            _ = sigint.recv() => info!("SIGINT received, initiating graceful shutdown."),
+            _ = sigterm.recv() => info!("SIGTERM received, initiating graceful shutdown."),
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        info!("Ctrl-C received, initiating graceful shutdown.");
+    }
+}
 
 /// The main server loop that accepts connections and handles graceful shutdown.
 pub async fn run(mut ctx: ServerContext) {
     let mut session_id_counter: u64 = 0;
     let mut client_tasks = JoinSet::new();
 
-    // Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM.
-    let mut sigint = signal(SignalKind::interrupt())
-        .map_err(|e| anyhow!("Failed to register SIGINT handler: {}", e))
-        .expect("Failed to create SIGINT stream");
-    let mut sigterm = signal(SignalKind::terminate())
-        .map_err(|e| anyhow!("Failed to register SIGTERM handler: {}", e))
-        .expect("Failed to create SIGTERM stream");
-
     loop {
         tokio::select! {
             biased; // Prioritize shutdown signals over other events.
 
-            // Handle OS shutdown signals.
-            _ = sigint.recv() => {
-                info!("SIGINT received, initiating graceful shutdown.");
+            // Wait for a shutdown signal.
+            _ = await_shutdown_signal() => {
                 break;
-            }
-            _ = sigterm.recv() => {
-                info!("SIGTERM received, initiating graceful shutdown.");
-                break;
-            }
+            },
 
             // Monitor background tasks for unexpected termination.
             Some(res) = ctx.background_tasks.join_next() => {
