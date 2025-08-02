@@ -1,11 +1,11 @@
 #!/bin/sh
-set -e # Exit immediately if a command exits with a non-zero status.
+set -e
 
 # --- Configuration ---
 GITHUB_REPO="spineldb/spineldb"
 BINARY_NAME="spineldb"
 DEFAULT_INSTALL_DIR="/usr/local/bin" # Default for standard systems
-INSTALL_DIR="" # Will be set based on environment
+INSTALL_DIR=""
 
 # --- Helper Functions ---
 msg() {
