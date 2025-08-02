@@ -3,101 +3,112 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
-
-permissions:
-  contents: write
+      - 'v*'
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  build_release_assets:
+    name: Build Release Assets
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+            archive_name: spineldb-${{ github.ref_name }}-x86_64-windows
+            asset_name: spineldb.exe
+            archive_extension: .zip
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_name: spineldb-${{ github.ref_name }}-x86_64-linux
+            asset_name: spineldb
+            archive_extension: .tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive_name: spineldb-${{ github.ref_name }}-x86_64-macos
+            asset_name: spineldb
+            archive_extension: .tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_name: spineldb-${{ github.ref_name }}-aarch64-macos
+            asset_name: spineldb
+            archive_extension: .tar.gz
+
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Rust
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Zig for Cross-compilation
-        if: matrix.os == 'ubuntu-latest'
-        uses: mlugg/setup-zig@v2
-
-      - name: Cache cargo-zigbuild
-        if: matrix.os == 'ubuntu-latest'
-        id: cache-zigbuild
-        uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/cargo-zigbuild
-          key: ${{ runner.os }}-cargo-zigbuild
+          targets: ${{ matrix.target }}
 
-      - name: Install cargo-zigbuild if not cached
-        if: matrix.os == 'ubuntu-latest' && steps.cache-zigbuild.outputs.cache-hit != 'true'
-        run: cargo install --locked cargo-zigbuild
+      - name: Install linker for Windows cross-compilation
+        if: matrix.os == 'ubuntu-latest' && contains(matrix.target, 'windows')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
 
-      - name: Install OpenSSL dev package
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Run GoReleaser to build Linux artifacts
-        if: matrix.os == 'ubuntu-latest'
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: latest
-          args: build --clean --id linux-build
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set linker for Windows cross-compile from Linux
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
 
-      - name: Run GoReleaser to build macOS artifacts
-        if: matrix.os == 'macos-latest'
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: latest
-          args: build --clean --id mac-build
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package the artifact
+        shell: bash
+        run: |
+          # Determine paths and names
+          staging_dir="${{ matrix.archive_name }}"
+          binary_path="target/${{ matrix.target }}/release/${{ matrix.asset_name }}"
+          archive_file="${{ matrix.archive_name }}${{ matrix.archive_extension }}"
 
-      # Upload direktori 'dist' yang berisi biner mentah
-      - name: Upload artifacts
+          # Create staging directory
+          mkdir -p "$staging_dir"
+
+          # Copy files
+          echo "Copying binary from $binary_path to $staging_dir/"
+          cp "$binary_path" "$staging_dir/"
+          echo "Copying LICENSE and README.md"
+          cp LICENSE README.md "$staging_dir/"
+
+          # Create archive
+          echo "Creating archive: $archive_file"
+          if [[ "${{ matrix.archive_extension }}" == ".zip" ]]; then
+            # Use zip for Windows archives
+            (cd "$staging_dir" && zip -r "../$archive_file" .)
+          else
+            # Use tar for Linux/macOS archives
+            tar -czvf "$archive_file" "$staging_dir"
+          fi
+
+          # Generate checksum
+          echo "Generating checksum for $archive_file"
+          sha256sum "$archive_file" > "${archive_file}.sha256"
+
+      - name: Upload artifact for the release job
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.os }}
-          path: dist
+          name: release-assets-${{ matrix.target }}
+          path: |
+            ${{ matrix.archive_name }}${{ matrix.archive_extension }}
+            ${{ matrix.archive_name }}${{ matrix.archive_extension }}.sha256
 
-  # Job ini akan mengunduh semua biner, lalu menjalankan proses rilis penuh
-  # (arsip, checksum, publish)
-  publish:
-    needs: build
+  create_release:
+    name: Create GitHub Release
+    needs: build_release_assets
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to create a release
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Rust # Diperlukan untuk hook 'before' di goreleaser
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Download all artifacts
+      - name: Download all release assets
         uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: dist-*
-          merge-multiple: true # Menggabungkan semua 'dist' menjadi satu
+          path: release-assets
+          pattern: release-assets-*
+          merge-multiple: true
 
-      - name: Run GoReleaser to publish
-        uses: goreleaser/goreleaser-action@v6
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
         with:
-          distribution: goreleaser
-          version: latest
-          # 'release' akan menggunakan biner yang sudah ada di 'dist'
-          # kemudian membuat arsip, checksum, dan merilisnya.
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: release-assets/*
+          generate_release_notes: true
