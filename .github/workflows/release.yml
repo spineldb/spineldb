@@ -72,6 +72,8 @@ jobs:
         env:
           # Set linker for Windows cross-compile from Linux
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+          # Set linker for aarch64 cross-compile from Linux
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Package the artifact
         shell: bash
