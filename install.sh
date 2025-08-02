@@ -23,19 +23,25 @@ has_command() {
 
 # --- Environment Detection & Setup ---
 setup_environment() {
-  # Detect Termux
+  # Detect Termux and provide specific instructions
   if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux/files/usr" ]; then
     msg "Termux environment detected."
-    INSTALL_DIR="$PREFIX/bin" # $PREFIX is a Termux environment variable
-    if [ -z "$INSTALL_DIR" ]; then # Fallback if $PREFIX is not set for some reason
-        INSTALL_DIR="/data/data/com.termux/files/usr/bin"
-    fi
-    if ! has_command "tar"; then
-      err_exit "'tar' command not found. In Termux, you can install it with 'pkg install tar'."
-    fi
-  else
-    INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+    msg "Pre-compiled binaries are not compatible with Termux."
+    msg "Please install SpinelDB by compiling from source."
+    echo ""
+    echo "1. Install dependencies:"
+    echo "   pkg install rust git"
+    echo ""
+    echo "2. Clone the repository and compile:"
+    echo "   git clone https://github.com/spineldb/spineldb.git"
+    echo "   cd spineldb"
+    echo "   cargo build --release"
+    echo ""
+    echo "3. The binary will be located at: ./target/release/spineldb"
+    exit 0 # Exit successfully after providing instructions
   fi
+
+  INSTALL_DIR="$DEFAULT_INSTALL_DIR"
   msg "Installation directory set to: $INSTALL_DIR"
 }
 
@@ -45,38 +51,25 @@ get_os_arch() {
   ARCH_TYPE="$(uname -m)"
   PLATFORM=""
 
-  # Check for Termux environment first
-  if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux/files/usr" ]; then
-    case "$ARCH_TYPE" in
-      aarch64) PLATFORM="aarch64-termux" ;;
-      *) err_exit "Unsupported Termux Architecture: $ARCH_TYPE. Only aarch64 is supported." ;;
-    esac
-  else
-    case "$OS_TYPE" in
-      Linux)
-        case "$ARCH_TYPE" in
-          x86_64) PLATFORM="x86_64-linux" ;;
-          aarch64) PLATFORM="aarch64-linux" ;;
-          *) err_exit "Unsupported Linux Architecture: $ARCH_TYPE" ;;
-        esac
-        ;;
-      Darwin)
-        case "$ARCH_TYPE" in
-          x86_64) PLATFORM="x86_64-macos" ;;
-          arm64 | aarch64) PLATFORM="aarch64-macos" ;;
-          *) err_exit "Unsupported macOS Architecture: $ARCH_TYPE" ;;
-        esac
-        ;;
-      MINGW64* | CYGWIN* | MSYS*)
-        case "$ARCH_TYPE" in
-          x86_64) PLATFORM="x86_64-windows" ;;
-          aarch64) PLATFORM="aarch64-windows" ;;
-          *) err_exit "Unsupported Windows Architecture: $ARCH_TYPE" ;;
-        esac
-        ;;
-      *) err_exit "Unsupported Operating System: $OS_TYPE" ;;
-    esac
-  fi
+  case "$OS_TYPE" in
+    Linux)
+      case "$ARCH_TYPE" in
+        x86_64) PLATFORM="x86_64-linux" ;;
+        aarch64) PLATFORM="aarch64-linux" ;; # Assuming you have aarch64 linux builds
+        *) err_exit "Unsupported Linux Architecture: $ARCH_TYPE" ;; 
+      esac
+      ;;
+    Darwin)
+      case "$ARCH_TYPE" in
+        x86_64) PLATFORM="x86_64-macos" ;;
+        arm64 | aarch64) PLATFORM="aarch64-macos" ;; 
+        *) err_exit "Unsupported macOS Architecture: $ARCH_TYPE" ;; 
+      esac
+      ;;
+    *)
+      err_exit "Unsupported Operating System: $OS_TYPE"
+      ;;
+  esac
   echo "$PLATFORM"
 }
 
