@@ -1,11 +1,11 @@
 #!/bin/sh
-set -e # Exit immediately if a command exits with a non-zero status.
+set -e
 
 # --- Configuration ---
 GITHUB_REPO="spineldb/spineldb"
 BINARY_NAME="spineldb"
 DEFAULT_INSTALL_DIR="/usr/local/bin" # Default for standard systems
-INSTALL_DIR="" # Will be set based on environment
+INSTALL_DIR=""
 
 # --- Helper Functions ---
 msg() {
@@ -23,19 +23,25 @@ has_command() {
 
 # --- Environment Detection & Setup ---
 setup_environment() {
-  # Detect Termux
+  # Detect Termux and provide specific instructions
   if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux/files/usr" ]; then
     msg "Termux environment detected."
-    INSTALL_DIR="$PREFIX/bin" # $PREFIX is a Termux environment variable
-    if [ -z "$INSTALL_DIR" ]; then # Fallback if $PREFIX is not set for some reason
-        INSTALL_DIR="/data/data/com.termux/files/usr/bin"
-    fi
-    if ! has_command "tar"; then
-      err_exit "'tar' command not found. In Termux, you can install it with 'pkg install tar'."
-    fi
-  else
-    INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+    msg "Pre-compiled binaries are not compatible with Termux."
+    msg "Please install SpinelDB by compiling from source."
+    echo ""
+    echo "1. Install dependencies:"
+    echo "   pkg install rust git"
+    echo ""
+    echo "2. Clone the repository and compile:"
+    echo "   git clone https://github.com/spineldb/spineldb.git"
+    echo "   cd spineldb"
+    echo "   cargo build --release"
+    echo ""
+    echo "3. The binary will be located at: ./target/release/spineldb"
+    exit 0 # Exit successfully after providing instructions
   fi
+
+  INSTALL_DIR="$DEFAULT_INSTALL_DIR"
   msg "Installation directory set to: $INSTALL_DIR"
 }
 
@@ -50,17 +56,19 @@ get_os_arch() {
       case "$ARCH_TYPE" in
         x86_64) PLATFORM="x86_64-linux" ;;
         aarch64) PLATFORM="aarch64-linux" ;; # Assuming you have aarch64 linux builds
-        *) err_exit "Unsupported Linux Architecture: $ARCH_TYPE" ;;
+        *) err_exit "Unsupported Linux Architecture: $ARCH_TYPE" ;; 
       esac
       ;;
     Darwin)
       case "$ARCH_TYPE" in
         x86_64) PLATFORM="x86_64-macos" ;;
-        arm64 | aarch64) PLATFORM="aarch64-macos" ;;
-        *) err_exit "Unsupported macOS Architecture: $ARCH_TYPE" ;;
+        arm64 | aarch64) PLATFORM="aarch64-macos" ;; 
+        *) err_exit "Unsupported macOS Architecture: $ARCH_TYPE" ;; 
       esac
       ;;
-    *) err_exit "Unsupported Operating System: $OS_TYPE" ;;
+    *)
+      err_exit "Unsupported Operating System: $OS_TYPE"
+      ;;
   esac
   echo "$PLATFORM"
 }
@@ -122,8 +130,7 @@ main() {
   if [ ! -f "$EXTRACTED_BINARY_PATH" ]; then
     err_exit "Binary '$BINARY_NAME' not found after extraction at $EXTRACTED_BINARY_PATH."
   fi
-  chmod +x "$EXTRACTED_BINARY_PATH"
-  msg "Binary extracted and made executable."
+  msg "Binary extracted."
 
   # Installation
   SUDO_CMD=""
@@ -141,15 +148,8 @@ main() {
   if ! ${SUDO_CMD} mv "$EXTRACTED_BINARY_PATH" "$DEST_PATH"; then
     err_exit "Failed to install the binary to $DEST_PATH. (Command: ${SUDO_CMD} mv \"$EXTRACTED_BINARY_PATH\" \"$DEST_PATH\")"
   fi
-
-  msg ""
-  msg "SpinelDB was successfully installed to $DEST_PATH"
-  if has_command "$BINARY_NAME"; then
-    msg "You can now run '$BINARY_NAME'. Try '$BINARY_NAME --version'."
-  else
-    msg "Please open a new terminal or run 'source ~/.bashrc' (or your shell's equivalent config file) for the command to be available."
-    msg "Then, try running: $BINARY_NAME --version"
-  fi
+  ${SUDO_CMD} chmod 755 "$DEST_PATH"
+  msg "Binary installed and made executable."
 }
 
 # Run the main function

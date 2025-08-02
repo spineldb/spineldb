@@ -9,6 +9,7 @@ jobs:
   build_release_assets:
     name: Build Release Assets
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-pc-windows-gnu
@@ -26,6 +27,11 @@ jobs:
             archive_name: spineldb-${{ github.ref_name }}-x86_64-macos
             asset_name: spineldb
             archive_extension: .tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_name: spineldb-${{ github.ref_name }}-aarch64-linux
+            asset_name: spineldb
+            archive_extension: .tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
             archive_name: spineldb-${{ github.ref_name }}-aarch64-macos
@@ -36,6 +42,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -48,11 +67,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mingw-w64
 
-      - name: Build binary
+      - name: Install cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build binary (non-aarch64-linux)
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --target ${{ matrix.target }}
         env:
           # Set linker for Windows cross-compile from Linux
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+
+      - name: Build binary (aarch64-linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package the artifact
         shell: bash
@@ -104,6 +131,9 @@ jobs:
     permissions:
       contents: write # Required to create a release
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all release assets
         uses: actions/download-artifact@v4
         with:
@@ -112,7 +142,10 @@ jobs:
           merge-multiple: true
 
       - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
-          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} --generate-notes
+          for file in release-assets/*; do
+            gh release upload ${{ github.ref_name }} "$file" --clobber
+          done
