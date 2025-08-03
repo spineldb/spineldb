@@ -1,0 +1,49 @@
+# ===================================================================
+#           SpinelDB Cluster Configuration File Example
+# ===================================================================
+#
+# This file is typically managed automatically by SpinelDB nodes. However,
+# it can be used to bootstrap a new cluster by distributing it to each
+# node before the first startup.
+#
+# --- Format ---
+# <node-id> <ip:port>@<bus-port> <flags> <master-id> <ping-sent> <pong-received> <config-epoch> <link-state> [slot-range...]
+#
+# - <node-id>: The 40-character unique hexadecimal ID of the node.
+# - <ip:port>@<bus-port>: Client address and cluster bus address.
+# - <flags>: A comma-separated list of flags (e.g., myself, master, slave).
+# - <master-id>: The node ID of the master this node is replicating from ('-' if it's a master).
+# - <config-epoch>: The configuration epoch of the node.
+# - <link-state>: 'connected' or 'disconnected'.
+# - [slot-range...]: The hash slots served by this master.
+#
+# --- How to Bootstrap a 3-Master Cluster ---
+# 1. Generate three unique 40-character random hex strings for your node IDs.
+# 2. Replace the example node IDs, IPs, and ports below with your actual values.
+# 3. For the file on Node 1 (e.g., at 127.0.0.1:7000):
+#    - Keep the "myself" flag on the first line.
+#    - Remove the "myself" flag from all other lines.
+# 4. For the file on Node 2 (e.g., at 127.0.0.1:7001):
+#    - Add the "myself" flag to the second line.
+#    - Ensure no other line has the "myself" flag.
+# 5. Repeat for Node 3. Each node's config file must identify itself with the "myself" flag.
+# 6. Start all three SpinelDB instances with cluster mode enabled.
+
+# --- Example for a 3-Master Cluster ---
+
+# Node 1 (e.g., running at 127.0.0.1:7000)
+# On this node's config file, this line should be: a1b2... 127.0.0.1:7000@17000 myself,master ...
+a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 127.0.0.1:7000@17000 master - 0 0 1 connected 0-5460
+
+# Node 2 (e.g., running at 127.0.0.1:7001)
+# On this node's config file, this line should be: f1e2... 127.0.0.1:7001@17001 myself,master ...
+f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2 127.0.0.1:7001@17001 master - 0 0 2 connected 5461-10922
+
+# Node 3 (e.g., running at 127.0.0.1:7002)
+# On this node's config file, this line should be: 9a8b... 127.0.0.1:7002@17002 myself,master ...
+9a8b7c6d5e4f9a8b7c6d5e4f9a8b7c6d5e4f9a8b 127.0.0.1:7002@17002 master - 0 0 3 connected 10923-16383
+
+# --- Variables ---
+# These are managed by the cluster and will be updated automatically.
+# currentEpoch 3
+# lastVoteEpoch 0

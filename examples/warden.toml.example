@@ -1,0 +1,81 @@
+# ===================================================================
+#           Example Configuration File for SpinelDB Warden
+# ===================================================================
+#
+# Warden is a high-availability and monitoring system for SpinelDB, similar
+# to Redis Sentinel. It monitors masters and replicas, and can perform
+# automatic failovers.
+#
+# To run in Warden mode:
+# ./spineldb --warden /path/to/this/warden.toml
+
+# --- Warden Server Settings ---
+
+# The IP address the Warden will listen on for commands from clients
+# or other Wardens. Use "0.0.0.0" to listen on all interfaces.
+# Default: "0.0.0.0"
+host = "0.0.0.0"
+
+# The TCP port for the Warden. The conventional port is 26379.
+# Default: 26379
+port = 26379
+
+# Optional: The IP address this Warden should announce to its peers.
+# Useful when running behind NAT or in a container (e.g., Docker).
+# If not set, 'host' will be used.
+# announce_ip = "your.public.ip.address"
+
+
+# --- Monitored Masters ---
+#
+# Each [[masters]] block defines a SpinelDB primary server and its
+# associated failover parameters. You can monitor multiple masters
+# by adding more [[masters]] blocks.
+
+[[masters]]
+# A unique name for this master group (e.g., "mymaster", "cache-cluster").
+# Clients will use this name to ask the Warden for the current master's address.
+name = "mymaster"
+
+# The IP address and port of the initial SpinelDB primary server.
+ip = "127.0.0.1"
+port = 7878
+
+# Quorum: The number of Wardens that must agree a master is down before
+# a failover is initiated. This is the most critical setting for preventing
+# split-brain.
+#
+# To achieve a majority, this should be set to (number_of_wardens / 2) + 1.
+# For example, with 3 Wardens, the quorum should be 2.
+# With 5 Wardens, the quorum should be 3.
+quorum = 2
+
+# down-after: The time in milliseconds, seconds, or minutes that a master must be
+# unresponsive (not replying to PINGs) before a Warden considers it
+# to be subjectively down (SDOWN).
+down_after = "30s" # 30 seconds
+
+# failover-timeout: The maximum time a failover process can take, from
+# starting the election to promoting a new master. This also acts as a
+# cooldown period between failovers for the same master.
+#
+# It should be long enough to allow a full failover to complete, but short
+# enough to ensure the system recovers in a timely manner.
+failover_timeout = "3m" # 3 minutes
+
+# hello-interval: The interval at which this Warden sends "hello" messages
+# on the master's Pub/Sub channel (__warden__:hello) to discover other
+# Wardens and share its state.
+#
+# Default: "2s"
+hello_interval = "2s"
+
+# You can add another master to monitor like this:
+#
+# [[masters]]
+# name = "another-master"
+# ip = "127.0.0.1"
+# port = 7879
+# quorum = 2
+# down_after = "30s"
+# failover_timeout = "3m"
