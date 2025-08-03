@@ -57,13 +57,22 @@ async fn main() -> Result<()> {
     } else {
         // --- Normal Server Mode ---
 
-        // Load the server configuration from `config.toml`.
+        // Determine the configuration path.
+        // It can be provided via a --config flag; otherwise, it defaults to "config.toml".
+        let config_path = args
+            .iter()
+            .position(|arg| arg == "--config")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("config.toml");
+
+        // Load the server configuration from the determined path.
         // If loading fails, print the error and exit, as the server
         // cannot run without a valid configuration.
-        let mut config = match Config::from_file("config.toml") {
+        let mut config = match Config::from_file(config_path) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!("Failed to load configuration: {e}");
+                eprintln!("Failed to load configuration from \"{config_path}\": {e}");
                 std::process::exit(1);
             }
         };

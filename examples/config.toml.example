@@ -1,0 +1,173 @@
+# ===================================================================
+#                      SpinelDB Configuration File
+# ===================================================================
+#
+# This file contains all the configuration options for SpinelDB.
+# Settings are grouped into logical sections.
+
+# --- General Server Settings (Top-Level) ---
+# All settings here must be defined BEFORE the first table section (e.g., [persistence]).
+
+# The IP address the server will listen on.
+# Use "0.0.0.0" to listen on all available network interfaces.
+host = "127.0.0.1"
+
+# The TCP port to use.
+port = 7878
+
+# The level of detail for logging.
+# Options: "trace", "debug", "info", "warn", "error".
+# Can be changed at runtime with 'CONFIG SET loglevel <level>'.
+log_level = "debug"
+
+# The total number of databases to create.
+databases = 16
+
+# --- Memory Management ---
+
+# The maximum memory limit SpinelDB can use.
+# Options: a number in bytes (e.g., 536870912), a percentage ("50%"), or a string with units ("1gb", "512mb").
+# "0" means no limit (not recommended in production).
+maxmemory = "10mb"
+
+# The eviction policy for when 'maxmemory' is reached.
+# Options: no-eviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, allkeys-lfu, volatile-lfu.
+maxmemory_policy = "allkeys-lru"
+
+
+# --- Security ---
+# Manages authentication, authorization, and network access controls.
+[security]
+# Legacy password for the AUTH command.
+# This is IGNORED if ACL is enabled. In cluster mode, this also secures node-to-node communication.
+# Uncomment to set a password.
+# password = "your-secret-password"
+
+# Path to the JSON file containing user definitions (usernames, password hashes).
+# This is REQUIRED if 'acl.enabled = true'.
+acl_file = "users.json"
+
+# A list of glob patterns for domains that `CACHE.FETCH` and `CACHE.PROXY`
+# are allowed to connect to. If this list is empty, all domains are permitted.
+# Example: allowed_fetch_domains = ["api.example.com", "*.assets.com"]
+allowed_fetch_domains = []
+
+# Allow SpinelDB to fetch from private IP addresses like 127.0.0.1, 10.0.0.0/8, etc.
+#
+# !!! SECURITY WARNING !!!
+# Setting this to `true` can expose your server to Server-Side Request Forgery (SSRF)
+# attacks. ONLY enable this if you are in a trusted development environment.
+#
+# Default: false (Most Secure)
+allow_private_fetch_ips = true
+
+
+# --- Access Control List (ACL) ---
+[acl]
+enabled = false
+
+# 'rules' define *what* can be done. Users are then granted access to these rules.
+# [[acl.rules]]
+# name = "readonly-user"
+# commands = ["+@read", "-@write"] # Allow all read, deny all write
+# keys = ["~public:*", "~user:*"] # Only allow access to keys matching these patterns
+#
+# [[acl.rules]]
+# name = "admin-user"
+# commands = ["+@all"] # Allow all commands
+#
+# [[acl.rules]]
+# name = "cache-purger"
+# commands = ["+cache.purgetag"]
+# # Example of a dynamic condition:
+# # Only allow SET on keys that start with "cache:"
+# [[acl.rules.conditions]]
+# on = { key = { index = 0 } } # Target the first key (0th argument of SET)
+# operator = { starts-with = "cache:" }
+# result = ["+SET"]
+
+
+# --- Persistence ---
+[persistence]
+# Set 'spldb_enabled = true' for RDB-style snapshotting.
+spldb_enabled = true
+spldb_path = "dump.spldb"
+
+# 'save_rules' trigger automatic SPLDB saves.
+# Format: { seconds = <time>, changes = <key_changes> }
+save_rules = [
+    { seconds = 900, changes = 1 },
+    { seconds = 300, changes = 10 },
+    { seconds = 60,  changes = 10000 },
+]
+
+# Set 'aof_enabled = true' for Append-Only File persistence.
+# If both AOF and SPLDB are enabled, AOF is prioritized on startup.
+aof_enabled = false
+aof_path = "spineldb.aof"
+
+# 'appendfsync' controls how often AOF data is synced to disk.
+# Options: "always", "everysec" (default), "no".
+appendfsync = "everysec"
+
+
+# --- Replication (Standalone Mode) ---
+[replication]
+# 'role' can be "primary" or "replica".
+role = "primary"
+
+# -- Options for role = "primary" --
+# min_replicas_to_write = 0 # (Default: 0, disabled)
+# min_replicas_max_lag = 10 # (Default: 10 seconds)
+
+# -- Options for role = "replica" --
+# primary_host = "127.0.0.1"
+# primary_port = 7878
+# tls_enabled = false
+
+
+# --- Cluster ---
+[cluster]
+enabled = false
+config_file = "nodes.conf"
+node_timeout = 15000 # in milliseconds
+bus_port_offset = 10000
+
+# Optional: Use these if the server is behind NAT or in Docker.
+# announce_ip = "your.public.ip.address"
+# announce_port = 7878
+# announce_bus_port = 17878
+
+
+# --- TLS (Transport Layer Security) ---
+[tls]
+enabled = false
+cert_path = "spineldb.crt"
+key_path = "spineldb.key"
+
+
+# --- Safety Limits ---
+[safety]
+# Rejects commands like KEYS, SMEMBERS on collections larger than this value. 0 = disabled.
+max_collection_scan_keys = 0
+# Rejects SINTER/SUNION/SDIFF with more keys than this value. 0 = disabled.
+max_set_operation_keys = 0
+# Lua script execution timeout in milliseconds. 0 = disabled.
+script_timeout_ms = 5000
+# If a key is larger than this size (in bytes), DEL acts like UNLINK. 0 = disabled.
+auto_unlink_on_del_threshold = 0
+
+
+# --- Intelligent Caching Engine ---
+[cache]
+streaming_threshold_bytes = 1048576 # 1MB
+on_disk_path = "cache_files"
+max_disk_size = 0
+max_variants_per_key = 64
+negative_cache_ttl_seconds = 10
+
+
+# --- Metrics ---
+[metrics]
+enabled = false
+port = 8878

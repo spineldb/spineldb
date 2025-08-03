@@ -10,6 +10,57 @@ Before you begin, ensure your system has the following prerequisites:
 2.  **Git:** You'll need Git to clone the SpinelDB repository from its source code.
 3.  **redis-cli (Optional, but Highly Recommended):** To interact with the SpinelDB server, `redis-cli` is the easiest tool to use due to its API compatibility.
 
+## Quick Install Script
+
+For a rapid setup, you can use our convenient one-liner installation script. This script will download and compile SpinelDB, placing the executable in your system's PATH.
+
+```bash
+# Using curl
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/spineldb/spineldb/main/install.sh)"
+
+# Using wget
+sh -c "$(wget -qO- https://raw.githubusercontent.com/spineldb/spineldb/main/install.sh)"
+```
+
+## Docker Installation
+
+For a containerized environment, you can use the official SpinelDB Docker image. This is the recommended method for production deployments and easy integration into existing container workflows.
+
+1.  **Pull the Docker Image:**
+    First, pull the latest SpinelDB image from Docker Hub:
+
+    ```bash
+    docker pull spineldb/spineldb:latest
+    ```
+
+2.  **Run the Container:**
+    You can run SpinelDB in a Docker container, mapping the default port (7878) to your host machine:
+
+    ```bash
+    docker run -d -p 7878:7878 --name spineldb_instance spineldb/spineldb:latest
+    ```
+    - `-d`: Runs the container in detached mode (in the background).
+    - `-p 7878:7878`: Maps port 7878 on your host to port 7878 inside the container.
+    - `--name spineldb_instance`: Assigns a name to your container for easy reference.
+
+3.  **Connect to SpinelDB:**
+    Once the container is running, you can connect to it using `redis-cli` on your host machine:
+
+    ```bash
+    redis-cli -p 7878
+    ```
+
+4.  **Configuration with Docker:**
+    To use a custom `config.toml` with Docker, you can mount a volume:
+
+    ```bash
+    docker run -d -p 7878:7878 \
+      -v /path/to/your/config.toml:/etc/spineldb/config.toml \
+      --name spineldb_instance spineldb/spineldb:latest
+    ```
+    Replace `/path/to/your/config.toml` with the actual path to your configuration file on your host machine.
+
+
 ## Step 1: Building from Source
 
 The primary installation method is compiling SpinelDB from its source code. This ensures you get the latest version with all optimizations for your system.
