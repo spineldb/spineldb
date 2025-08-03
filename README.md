@@ -106,6 +106,30 @@ cargo build --release
 
 The compiled binary will be at `target/release/spineldb`.
 
+### Quick Install
+
+For a quick setup, you can use our installation script:
+
+```bash
+# Using curl
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/spineldb/spineldb/main/install.sh)"
+
+# Using wget
+sh -c "$(wget -qO- https://raw.githubusercontent.com/spineldb/spineldb/main/install.sh)"
+```
+
+### Docker
+
+You can also run SpinelDB using our official Docker image:
+
+```bash
+# Pull the latest image
+docker pull spineldb/spineldb:latest
+
+# Run the container
+docker run -d -p 7878:7878 --name spineldb_instance spineldb/spineldb:latest
+```
+
 ### Running the Server
 
 1.  **Configuration:** A default `config.toml` is provided. Customize it to fit your needs, especially `host` and `port`.
