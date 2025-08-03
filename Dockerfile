@@ -18,7 +18,7 @@ COPY src ./src
 RUN cargo build --release
 
 # Stage 2: Create a minimal runtime image
-FROM debian:slim-bullseye AS runtime
+FROM debian:bookworm-slim AS runtime
 
 # Create a non-root user and group for security
 RUN groupadd --system --gid 1001 spineldb && \
