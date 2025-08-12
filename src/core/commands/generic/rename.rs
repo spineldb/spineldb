@@ -144,30 +144,31 @@ impl ExecutableCommand for Rename {
         }
 
         // Handle lazy-free for the old destination value if it was large.
-        if let Some(val) = old_dest_value {
-            if auto_unlink_threshold > 0 && val.size > auto_unlink_threshold {
-                let state_clone = ctx.state.clone();
-                let dest_key_clone = self.destination.clone();
-                tokio::spawn(async move {
-                    let send_timeout = Duration::from_secs(5);
-                    if tokio::time::timeout(
-                        send_timeout,
-                        state_clone
-                            .persistence
-                            .lazy_free_tx
-                            .send(vec![(dest_key_clone, val)]),
-                    )
-                    .await
-                    .is_err()
-                    {
-                        error!(
-                            "Failed to send to lazy-free channel within 5 seconds during RENAME. The task may be unresponsive or have panicked."
-                        );
-                        state_clone.persistence.increment_lazy_free_errors();
-                        state_clone.set_read_only(true, "Lazy-free task is unresponsive.");
-                    }
-                });
-            }
+        if let Some(val) = old_dest_value
+            && auto_unlink_threshold > 0
+            && val.size > auto_unlink_threshold
+        {
+            let state_clone = ctx.state.clone();
+            let dest_key_clone = self.destination.clone();
+            tokio::spawn(async move {
+                let send_timeout = Duration::from_secs(5);
+                if tokio::time::timeout(
+                    send_timeout,
+                    state_clone
+                        .persistence
+                        .lazy_free_tx
+                        .send(vec![(dest_key_clone, val)]),
+                )
+                .await
+                .is_err()
+                {
+                    error!(
+                        "Failed to send to lazy-free channel within 5 seconds during RENAME. The task may be unresponsive or have panicked."
+                    );
+                    state_clone.persistence.increment_lazy_free_errors();
+                    state_clone.set_read_only(true, "Lazy-free task is unresponsive.");
+                }
+            });
         }
 
         Ok((

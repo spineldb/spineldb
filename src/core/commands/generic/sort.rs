@@ -243,12 +243,12 @@ impl Sort {
         source_elements: &[Bytes],
         required_keys: &mut BTreeSet<Bytes>,
     ) -> Result<(), SpinelDBError> {
-        if let Some(by_pattern) = &self.by_pattern {
-            if by_pattern.as_ref() != b"nosort" {
-                for element in source_elements {
-                    let (key, _) = self.resolve_pattern(by_pattern, element);
-                    required_keys.insert(key);
-                }
+        if let Some(by_pattern) = &self.by_pattern
+            && by_pattern.as_ref() != b"nosort"
+        {
+            for element in source_elements {
+                let (key, _) = self.resolve_pattern(by_pattern, element);
+                required_keys.insert(key);
             }
         }
         for get_pattern in &self.get_patterns {

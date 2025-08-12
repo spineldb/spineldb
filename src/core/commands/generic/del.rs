@@ -74,25 +74,24 @@ impl ExecutableCommand for Del {
 
             for key in &self.keys {
                 let shard_index = ctx.db.get_shard_index(key);
-                if let Some(guard) = guards.get_mut(&shard_index) {
-                    if let Some(popped_value) = guard.pop(key) {
-                        if !popped_value.is_expired() {
-                            count += 1;
+                if let Some(guard) = guards.get_mut(&shard_index)
+                    && let Some(popped_value) = guard.pop(key)
+                    && !popped_value.is_expired()
+                {
+                    count += 1;
 
-                            // Defer notification to avoid holding a shard lock while
-                            // acquiring a blocker lock.
-                            post_lock_tasks.push((key.clone(), popped_value.data.clone()));
+                    // Defer notification to avoid holding a shard lock while
+                    // acquiring a blocker lock.
+                    post_lock_tasks.push((key.clone(), popped_value.data.clone()));
 
-                            // Check if this value should be auto-unlinked.
-                            let should_unlink = (auto_unlink_threshold > 0
-                                && popped_value.size > auto_unlink_threshold)
-                                || matches!(popped_value.data, DataValue::HttpCache { .. });
+                    // Check if this value should be auto-unlinked.
+                    let should_unlink = (auto_unlink_threshold > 0
+                        && popped_value.size > auto_unlink_threshold)
+                        || matches!(popped_value.data, DataValue::HttpCache { .. });
 
-                            if should_unlink {
-                                // Send both key and value to the lazy-free manager.
-                                items_to_unlink.push((key.clone(), popped_value));
-                            }
-                        }
+                    if should_unlink {
+                        // Send both key and value to the lazy-free manager.
+                        items_to_unlink.push((key.clone(), popped_value));
                     }
                 }
             }

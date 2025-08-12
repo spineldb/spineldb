@@ -64,10 +64,10 @@ fn parse_cache_control(header_value: &str) -> (Option<u64>, Option<u64>) {
                 if let Ok(seconds) = value.parse::<u64>() {
                     max_age = Some(seconds);
                 }
-            } else if key.eq_ignore_ascii_case("stale-while-revalidate") {
-                if let Ok(seconds) = value.parse::<u64>() {
-                    swr = Some(seconds);
-                }
+            } else if key.eq_ignore_ascii_case("stale-while-revalidate")
+                && let Ok(seconds) = value.parse::<u64>()
+            {
+                swr = Some(seconds);
             }
         }
     }
@@ -392,18 +392,17 @@ impl CacheFetch {
         let headers = res.headers().clone();
 
         let (mut ttl_override, mut swr_override) = (self.ttl, self.swr);
-        if respect_origin {
-            if let Some(cc_header) = headers
+        if respect_origin
+            && let Some(cc_header) = headers
                 .get(reqwest::header::CACHE_CONTROL)
                 .and_then(|v| v.to_str().ok())
-            {
-                let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
-                if parsed_ttl.is_some() {
-                    ttl_override = parsed_ttl;
-                }
-                if parsed_swr.is_some() {
-                    swr_override = parsed_swr;
-                }
+        {
+            let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
+            if parsed_ttl.is_some() {
+                ttl_override = parsed_ttl;
+            }
+            if parsed_swr.is_some() {
+                swr_override = parsed_swr;
             }
         }
 

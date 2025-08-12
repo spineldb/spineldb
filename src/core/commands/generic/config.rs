@@ -165,19 +165,19 @@ impl ExecutableCommand for ConfigGetSet {
                 };
 
                 // If local application succeeded, broadcast to the cluster.
-                if local_set_result.is_ok() {
-                    if let Some(cluster) = &ctx.state.cluster {
-                        info!("Broadcasting CONFIG SET {param} {value} to the cluster.");
-                        let gossip_msg = GossipMessage::ConfigUpdate {
-                            sender_id: cluster.my_id.clone(),
-                            param: param.clone(),
-                            value: value.clone(),
-                            timestamp_ms: now_ms(),
-                        };
-                        let task_msg = GossipTaskMessage::Broadcast(gossip_msg);
-                        if let Err(e) = ctx.state.cluster_gossip_tx.try_send(task_msg) {
-                            warn!("Failed to broadcast CONFIG SET to cluster gossip task: {e}");
-                        }
+                if local_set_result.is_ok()
+                    && let Some(cluster) = &ctx.state.cluster
+                {
+                    info!("Broadcasting CONFIG SET {param} {value} to the cluster.");
+                    let gossip_msg = GossipMessage::ConfigUpdate {
+                        sender_id: cluster.my_id.clone(),
+                        param: param.clone(),
+                        value: value.clone(),
+                        timestamp_ms: now_ms(),
+                    };
+                    let task_msg = GossipTaskMessage::Broadcast(gossip_msg);
+                    if let Err(e) = ctx.state.cluster_gossip_tx.try_send(task_msg) {
+                        warn!("Failed to broadcast CONFIG SET to cluster gossip task: {e}");
                     }
                 }
 

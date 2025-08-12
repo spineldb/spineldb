@@ -239,12 +239,12 @@ impl XReadGroup {
                         .pending_entries
                         .range((Bound::Included(*start_id), Bound::Unbounded))
                     {
-                        if pel_info.consumer_name == self.consumer_name {
-                            if let Some(stream_entry) = stream.entries.get(&id) {
-                                stream_entries.push(stream_entry.clone());
-                                if stream_entries.len() >= self.count.unwrap_or(usize::MAX) {
-                                    break;
-                                }
+                        if pel_info.consumer_name == self.consumer_name
+                            && let Some(stream_entry) = stream.entries.get(&id)
+                        {
+                            stream_entries.push(stream_entry.clone());
+                            if stream_entries.len() >= self.count.unwrap_or(usize::MAX) {
+                                break;
                             }
                         }
                     }

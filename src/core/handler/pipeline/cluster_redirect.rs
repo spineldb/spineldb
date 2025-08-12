@@ -33,18 +33,16 @@ pub async fn check_redirection(
     })?;
 
     // Handle IMPORTING state: redirect unless the client sent ASKING.
-    if let Some(source_node_id) = myself.node_info.importing_slots.get(&first_slot) {
-        if !session.is_asking {
-            let source_node = cluster_state.nodes.get(source_node_id).ok_or_else(|| {
-                SpinelDBError::ClusterDown(format!(
-                    "Importing source node {source_node_id} not found"
-                ))
-            })?;
-            return Err(SpinelDBError::Moved {
-                slot: first_slot,
-                addr: source_node.node_info.addr.clone(),
-            });
-        }
+    if let Some(source_node_id) = myself.node_info.importing_slots.get(&first_slot)
+        && !session.is_asking
+    {
+        let source_node = cluster_state.nodes.get(source_node_id).ok_or_else(|| {
+            SpinelDBError::ClusterDown(format!("Importing source node {source_node_id} not found"))
+        })?;
+        return Err(SpinelDBError::Moved {
+            slot: first_slot,
+            addr: source_node.node_info.addr.clone(),
+        });
     }
 
     // Handle MIGRATING state: send ASK redirect if key doesn't exist locally.
@@ -71,13 +69,13 @@ pub async fn check_redirection(
     }
 
     // Handle standard MOVED redirection if this node is not the slot owner.
-    if let Some(owner_node) = cluster_state.get_node_for_slot(first_slot) {
-        if owner_node.node_info.id != *my_id {
-            return Err(SpinelDBError::Moved {
-                slot: first_slot,
-                addr: owner_node.node_info.addr.clone(),
-            });
-        }
+    if let Some(owner_node) = cluster_state.get_node_for_slot(first_slot)
+        && owner_node.node_info.id != *my_id
+    {
+        return Err(SpinelDBError::Moved {
+            slot: first_slot,
+            addr: owner_node.node_info.addr.clone(),
+        });
     }
 
     Ok(())

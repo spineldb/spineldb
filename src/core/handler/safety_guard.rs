@@ -32,25 +32,25 @@ pub async fn check_safety_limits(
                 let shard_index = db.get_shard_index(key);
                 let guard = db.get_shard(shard_index).entries.lock().await;
 
-                if let Some(entry) = guard.peek(key) {
-                    if !entry.is_expired() {
-                        let len = match &entry.data {
-                            DataValue::List(l) => l.len(),
-                            DataValue::Set(s) => s.len(),
-                            DataValue::Hash(h) => h.len(),
-                            DataValue::SortedSet(z) => z.len(),
-                            _ => 0,
-                        };
+                if let Some(entry) = guard.peek(key)
+                    && !entry.is_expired()
+                {
+                    let len = match &entry.data {
+                        DataValue::List(l) => l.len(),
+                        DataValue::Set(s) => s.len(),
+                        DataValue::Hash(h) => h.len(),
+                        DataValue::SortedSet(z) => z.len(),
+                        _ => 0,
+                    };
 
-                        if len > safety_config.max_collection_scan_keys {
-                            return Err(SpinelDBError::InvalidState(format!(
-                                "Command '{}' on key '{}' aborted: collection size ({}) exceeds 'max_collection_scan_keys' limit ({}). Use SCAN-family commands instead.",
-                                command.name(),
-                                String::from_utf8_lossy(key),
-                                len,
-                                safety_config.max_collection_scan_keys
-                            )));
-                        }
+                    if len > safety_config.max_collection_scan_keys {
+                        return Err(SpinelDBError::InvalidState(format!(
+                            "Command '{}' on key '{}' aborted: collection size ({}) exceeds 'max_collection_scan_keys' limit ({}). Use SCAN-family commands instead.",
+                            command.name(),
+                            String::from_utf8_lossy(key),
+                            len,
+                            safety_config.max_collection_scan_keys
+                        )));
                     }
                 }
             }
@@ -81,25 +81,25 @@ pub async fn check_safety_limits(
     }
 
     // Check for BITOP allocation size.
-    if safety_config.max_bitop_alloc_size > 0 {
-        if let Command::BitOp(c) = command {
-            let db = state.get_db(current_db_index).unwrap();
-            let mut max_len = 0;
-            for key in &c.src_keys {
-                let shard_index = db.get_shard_index(key);
-                let guard = db.get_shard(shard_index).entries.lock().await;
-                if let Some(entry) = guard.peek(key) {
-                    if let DataValue::String(s) = &entry.data {
-                        max_len = max_len.max(s.len());
-                    }
-                }
+    if safety_config.max_bitop_alloc_size > 0
+        && let Command::BitOp(c) = command
+    {
+        let db = state.get_db(current_db_index).unwrap();
+        let mut max_len = 0;
+        for key in &c.src_keys {
+            let shard_index = db.get_shard_index(key);
+            let guard = db.get_shard(shard_index).entries.lock().await;
+            if let Some(entry) = guard.peek(key)
+                && let DataValue::String(s) = &entry.data
+            {
+                max_len = max_len.max(s.len());
             }
-            if max_len > safety_config.max_bitop_alloc_size {
-                return Err(SpinelDBError::InvalidState(format!(
-                    "Command 'BITOP' aborted: required allocation ({}) exceeds 'max_bitop_alloc_size' limit ({}).",
-                    max_len, safety_config.max_bitop_alloc_size
-                )));
-            }
+        }
+        if max_len > safety_config.max_bitop_alloc_size {
+            return Err(SpinelDBError::InvalidState(format!(
+                "Command 'BITOP' aborted: required allocation ({}) exceeds 'max_bitop_alloc_size' limit ({}).",
+                max_len, safety_config.max_bitop_alloc_size
+            )));
         }
     }
 

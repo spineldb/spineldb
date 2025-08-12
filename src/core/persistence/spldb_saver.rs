@@ -133,13 +133,13 @@ impl SpldbSaverTask {
             error!("{}", err_msg);
             *state.persistence.last_save_failure_time.lock().await =
                 Some(std::time::Instant::now());
-            if temp_path.exists() {
-                if let Err(remove_err) = fs::remove_file(temp_path) {
-                    error!(
-                        "Additionally failed to remove temporary SPLDB file '{}': {remove_err}",
-                        temp_path_str
-                    );
-                }
+            if temp_path.exists()
+                && let Err(remove_err) = fs::remove_file(temp_path)
+            {
+                error!(
+                    "Additionally failed to remove temporary SPLDB file '{}': {remove_err}",
+                    temp_path_str
+                );
             }
             add_latency_sample(state);
             return Err(anyhow!(err_msg));

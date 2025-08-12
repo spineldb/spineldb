@@ -319,15 +319,13 @@ impl StoredValue {
             &self.data,
             DataValue::String(_) | DataValue::HttpCache { .. }
         ) && !commands.is_empty()
+            && let Some(secs) = ttl_secs
+            && secs > 0
         {
-            if let Some(secs) = ttl_secs {
-                if secs > 0 {
-                    commands.push(Command::Expire(generic::Expire {
-                        key: key.clone(),
-                        seconds: secs,
-                    }));
-                }
-            }
+            commands.push(Command::Expire(generic::Expire {
+                key: key.clone(),
+                seconds: secs,
+            }));
         }
         commands
     }

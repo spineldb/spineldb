@@ -38,10 +38,10 @@ impl ExecutableCommand for MSetNx {
         if let ExecutionLocks::Multi { guards } = &mut ctx.locks {
             for (key, _) in &self.pairs {
                 let shard_index = ctx.db.get_shard_index(key);
-                if let Some(guard) = guards.get(&shard_index) {
-                    if guard.peek(key).is_some_and(|e| !e.is_expired()) {
-                        return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
-                    }
+                if let Some(guard) = guards.get(&shard_index)
+                    && guard.peek(key).is_some_and(|e| !e.is_expired())
+                {
+                    return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
                 }
             }
 

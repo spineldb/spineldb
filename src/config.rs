@@ -563,13 +563,14 @@ impl Config {
             return Err(anyhow!("databases cannot be 0"));
         }
 
-        if let Some(mem) = self.maxmemory {
-            if mem > 0 && mem < 1_000_000 {
-                warn!(
-                    "low maxmemory setting: {} bytes. This may cause performance issues.",
-                    mem
-                );
-            }
+        if let Some(mem) = self.maxmemory
+            && mem > 0
+            && mem < 1_000_000
+        {
+            warn!(
+                "low maxmemory setting: {} bytes. This may cause performance issues.",
+                mem
+            );
         }
 
         if self.persistence.spldb_enabled {

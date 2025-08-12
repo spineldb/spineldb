@@ -56,12 +56,12 @@ pub async fn check_server_state(
     }
 
     // Check for OOM condition for commands that can allocate significant memory.
-    if flags.contains(CommandFlags::DENY_OOM) {
-        if let Some(maxmemory) = config.maxmemory {
-            let total_memory: usize = state.dbs.iter().map(|db| db.get_current_memory()).sum();
-            if total_memory >= maxmemory {
-                return Err(SpinelDBError::MaxMemoryReached);
-            }
+    if flags.contains(CommandFlags::DENY_OOM)
+        && let Some(maxmemory) = config.maxmemory
+    {
+        let total_memory: usize = state.dbs.iter().map(|db| db.get_current_memory()).sum();
+        if total_memory >= maxmemory {
+            return Err(SpinelDBError::MaxMemoryReached);
         }
     }
 

@@ -97,17 +97,17 @@ impl Db {
             .map(|(k, _)| k.clone())
             .choose(&mut rng);
 
-        if let Some(key) = key_to_evict {
-            if let Some(value) = guard.pop(&key) {
-                Self::handle_cache_eviction_stat(state, &value);
-                debug!(
-                    "Evicted RANDOM key '{}' (volatile_only: {}) from shard {}.",
-                    String::from_utf8_lossy(&key),
-                    volatile_only,
-                    shard_index
-                );
-                return Some(key);
-            }
+        if let Some(key) = key_to_evict
+            && let Some(value) = guard.pop(&key)
+        {
+            Self::handle_cache_eviction_stat(state, &value);
+            debug!(
+                "Evicted RANDOM key '{}' (volatile_only: {}) from shard {}.",
+                String::from_utf8_lossy(&key),
+                volatile_only,
+                shard_index
+            );
+            return Some(key);
         }
         None
     }
@@ -158,12 +158,10 @@ impl Db {
                 .iter()
                 .filter(|(_, v)| v.expiry.is_some())
                 .min_by_key(|(_, v)| v.expiry.unwrap())
+                && (best_candidate.is_none()
+                    || val.expiry.unwrap() < best_candidate.as_ref().unwrap().1)
             {
-                if best_candidate.is_none()
-                    || val.expiry.unwrap() < best_candidate.as_ref().unwrap().1
-                {
-                    best_candidate = Some((key.clone(), val.expiry.unwrap(), shard_index));
-                }
+                best_candidate = Some((key.clone(), val.expiry.unwrap(), shard_index));
             }
         }
 

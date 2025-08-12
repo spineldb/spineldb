@@ -159,30 +159,28 @@ async fn load_persistence_data(server_state: &Arc<ServerState>) -> Result<()> {
 
     let aof_path_str = &config.persistence.aof_path;
     let aof_path = std::path::Path::new(aof_path_str);
-    if let Some(parent_dir) = aof_path.parent() {
-        if parent_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(parent_dir) {
-                for entry in entries.flatten() {
-                    if let Some(file_name) = entry.file_name().to_str() {
-                        if file_name.starts_with("temp-rewrite-")
-                            && file_name.ends_with(
-                                aof_path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_str()
-                                    .unwrap_or_default(),
-                            )
-                        {
-                            let msg = format!(
-                                "FATAL: Found leftover AOF temp file '{}' from a previous crashed rewrite. Server is exiting to prevent data loss. Please manually inspect the files and restore the correct one by renaming it to '{}'.",
-                                entry.path().display(),
-                                aof_path.display()
-                            );
-                            error!("{}", msg);
-                            return Err(anyhow!(msg));
-                        }
-                    }
-                }
+    if let Some(parent_dir) = aof_path.parent()
+        && parent_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(parent_dir)
+    {
+        for entry in entries.flatten() {
+            if let Some(file_name) = entry.file_name().to_str()
+                && file_name.starts_with("temp-rewrite-")
+                && file_name.ends_with(
+                    aof_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_str()
+                        .unwrap_or_default(),
+                )
+            {
+                let msg = format!(
+                    "FATAL: Found leftover AOF temp file '{}' from a previous crashed rewrite. Server is exiting to prevent data loss. Please manually inspect the files and restore the correct one by renaming it to '{}'.",
+                    entry.path().display(),
+                    aof_path.display()
+                );
+                error!("{}", msg);
+                return Err(anyhow!(msg));
             }
         }
     }

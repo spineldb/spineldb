@@ -67,19 +67,19 @@ impl ParseCommand for CacheProxy {
 
         let mut i = 1;
         // Check if the second argument is a URL or an option.
-        if let Some(arg) = args.get(i) {
-            if let Ok(s) = extract_string(arg) {
-                let s_lower = s.to_ascii_lowercase();
-                if s_lower != "ttl"
-                    && s_lower != "swr"
-                    && s_lower != "grace"
-                    && s_lower != "tags"
-                    && s_lower != "headers"
-                    && s_lower != "vary"
-                {
-                    cmd.url = Some(s);
-                    i += 1;
-                }
+        if let Some(arg) = args.get(i)
+            && let Ok(s) = extract_string(arg)
+        {
+            let s_lower = s.to_ascii_lowercase();
+            if s_lower != "ttl"
+                && s_lower != "swr"
+                && s_lower != "grace"
+                && s_lower != "tags"
+                && s_lower != "headers"
+                && s_lower != "vary"
+            {
+                cmd.url = Some(s);
+                i += 1;
             }
         }
 

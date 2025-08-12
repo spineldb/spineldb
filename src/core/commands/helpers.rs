@@ -137,11 +137,11 @@ impl<'a> ArgParser<'a> {
     /// Checks if the next argument matches a specific flag (case-insensitively).
     /// If it matches, consumes the argument and returns true.
     pub fn match_flag(&mut self, flag_name: &str) -> bool {
-        if let Some(arg_str) = self.peek_str() {
-            if arg_str.eq_ignore_ascii_case(flag_name) {
-                self.cursor += 1;
-                return true;
-            }
+        if let Some(arg_str) = self.peek_str()
+            && arg_str.eq_ignore_ascii_case(flag_name)
+        {
+            self.cursor += 1;
+            return true;
         }
         false
     }
@@ -154,22 +154,20 @@ impl<'a> ArgParser<'a> {
         T: FromStr,
         <T as FromStr>::Err: std::fmt::Display,
     {
-        if let Some(arg_str) = self.peek_str() {
-            if arg_str.eq_ignore_ascii_case(opt_name) {
-                if self.cursor + 1 >= self.args.len() {
-                    return Err(SpinelDBError::SyntaxError);
-                }
-                let value_str = extract_string(&self.args[self.cursor + 1])?;
-
-                let parsed_value = value_str.parse::<T>().map_err(|e| {
-                    SpinelDBError::InvalidState(format!(
-                        "Invalid value for option '{opt_name}': {e}"
-                    ))
-                })?;
-
-                self.cursor += 2; // Consume both the option name and its value
-                return Ok(Some(parsed_value));
+        if let Some(arg_str) = self.peek_str()
+            && arg_str.eq_ignore_ascii_case(opt_name)
+        {
+            if self.cursor + 1 >= self.args.len() {
+                return Err(SpinelDBError::SyntaxError);
             }
+            let value_str = extract_string(&self.args[self.cursor + 1])?;
+
+            let parsed_value = value_str.parse::<T>().map_err(|e| {
+                SpinelDBError::InvalidState(format!("Invalid value for option '{opt_name}': {e}"))
+            })?;
+
+            self.cursor += 2; // Consume both the option name and its value
+            return Ok(Some(parsed_value));
         }
         Ok(None)
     }

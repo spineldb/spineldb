@@ -37,15 +37,12 @@ pub async fn handle_replconf(
         .args
         .first()
         .is_some_and(|a| a.eq_ignore_ascii_case("ack"))
+        && let Some(offset_str) = cmd.args.get(1)
+        && let Ok(offset) = offset_str.parse::<u64>()
+        && let Some(mut replica_state) = state.replica_states.get_mut(addr)
     {
-        if let Some(offset_str) = cmd.args.get(1) {
-            if let Ok(offset) = offset_str.parse::<u64>() {
-                if let Some(mut replica_state) = state.replica_states.get_mut(addr) {
-                    replica_state.value_mut().ack_offset = offset;
-                    replica_state.value_mut().last_ack_time = Instant::now();
-                }
-            }
-        }
+        replica_state.value_mut().ack_offset = offset;
+        replica_state.value_mut().last_ack_time = Instant::now();
     }
     Ok(RouteResponse::Single(RespValue::SimpleString("OK".into())))
 }

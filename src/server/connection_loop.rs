@@ -122,11 +122,10 @@ pub async fn run(mut ctx: ServerContext) {
 
             // Reap completed client tasks.
             Some(res) = client_tasks.join_next() => {
-                if let Err(e) = res {
-                    if e.is_panic() {
+                if let Err(e) = res
+                    && e.is_panic() {
                         error!("A client handler panicked: {e:?}");
                     }
-                }
             },
         }
     }

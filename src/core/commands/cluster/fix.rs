@@ -66,38 +66,35 @@ async fn run_fix_orchestrator(state: Arc<ServerState>) -> Result<Vec<String>, an
 
             // Attempt to set the slot to STABLE on the source node.
             let source_addr: SocketAddr = node.addr.parse()?;
-            if let Ok(mut source_client) = ClusterClient::connect(source_addr).await {
-                if let Err(e) = source_client
+            if let Ok(mut source_client) = ClusterClient::connect(source_addr).await
+                && let Err(e) = source_client
                     .cluster_setslot(vec![
                         "SETSLOT".into(),
                         slot.to_string().into(),
                         "STABLE".into(),
                     ])
                     .await
-                {
-                    let log_msg = format!("-> FAILED to send STABLE to source {}: {e}", node.id);
-                    warn!("[CLUSTER FIX] {}", log_msg);
-                    fixes_log.push(log_msg);
-                }
+            {
+                let log_msg = format!("-> FAILED to send STABLE to source {}: {e}", node.id);
+                warn!("[CLUSTER FIX] {}", log_msg);
+                fixes_log.push(log_msg);
             }
 
             // Attempt to set the slot to STABLE on the destination node.
             if let Some(dest_node_info) = all_nodes.iter().find(|n| n.id == *dest_id) {
                 let dest_addr: SocketAddr = dest_node_info.addr.parse()?;
-                if let Ok(mut dest_client) = ClusterClient::connect(dest_addr).await {
-                    if let Err(e) = dest_client
+                if let Ok(mut dest_client) = ClusterClient::connect(dest_addr).await
+                    && let Err(e) = dest_client
                         .cluster_setslot(vec![
                             "SETSLOT".into(),
                             slot.to_string().into(),
                             "STABLE".into(),
                         ])
                         .await
-                    {
-                        let log_msg =
-                            format!("-> FAILED to send STABLE to destination {dest_id}: {e}");
-                        warn!("[CLUSTER FIX] {}", log_msg);
-                        fixes_log.push(log_msg);
-                    }
+                {
+                    let log_msg = format!("-> FAILED to send STABLE to destination {dest_id}: {e}");
+                    warn!("[CLUSTER FIX] {}", log_msg);
+                    fixes_log.push(log_msg);
                 }
             }
             fixes_log.push(format!("-> Reverted slot {slot} to STABLE state."));
@@ -106,10 +103,10 @@ async fn run_fix_orchestrator(state: Arc<ServerState>) -> Result<Vec<String>, an
         // Fix slots stuck in IMPORTING state (for asymmetric cases where MIGRATING is not set).
         for (slot, source_id) in &node.importing_slots {
             // If the source still thinks it's migrating, we've already handled this.
-            if let Some(source_node_info) = all_nodes.iter().find(|n| &n.id == source_id) {
-                if source_node_info.migrating_slots.contains_key(slot) {
-                    continue;
-                }
+            if let Some(source_node_info) = all_nodes.iter().find(|n| &n.id == source_id)
+                && source_node_info.migrating_slots.contains_key(slot)
+            {
+                continue;
             }
             let log_msg = format!(
                 "Found stuck IMPORTING slot {slot} on node {}. Attempting to fix.",

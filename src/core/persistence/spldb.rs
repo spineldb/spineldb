@@ -308,14 +308,13 @@ pub async fn save_to_bytes(dbs: &[Arc<Db>]) -> io::Result<Bytes> {
 
 /// Writes a single key-value pair, including its TTL if it exists.
 fn write_kv(buf: &mut BytesMut, key: &Bytes, value: &StoredValue) -> io::Result<()> {
-    if let Some(expiry) = value.expiry {
-        if let Some(duration) = expiry.checked_duration_since(Instant::now()) {
-            if let Ok(now_ms) = SystemTime::now().duration_since(UNIX_EPOCH) {
-                let expiry_ms = now_ms.as_millis() as u64 + duration.as_millis() as u64;
-                buf.put_u8(SPLDB_OPCODE_EXPIRETIME_MS);
-                buf.put_u64_le(expiry_ms);
-            }
-        }
+    if let Some(expiry) = value.expiry
+        && let Some(duration) = expiry.checked_duration_since(Instant::now())
+        && let Ok(now_ms) = SystemTime::now().duration_since(UNIX_EPOCH)
+    {
+        let expiry_ms = now_ms.as_millis() as u64 + duration.as_millis() as u64;
+        buf.put_u8(SPLDB_OPCODE_EXPIRETIME_MS);
+        buf.put_u64_le(expiry_ms);
     }
 
     let mut value_buf = BytesMut::new();

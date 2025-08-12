@@ -39,10 +39,11 @@ impl Db {
         let keys = command.get_keys();
 
         // Admin commands that don't operate on keys typically don't need locks.
-        if flags.contains(CommandFlags::ADMIN) && keys.is_empty() {
-            if let Command::Acl(_) = command {
-                return ExecutionLocks::None;
-            }
+        if flags.contains(CommandFlags::ADMIN)
+            && keys.is_empty()
+            && let Command::Acl(_) = command
+        {
+            return ExecutionLocks::None;
         }
 
         // Dispatch to the appropriate locking strategy based on the command.

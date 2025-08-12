@@ -294,18 +294,16 @@ impl CacheSet {
         if max_variants > 0
             && variants.len() >= max_variants
             && !variants.contains_key(&variant_hash)
-        {
-            if let Some(lru_hash) = variants
+            && let Some(lru_hash) = variants
                 .iter()
                 .min_by_key(|(_, v)| v.last_accessed)
                 .map(|(h, _)| *h)
-            {
-                variants.remove(&lru_hash);
-                debug!(
-                    "Evicted LRU variant for key '{}' to make space for new variant.",
-                    String::from_utf8_lossy(&self.key)
-                );
-            }
+        {
+            variants.remove(&lru_hash);
+            debug!(
+                "Evicted LRU variant for key '{}' to make space for new variant.",
+                String::from_utf8_lossy(&self.key)
+            );
         }
 
         variants.insert(variant_hash, new_variant);

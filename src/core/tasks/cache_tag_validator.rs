@@ -52,23 +52,21 @@ impl CacheTagValidatorTask {
             let shard_index = db.get_shard_index(&key);
             let guard = db.get_shard(shard_index).entries.lock().await;
 
-            if let Some(entry) = guard.peek(&key) {
-                if let DataValue::HttpCache { tags_epoch, .. } = &entry.data {
-                    let tags_for_key = guard.get_tags_for_key(&key);
-                    for tag in tags_for_key {
-                        if let Some(latest_purge_epoch) =
-                            self.state.cache.tag_purge_epochs.get(&tag)
-                        {
-                            if *tags_epoch < *latest_purge_epoch.value() {
-                                debug!(
-                                    "Found stale cache entry '{}' due to tag '{}' purge race condition. Deleting.",
-                                    String::from_utf8_lossy(&key),
-                                    String::from_utf8_lossy(&tag)
-                                );
-                                keys_to_delete.push(key.clone());
-                                break; // Key only needs to be deleted once
-                            }
-                        }
+            if let Some(entry) = guard.peek(&key)
+                && let DataValue::HttpCache { tags_epoch, .. } = &entry.data
+            {
+                let tags_for_key = guard.get_tags_for_key(&key);
+                for tag in tags_for_key {
+                    if let Some(latest_purge_epoch) = self.state.cache.tag_purge_epochs.get(&tag)
+                        && *tags_epoch < *latest_purge_epoch.value()
+                    {
+                        debug!(
+                            "Found stale cache entry '{}' due to tag '{}' purge race condition. Deleting.",
+                            String::from_utf8_lossy(&key),
+                            String::from_utf8_lossy(&tag)
+                        );
+                        keys_to_delete.push(key.clone());
+                        break; // Key only needs to be deleted once
                     }
                 }
             }

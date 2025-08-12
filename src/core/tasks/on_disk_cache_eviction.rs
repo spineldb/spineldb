@@ -70,13 +70,12 @@ impl OnDiskCacheEvictionTask {
 
         // Read the manifest to get a list of all committed files and their total size.
         while reader.read_line(&mut line).await? > 0 {
-            if let Ok(entry) = serde_json::from_str::<ManifestEntry>(&line) {
-                if entry.state == ManifestState::Committed {
-                    if let Ok(metadata) = tokio::fs::metadata(&entry.path).await {
-                        total_size += metadata.len();
-                        committed_entries.push(entry);
-                    }
-                }
+            if let Ok(entry) = serde_json::from_str::<ManifestEntry>(&line)
+                && entry.state == ManifestState::Committed
+                && let Ok(metadata) = tokio::fs::metadata(&entry.path).await
+            {
+                total_size += metadata.len();
+                committed_entries.push(entry);
             }
             line.clear();
         }

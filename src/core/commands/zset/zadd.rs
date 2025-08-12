@@ -159,12 +159,11 @@ impl ExecutableCommand for Zadd {
                     continue;
                 }
 
-                if let Some(old_s) = old_score {
-                    if (self.update_rule == ZaddUpdateRule::GreaterThan && *score <= old_s)
-                        || (self.update_rule == ZaddUpdateRule::LessThan && *score >= old_s)
-                    {
-                        continue;
-                    }
+                if let Some(old_s) = old_score
+                    && ((self.update_rule == ZaddUpdateRule::GreaterThan && *score <= old_s)
+                        || (self.update_rule == ZaddUpdateRule::LessThan && *score >= old_s))
+                {
+                    continue;
                 }
 
                 if zset.add(*score, member.clone()) {
