@@ -141,13 +141,13 @@ impl MasterMonitor {
                 }
             };
 
-            if let Some(client) = pubsub_client {
-                if let Err(e) = self.process_pubsub_messages(client, hello_interval).await {
-                    warn!(
-                        "Pub/Sub connection for '{}' lost: {}. Reconnecting...",
-                        self.master_name, e
-                    );
-                }
+            if let Some(client) = pubsub_client
+                && let Err(e) = self.process_pubsub_messages(client, hello_interval).await
+            {
+                warn!(
+                    "Pub/Sub connection for '{}' lost: {}. Reconnecting...",
+                    self.master_name, e
+                );
             }
 
             time::sleep(reconnect_delay).await;
@@ -187,13 +187,11 @@ impl MasterMonitor {
                 }
                 result = client.send_and_receive(RespFrame::Array(vec![])) => {
                      let frame = result?;
-                     if let RespFrame::Array(parts) = frame {
-                        if parts.len() == 3 {
-                           if let (RespFrame::BulkString(channel), RespFrame::BulkString(payload)) = (&parts[1], &parts[2]) {
+                     if let RespFrame::Array(parts) = frame
+                        && parts.len() == 3
+                           && let (RespFrame::BulkString(channel), RespFrame::BulkString(payload)) = (&parts[1], &parts[2]) {
                                 self.process_management_message(channel, payload).await;
                            }
-                        }
-                     }
                 }
             }
         }
@@ -323,11 +321,11 @@ impl MasterMonitor {
 
         for addr in replicas_to_check {
             if self.ping_instance(addr).await.is_ok() {
-                if let Some(mut replica_state) = self.state.lock().replicas.get_mut(&addr) {
-                    if replica_state.down_since.is_some() {
-                        info!("Replica {} is back online.", addr);
-                        replica_state.down_since = None;
-                    }
+                if let Some(mut replica_state) = self.state.lock().replicas.get_mut(&addr)
+                    && replica_state.down_since.is_some()
+                {
+                    info!("Replica {} is back online.", addr);
+                    replica_state.down_since = None;
                 }
             } else if let Some(mut replica_state) = self.state.lock().replicas.get_mut(&addr) {
                 if replica_state.down_since.is_none() {
@@ -578,11 +576,11 @@ impl MasterMonitor {
     /// Periodically polls the master for its `INFO REPLICATION` output.
     async fn poll_master_info(&self) {
         let master_addr = self.state.lock().addr;
-        if let Ok(mut client) = WardenClient::connect(master_addr).await {
-            if let Ok(info_str) = client.info_replication().await {
-                let mut state = self.state.lock();
-                self.parse_and_update_state(&mut state, &info_str);
-            }
+        if let Ok(mut client) = WardenClient::connect(master_addr).await
+            && let Ok(info_str) = client.info_replication().await
+        {
+            let mut state = self.state.lock();
+            self.parse_and_update_state(&mut state, &info_str);
         }
     }
 
@@ -599,24 +597,24 @@ impl MasterMonitor {
         for line in info.lines() {
             if let Some(val) = line.strip_prefix("master_replid:") {
                 state.run_id = val.trim().to_string();
-            } else if line.starts_with("slave") {
-                if let Some((_, val)) = line.split_once(':') {
-                    let parts: HashMap<&str, &str> =
-                        val.split(',').filter_map(|p| p.split_once('=')).collect();
-                    if let (Some(ip), Some(port)) = (parts.get("ip"), parts.get("port")) {
-                        if let Ok(addr) = format!("{ip}:{port}").parse::<SocketAddr>() {
-                            discovered_replicas.insert(addr);
-                            let offset: u64 = parts
-                                .get("offset")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            let mut entry = state
-                                .replicas
-                                .entry(addr)
-                                .or_insert_with(|| InstanceState::new(addr));
-                            entry.value_mut().replication_offset = offset;
-                        }
-                    }
+            } else if line.starts_with("slave")
+                && let Some((_, val)) = line.split_once(':')
+            {
+                let parts: HashMap<&str, &str> =
+                    val.split(',').filter_map(|p| p.split_once('=')).collect();
+                if let (Some(ip), Some(port)) = (parts.get("ip"), parts.get("port"))
+                    && let Ok(addr) = format!("{ip}:{port}").parse::<SocketAddr>()
+                {
+                    discovered_replicas.insert(addr);
+                    let offset: u64 = parts
+                        .get("offset")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    let mut entry = state
+                        .replicas
+                        .entry(addr)
+                        .or_insert_with(|| InstanceState::new(addr));
+                    entry.value_mut().replication_offset = offset;
                 }
             }
         }
@@ -632,42 +630,42 @@ async fn reconfigure_and_verify_stale_replica_task(
     current_master_addr: SocketAddr,
     current_master_runid: String,
 ) {
-    if let Ok(mut client) = WardenClient::connect(replica_addr).await {
-        if let Ok(info_str) = client.info_replication().await {
-            let mut replica_role = "";
-            let mut replica_master_runid = "";
-            for line in info_str.lines() {
-                if let Some(val) = line.strip_prefix("role:") {
-                    replica_role = val.trim();
-                }
-                if let Some(val) = line.strip_prefix("master_replid:") {
-                    replica_master_runid = val.trim();
-                }
+    if let Ok(mut client) = WardenClient::connect(replica_addr).await
+        && let Ok(info_str) = client.info_replication().await
+    {
+        let mut replica_role = "";
+        let mut replica_master_runid = "";
+        for line in info_str.lines() {
+            if let Some(val) = line.strip_prefix("role:") {
+                replica_role = val.trim();
             }
+            if let Some(val) = line.strip_prefix("master_replid:") {
+                replica_master_runid = val.trim();
+            }
+        }
 
-            if replica_role == "slave" && replica_master_runid != current_master_runid {
+        if replica_role == "slave" && replica_master_runid != current_master_runid {
+            warn!(
+                "Detected stale replica {} pointing to master '{}' (should be '{}'). Reconfiguring.",
+                replica_addr, replica_master_runid, current_master_runid
+            );
+
+            let reconfigure_cmd = RespFrame::Array(vec![
+                RespFrame::BulkString("REPLICAOF".into()),
+                RespFrame::BulkString(current_master_addr.ip().to_string().into()),
+                RespFrame::BulkString(current_master_addr.port().to_string().into()),
+            ]);
+
+            if let Err(e) = client.send_and_receive(reconfigure_cmd).await {
                 warn!(
-                    "Detected stale replica {} pointing to master '{}' (should be '{}'). Reconfiguring.",
-                    replica_addr, replica_master_runid, current_master_runid
+                    "Failed to send REPLICAOF to stale replica {}: {}",
+                    replica_addr, e
                 );
-
-                let reconfigure_cmd = RespFrame::Array(vec![
-                    RespFrame::BulkString("REPLICAOF".into()),
-                    RespFrame::BulkString(current_master_addr.ip().to_string().into()),
-                    RespFrame::BulkString(current_master_addr.port().to_string().into()),
-                ]);
-
-                if let Err(e) = client.send_and_receive(reconfigure_cmd).await {
-                    warn!(
-                        "Failed to send REPLICAOF to stale replica {}: {}",
-                        replica_addr, e
-                    );
-                } else {
-                    info!(
-                        "Successfully sent REPLICAOF to stale replica {}",
-                        replica_addr
-                    );
-                }
+            } else {
+                info!(
+                    "Successfully sent REPLICAOF to stale replica {}",
+                    replica_addr
+                );
             }
         }
     }

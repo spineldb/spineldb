@@ -199,26 +199,26 @@ impl ExecutableCommand for XAdd {
             (config.maxmemory, config.maxmemory_policy)
         };
 
-        if let Some(maxmem) = maxmemory {
-            if policy != crate::config::EvictionPolicy::NoEviction {
-                const MAX_EVICTION_ATTEMPTS: usize = 10;
-                for _ in 0..MAX_EVICTION_ATTEMPTS {
-                    let total_memory: usize =
-                        ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-                    let new_entry_size: usize = self
-                        .options
-                        .fields
-                        .iter()
-                        .map(|(k, v)| k.len() + v.len())
-                        .sum();
+        if let Some(maxmem) = maxmemory
+            && policy != crate::config::EvictionPolicy::NoEviction
+        {
+            const MAX_EVICTION_ATTEMPTS: usize = 10;
+            for _ in 0..MAX_EVICTION_ATTEMPTS {
+                let total_memory: usize =
+                    ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
+                let new_entry_size: usize = self
+                    .options
+                    .fields
+                    .iter()
+                    .map(|(k, v)| k.len() + v.len())
+                    .sum();
 
-                    if total_memory.saturating_add(new_entry_size) <= maxmem {
-                        break;
-                    }
+                if total_memory.saturating_add(new_entry_size) <= maxmem {
+                    break;
+                }
 
-                    if !ctx.db.evict_one_key(&ctx.state).await {
-                        break; // Stop trying if eviction fails to remove a key.
-                    }
+                if !ctx.db.evict_one_key(&ctx.state).await {
+                    break; // Stop trying if eviction fails to remove a key.
                 }
             }
         }

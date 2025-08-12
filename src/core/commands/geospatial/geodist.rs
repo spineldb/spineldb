@@ -56,23 +56,23 @@ impl ExecutableCommand for GeoDist {
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let (_, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
-        if let Some(entry) = shard_cache_guard.get(&self.key) {
-            if !entry.is_expired() {
-                if let DataValue::SortedSet(zset) = &entry.data {
-                    if let (Some(score1), Some(score2)) =
-                        (zset.get_score(&self.member1), zset.get_score(&self.member2))
-                    {
-                        let (lon1, lat1) = score_to_coordinates(score1)?;
-                        let (lon2, lat2) = score_to_coordinates(score2)?;
-                        let dist = haversine_distance(lon1, lat1, lon2, lat2, self.unit);
-                        return Ok((
-                            RespValue::BulkString(dist.to_string().into()),
-                            WriteOutcome::DidNotWrite,
-                        ));
-                    }
-                } else {
-                    return Err(SpinelDBError::WrongType);
+        if let Some(entry) = shard_cache_guard.get(&self.key)
+            && !entry.is_expired()
+        {
+            if let DataValue::SortedSet(zset) = &entry.data {
+                if let (Some(score1), Some(score2)) =
+                    (zset.get_score(&self.member1), zset.get_score(&self.member2))
+                {
+                    let (lon1, lat1) = score_to_coordinates(score1)?;
+                    let (lon2, lat2) = score_to_coordinates(score2)?;
+                    let dist = haversine_distance(lon1, lat1, lon2, lat2, self.unit);
+                    return Ok((
+                        RespValue::BulkString(dist.to_string().into()),
+                        WriteOutcome::DidNotWrite,
+                    ));
                 }
+            } else {
+                return Err(SpinelDBError::WrongType);
             }
         }
         Ok((RespValue::Null, WriteOutcome::DidNotWrite))

@@ -190,21 +190,21 @@ async fn wait_for_promotion(addr: SocketAddr) -> Option<String> {
     const POLL_INTERVAL_SECS: u64 = 1;
 
     for _ in 0..(PROMOTION_TIMEOUT_SECS / POLL_INTERVAL_SECS) {
-        if let Ok(mut client) = WardenClient::connect(addr).await {
-            if let Ok(info_str) = client.info_replication().await {
-                let mut role = None;
-                let mut runid = None;
-                for line in info_str.lines() {
-                    if let Some(val) = line.strip_prefix("role:") {
-                        role = Some(val.trim());
-                    }
-                    if let Some(val) = line.strip_prefix("master_replid:") {
-                        runid = Some(val.trim().to_string());
-                    }
+        if let Ok(mut client) = WardenClient::connect(addr).await
+            && let Ok(info_str) = client.info_replication().await
+        {
+            let mut role = None;
+            let mut runid = None;
+            for line in info_str.lines() {
+                if let Some(val) = line.strip_prefix("role:") {
+                    role = Some(val.trim());
                 }
-                if role == Some("master") {
-                    return runid;
+                if let Some(val) = line.strip_prefix("master_replid:") {
+                    runid = Some(val.trim().to_string());
                 }
+            }
+            if role == Some("master") {
+                return runid;
             }
         }
         sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
@@ -321,10 +321,10 @@ async fn reconfigure_and_verify_one_replica(
     // 3. Verify with INFO REPLICATION
     let info_str = client.info_replication().await?;
     for line in info_str.lines() {
-        if let Some(val) = line.strip_prefix("master_replid:") {
-            if val.trim() == new_master_runid {
-                return Ok(true); // Verification successful
-            }
+        if let Some(val) = line.strip_prefix("master_replid:")
+            && val.trim() == new_master_runid
+        {
+            return Ok(true); // Verification successful
         }
     }
 

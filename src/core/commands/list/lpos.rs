@@ -162,10 +162,10 @@ impl ExecutableCommand for LPos {
 
                         // Stop if the number of requested occurrences is reached.
                         // `u64::MAX` (our internal representation for COUNT 0) will never be reached.
-                        if let Some(c) = self.count {
-                            if positions.len() as u64 >= c {
-                                break;
-                            }
+                        if let Some(c) = self.count
+                            && positions.len() as u64 >= c
+                        {
+                            break;
                         }
                     } else {
                         // If COUNT is not present, we only need the first matching rank.

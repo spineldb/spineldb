@@ -119,10 +119,10 @@ impl ExecutableCommand for XAutoClaim {
             {
                 if id >= self.start_id {
                     ids_to_claim.push(id);
-                    if let Some(count) = self.count {
-                        if ids_to_claim.len() >= count {
-                            break;
-                        }
+                    if let Some(count) = self.count
+                        && ids_to_claim.len() >= count
+                    {
+                        break;
                     }
                 }
             }

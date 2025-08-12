@@ -197,11 +197,16 @@ impl BlockerManager {
         // --- Phase 3: Release locks and block ---
         ctx.release_locks();
         let block_result = self
-            .wait_with_polling(&[source_key.clone()], &mut rx, wait_timeout, &ctx.state)
+            .wait_with_polling(
+                std::slice::from_ref(source_key),
+                &mut rx,
+                wait_timeout,
+                &ctx.state,
+            )
             .await;
 
         // --- Phase 4: Process result and clean up ---
-        self.remove_waiter(&[source_key.clone()], &shared_waker);
+        self.remove_waiter(std::slice::from_ref(source_key), &shared_waker);
 
         match block_result {
             BlockerOutcome::TimedOut => Ok((RespValue::Null, WriteOutcome::DidNotWrite)),
@@ -305,12 +310,12 @@ impl BlockerManager {
         // --- Phase 1: Attempt a non-blocking pop ---
         for key in keys {
             let (resp, outcome) = zpop_logic(ctx, key, side, Some(1)).await?;
-            if let RespValue::Array(arr) = &resp {
-                if !arr.is_empty() {
-                    let mut final_resp = vec![RespValue::BulkString(key.clone())];
-                    final_resp.extend_from_slice(arr);
-                    return Ok((RespValue::Array(final_resp), outcome));
-                }
+            if let RespValue::Array(arr) = &resp
+                && !arr.is_empty()
+            {
+                let mut final_resp = vec![RespValue::BulkString(key.clone())];
+                final_resp.extend_from_slice(arr);
+                return Ok((RespValue::Array(final_resp), outcome));
             }
         }
 
@@ -461,14 +466,14 @@ impl BlockerManager {
     pub fn wake_waiters_for_modification(&self, key: &Bytes) {
         if let Some(mut queue) = self.waiters.get_mut(key) {
             while let Some(info) = queue.pop_front() {
-                if let Ok(mut guard) = info.waker.lock() {
-                    if let Some(waker) = guard.take() {
-                        let dummy_value = PoppedValue {
-                            key: key.clone(),
-                            value: Bytes::new(),
-                        };
-                        let _ = waker.send(WokenValue::List(dummy_value));
-                    }
+                if let Ok(mut guard) = info.waker.lock()
+                    && let Some(waker) = guard.take()
+                {
+                    let dummy_value = PoppedValue {
+                        key: key.clone(),
+                        value: Bytes::new(),
+                    };
+                    let _ = waker.send(WokenValue::List(dummy_value));
                 }
             }
         }

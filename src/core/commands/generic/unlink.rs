@@ -61,13 +61,13 @@ impl ExecutableCommand for Unlink {
                 let shard_index = ctx.db.get_shard_index(key);
                 if let Some(guard) = guards.get_mut(&shard_index) {
                     // `pop` removes the key and returns its value if it existed.
-                    if let Some(popped_value) = guard.pop(key) {
-                        if !popped_value.is_expired() {
-                            count += 1;
-                            // Defer notification and reclamation to avoid holding locks across await points.
-                            post_lock_tasks.push((key.clone(), popped_value.data.clone()));
-                            items_to_reclaim.push((key.clone(), popped_value));
-                        }
+                    if let Some(popped_value) = guard.pop(key)
+                        && !popped_value.is_expired()
+                    {
+                        count += 1;
+                        // Defer notification and reclamation to avoid holding locks across await points.
+                        post_lock_tasks.push((key.clone(), popped_value.data.clone()));
+                        items_to_reclaim.push((key.clone(), popped_value));
                     }
                 }
             }

@@ -44,10 +44,10 @@ pub(super) async fn execute_sunion<'a>(
     let mut union_set = HashSet::new();
     for key in keys {
         let shard_index = ctx.db.get_shard_index(key);
-        if let Some(guard) = guards.get_mut(&shard_index) {
-            if let Some(set) = get_set_from_guard(guard, key)? {
-                union_set.extend(set.iter().cloned());
-            }
+        if let Some(guard) = guards.get_mut(&shard_index)
+            && let Some(set) = get_set_from_guard(guard, key)?
+        {
+            union_set.extend(set.iter().cloned());
         }
     }
     Ok(union_set)
@@ -113,10 +113,10 @@ pub(super) async fn execute_sdiff<'a>(
     }
     for key in keys.iter().skip(1) {
         let shard_index = ctx.db.get_shard_index(key);
-        if let Some(guard) = guards.get_mut(&shard_index) {
-            if let Some(other_set) = get_set_from_guard(guard, key)? {
-                diff_set.retain(|member| !other_set.contains(member));
-            }
+        if let Some(guard) = guards.get_mut(&shard_index)
+            && let Some(other_set) = get_set_from_guard(guard, key)?
+        {
+            diff_set.retain(|member| !other_set.contains(member));
         }
     }
     Ok(diff_set)

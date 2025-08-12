@@ -304,22 +304,19 @@ impl<'a> Router<'a> {
         db: &Arc<Db>,
     ) -> Result<RouteResponse, SpinelDBError> {
         // Special guard for SCRIPT FLUSH to prevent race conditions with AOF rewrite.
-        if let Command::Script(ref script_cmd) = command {
-            if let ScriptSubcommand::Flush = script_cmd.subcommand {
-                if self
-                    .state
-                    .persistence
-                    .aof_rewrite_state
-                    .lock()
-                    .await
-                    .is_in_progress
-                {
-                    return Err(SpinelDBError::InvalidState(
-                        "ERR SCRIPT FLUSH is not allowed while an AOF rewrite is in progress."
-                            .to_string(),
-                    ));
-                }
-            }
+        if let Command::Script(ref script_cmd) = command
+            && let ScriptSubcommand::Flush = script_cmd.subcommand
+            && self
+                .state
+                .persistence
+                .aof_rewrite_state
+                .lock()
+                .await
+                .is_in_progress
+        {
+            return Err(SpinelDBError::InvalidState(
+                "ERR SCRIPT FLUSH is not allowed while an AOF rewrite is in progress.".to_string(),
+            ));
         }
 
         // Proactively check for memory pressure before executing a write command.
@@ -328,22 +325,22 @@ impl<'a> Router<'a> {
                 let config = self.state.config.lock().await;
                 (config.maxmemory, config.maxmemory_policy)
             };
-            if let Some(maxmem) = maxmemory {
-                if policy != crate::config::EvictionPolicy::NoEviction {
-                    const MAX_EVICTION_ATTEMPTS: usize = 10;
-                    for _ in 0..MAX_EVICTION_ATTEMPTS {
-                        let total_memory: usize = self
-                            .state
-                            .dbs
-                            .iter()
-                            .map(|db| db.get_current_memory())
-                            .sum();
-                        if total_memory < maxmem {
-                            break;
-                        }
-                        if !db.evict_one_key(&self.state).await {
-                            break;
-                        }
+            if let Some(maxmem) = maxmemory
+                && policy != crate::config::EvictionPolicy::NoEviction
+            {
+                const MAX_EVICTION_ATTEMPTS: usize = 10;
+                for _ in 0..MAX_EVICTION_ATTEMPTS {
+                    let total_memory: usize = self
+                        .state
+                        .dbs
+                        .iter()
+                        .map(|db| db.get_current_memory())
+                        .sum();
+                    if total_memory < maxmem {
+                        break;
+                    }
+                    if !db.evict_one_key(&self.state).await {
+                        break;
                     }
                 }
             }

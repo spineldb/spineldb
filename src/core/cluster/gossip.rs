@@ -223,10 +223,10 @@ async fn send_direct_gossip_message(
     let password = &state.config.lock().await.password;
     if let Ok(secure_message) = SecureGossipMessage::new(message, password) {
         let bincode_config = config::standard();
-        if let Ok(encoded_msg) = bincode::encode_to_vec(&secure_message, bincode_config) {
-            if let Err(e) = socket.send_to(&encoded_msg, &target).await {
-                warn!("Failed to send direct gossip message to {}: {}", target, e);
-            }
+        if let Ok(encoded_msg) = bincode::encode_to_vec(&secure_message, bincode_config)
+            && let Err(e) = socket.send_to(&encoded_msg, &target).await
+        {
+            warn!("Failed to send direct gossip message to {}: {}", target, e);
         }
     }
 }
@@ -247,13 +247,12 @@ async fn broadcast_gossip_message(
                 if !node_info
                     .get_flags()
                     .intersects(NodeFlags::MYSELF | NodeFlags::FAIL | NodeFlags::HANDSHAKE)
+                    && let Err(e) = socket.send_to(&encoded_msg, &node_info.bus_addr).await
                 {
-                    if let Err(e) = socket.send_to(&encoded_msg, &node_info.bus_addr).await {
-                        warn!(
-                            "Failed to send broadcast gossip message to {}: {}",
-                            node_info.bus_addr, e
-                        );
-                    }
+                    warn!(
+                        "Failed to send broadcast gossip message to {}: {}",
+                        node_info.bus_addr, e
+                    );
                 }
             }
         }
@@ -293,10 +292,10 @@ async fn send_pings(state: &Arc<ServerState>, socket: &Arc<UdpSocket>) {
     let password = &state.config.lock().await.password;
 
     let replica_info = state.replication.replica_info.lock().await;
-    if let Some(info) = replica_info.as_ref() {
-        if let Some(mut myself) = cluster.nodes.get_mut(&cluster.my_id) {
-            myself.value_mut().node_info.replication_offset = info.processed_offset;
-        }
+    if let Some(info) = replica_info.as_ref()
+        && let Some(mut myself) = cluster.nodes.get_mut(&cluster.my_id)
+    {
+        myself.value_mut().node_info.replication_offset = info.processed_offset;
     }
     drop(replica_info);
 
@@ -350,13 +349,14 @@ async fn check_for_failed_nodes(state: &Arc<ServerState>, socket: &Arc<UdpSocket
             continue;
         }
 
-        if let Some(pong_time) = runtime_state.pong_received {
-            if pong_time.elapsed() > node_timeout && !flags.contains(NodeFlags::PFAIL) {
-                info!("Marking node {} as PFAIL (no PONG received)", node_id);
-                let mut new_flags = flags;
-                new_flags.insert(NodeFlags::PFAIL);
-                runtime_state.node_info.set_flags(new_flags);
-            }
+        if let Some(pong_time) = runtime_state.pong_received
+            && pong_time.elapsed() > node_timeout
+            && !flags.contains(NodeFlags::PFAIL)
+        {
+            info!("Marking node {} as PFAIL (no PONG received)", node_id);
+            let mut new_flags = flags;
+            new_flags.insert(NodeFlags::PFAIL);
+            runtime_state.node_info.set_flags(new_flags);
         }
 
         if flags.contains(NodeFlags::PFAIL) && cluster.promote_pfail_to_fail(&node_id).await {

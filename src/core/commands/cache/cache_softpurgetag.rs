@@ -66,14 +66,14 @@ impl ExecutableCommand for CacheSoftPurgeTag {
         // Phase 2: Modify the entries under lock.
         for key in keys_vec {
             let shard_index = db.get_shard_index(&key);
-            if let Some(guard) = guards.get_mut(&shard_index) {
-                if let Some(entry) = guard.get_mut(&key) {
-                    if !entry.is_expired() && matches!(entry.data, DataValue::HttpCache { .. }) {
-                        entry.expiry = Some(Instant::now());
-                        entry.version += 1;
-                        purged_count += 1;
-                    }
-                }
+            if let Some(guard) = guards.get_mut(&shard_index)
+                && let Some(entry) = guard.get_mut(&key)
+                && !entry.is_expired()
+                && matches!(entry.data, DataValue::HttpCache { .. })
+            {
+                entry.expiry = Some(Instant::now());
+                entry.version += 1;
+                purged_count += 1;
             }
         }
 

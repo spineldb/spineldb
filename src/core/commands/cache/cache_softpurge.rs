@@ -52,16 +52,16 @@ impl ExecutableCommand for CacheSoftPurge {
         let mut purged_count = 0;
         for key in &self.keys {
             let shard_index = ctx.db.get_shard_index(key);
-            if let Some(guard) = guards.get_mut(&shard_index) {
-                if let Some(entry) = guard.get_mut(key) {
-                    if !entry.is_expired() && matches!(entry.data, DataValue::HttpCache { .. }) {
-                        // Mark as stale by setting its expiry to now.
-                        // The next request will trigger SWR/Grace logic.
-                        entry.expiry = Some(Instant::now());
-                        entry.version += 1;
-                        purged_count += 1;
-                    }
-                }
+            if let Some(guard) = guards.get_mut(&shard_index)
+                && let Some(entry) = guard.get_mut(key)
+                && !entry.is_expired()
+                && matches!(entry.data, DataValue::HttpCache { .. })
+            {
+                // Mark as stale by setting its expiry to now.
+                // The next request will trigger SWR/Grace logic.
+                entry.expiry = Some(Instant::now());
+                entry.version += 1;
+                purged_count += 1;
             }
         }
 

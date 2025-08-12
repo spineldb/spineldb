@@ -209,10 +209,8 @@ impl ExecutableCommand for Set {
         new_stored_value.expiry = new_expiry;
 
         // Preserve version for WATCH command correctness.
-        if key_exists_and_is_valid {
-            if let Some(old_entry) = shard_cache_guard.peek(&self.key) {
-                new_stored_value.version = old_entry.version.wrapping_add(1);
-            }
+        if key_exists_and_is_valid && let Some(old_entry) = shard_cache_guard.peek(&self.key) {
+            new_stored_value.version = old_entry.version.wrapping_add(1);
         }
 
         shard_cache_guard.put(self.key.clone(), new_stored_value);

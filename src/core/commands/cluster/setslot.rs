@@ -45,10 +45,10 @@ pub async fn execute(
             }
 
             // Remove slot from old owner
-            if let Some(id) = { cluster.slots_map[slot as usize].read().clone() } {
-                if let Some(mut old_owner) = cluster.nodes.get_mut(&id) {
-                    old_owner.node_info.slots.remove(&slot);
-                }
+            if let Some(id) = { cluster.slots_map[slot as usize].read().clone() }
+                && let Some(mut old_owner) = cluster.nodes.get_mut(&id)
+            {
+                old_owner.node_info.slots.remove(&slot);
             }
 
             // Assign slot to new owner

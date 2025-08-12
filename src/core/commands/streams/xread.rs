@@ -224,24 +224,22 @@ impl XRead {
         // Now, iterate through the resolved streams and read the data.
         for (key, start_id) in &resolved_streams {
             let shard_index = ctx.db.get_shard_index(key);
-            if let Some(guard) = guards.get(&shard_index) {
-                if let Some(entry) = guard.peek(key) {
-                    if !entry.is_expired() {
-                        if let DataValue::Stream(stream) = &entry.data {
-                            let range = stream
-                                .entries
-                                .range((Bound::Excluded(*start_id), Bound::Unbounded));
+            if let Some(guard) = guards.get(&shard_index)
+                && let Some(entry) = guard.peek(key)
+                && !entry.is_expired()
+                && let DataValue::Stream(stream) = &entry.data
+            {
+                let range = stream
+                    .entries
+                    .range((Bound::Excluded(*start_id), Bound::Unbounded));
 
-                            let stream_results: Vec<StreamEntry> = range
-                                .take(self.count.unwrap_or(usize::MAX))
-                                .map(|(_, se)| se.clone())
-                                .collect();
+                let stream_results: Vec<StreamEntry> = range
+                    .take(self.count.unwrap_or(usize::MAX))
+                    .map(|(_, se)| se.clone())
+                    .collect();
 
-                            if !stream_results.is_empty() {
-                                results.push((key.clone(), stream_results));
-                            }
-                        }
-                    }
+                if !stream_results.is_empty() {
+                    results.push((key.clone(), stream_results));
                 }
             }
         }

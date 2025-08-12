@@ -31,16 +31,14 @@ pub async fn handle_failover_cron(state: &Arc<ServerState>, socket: &Arc<UdpSock
         .as_ref()
         .expect("Failover cron must run in cluster mode");
 
-    if let Some(my_master_id) = &cluster.get_my_config().node_info.replica_of {
-        if let Some(master_node) = cluster.nodes.get(my_master_id) {
-            if master_node
-                .node_info
-                .get_flags()
-                .intersects(NodeFlags::FAIL | NodeFlags::PFAIL)
-            {
-                start_election(state, socket).await;
-            }
-        }
+    if let Some(my_master_id) = &cluster.get_my_config().node_info.replica_of
+        && let Some(master_node) = cluster.nodes.get(my_master_id)
+        && master_node
+            .node_info
+            .get_flags()
+            .intersects(NodeFlags::FAIL | NodeFlags::PFAIL)
+    {
+        start_election(state, socket).await;
     }
 }
 
@@ -89,17 +87,15 @@ async fn start_election(state: &Arc<ServerState>, socket: &Arc<UdpSocket>) {
     );
     tokio::time::sleep(total_delay).await;
 
-    if let Some(my_master_id) = &cluster.get_my_config().node_info.replica_of {
-        if let Some(master_node) = cluster.nodes.get(my_master_id) {
-            if !master_node
-                .node_info
-                .get_flags()
-                .intersects(NodeFlags::FAIL | NodeFlags::PFAIL)
-            {
-                info!("Master is back online. Aborting election.");
-                return;
-            }
-        }
+    if let Some(my_master_id) = &cluster.get_my_config().node_info.replica_of
+        && let Some(master_node) = cluster.nodes.get(my_master_id)
+        && !master_node
+            .node_info
+            .get_flags()
+            .intersects(NodeFlags::FAIL | NodeFlags::PFAIL)
+    {
+        info!("Master is back online. Aborting election.");
+        return;
     }
 
     let new_epoch = cluster.get_new_config_epoch();
@@ -171,18 +167,17 @@ pub async fn handle_auth_request(
 
     let last_vote_epoch = cluster.last_vote_epoch.load(Ordering::Relaxed);
     if candidate_epoch > last_vote_epoch {
-        if let Some(candidate_node_entry) = cluster.nodes.get(&candidate_id) {
-            if let Some(failed_master_id) = &candidate_node_entry.node_info.replica_of {
-                if let Some(failed_master_entry) = cluster.nodes.get(failed_master_id) {
-                    let last_known_master_offset = failed_master_entry.node_info.replication_offset;
-                    if candidate_offset < last_known_master_offset {
-                        warn!(
-                            "Rejecting vote for {}: candidate offset ({}) is older than last known master offset ({}).",
-                            candidate_id, candidate_offset, last_known_master_offset
-                        );
-                        return;
-                    }
-                }
+        if let Some(candidate_node_entry) = cluster.nodes.get(&candidate_id)
+            && let Some(failed_master_id) = &candidate_node_entry.node_info.replica_of
+            && let Some(failed_master_entry) = cluster.nodes.get(failed_master_id)
+        {
+            let last_known_master_offset = failed_master_entry.node_info.replication_offset;
+            if candidate_offset < last_known_master_offset {
+                warn!(
+                    "Rejecting vote for {}: candidate offset ({}) is older than last known master offset ({}).",
+                    candidate_id, candidate_offset, last_known_master_offset
+                );
+                return;
             }
         }
 
@@ -204,12 +199,12 @@ pub async fn handle_auth_request(
 
         if let Ok(secure_ack) = SecureGossipMessage::new(ack_msg, password) {
             let bincode_config = config::standard();
-            if let Some(candidate_node) = cluster.nodes.get(&candidate_id) {
-                if let Ok(encoded) = bincode::encode_to_vec(&secure_ack, bincode_config) {
-                    let _ = socket
-                        .send_to(&encoded, &candidate_node.node_info.bus_addr)
-                        .await;
-                }
+            if let Some(candidate_node) = cluster.nodes.get(&candidate_id)
+                && let Ok(encoded) = bincode::encode_to_vec(&secure_ack, bincode_config)
+            {
+                let _ = socket
+                    .send_to(&encoded, &candidate_node.node_info.bus_addr)
+                    .await;
             }
         }
     } else {

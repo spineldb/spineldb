@@ -305,20 +305,18 @@ impl GeoRadius {
         let mut candidates = HashMap::new();
         let source_shard_index = db.get_shard_index(&self.key);
         if let Some(guard) = guards.get(&source_shard_index) {
-            if let Some(entry) = guard.peek(&self.key) {
-                if !entry.is_expired() {
-                    if let DataValue::SortedSet(zset) = &entry.data {
-                        for area_hash in &areas_to_search {
-                            let (min_score, max_score) =
-                                helpers::geohash_to_score_range(area_hash)?;
-                            let range_results = zset.get_range_by_score(
-                                ScoreBoundary::Inclusive(min_score),
-                                ScoreBoundary::Inclusive(max_score),
-                            );
-                            for item in range_results {
-                                candidates.insert(item.member.clone(), item);
-                            }
-                        }
+            if let Some(entry) = guard.peek(&self.key)
+                && !entry.is_expired()
+                && let DataValue::SortedSet(zset) = &entry.data
+            {
+                for area_hash in &areas_to_search {
+                    let (min_score, max_score) = helpers::geohash_to_score_range(area_hash)?;
+                    let range_results = zset.get_range_by_score(
+                        ScoreBoundary::Inclusive(min_score),
+                        ScoreBoundary::Inclusive(max_score),
+                    );
+                    for item in range_results {
+                        candidates.insert(item.member.clone(), item);
                     }
                 }
             }

@@ -388,22 +388,21 @@ impl ReplicaWorker {
             return Ok(());
         }
 
-        if let Command::Replconf(ref r) = command {
-            if r.args
+        if let Command::Replconf(ref r) = command
+            && r.args
                 .first()
                 .is_some_and(|arg| arg.eq_ignore_ascii_case("GETACK"))
-            {
-                let offset = self
-                    .state
-                    .replication
-                    .replica_info
-                    .lock()
-                    .await
-                    .as_ref()
-                    .map_or(0, |i| i.processed_offset);
-                self.spawn_ack_task(writer.clone(), offset).await;
-                return Ok(());
-            }
+        {
+            let offset = self
+                .state
+                .replication
+                .replica_info
+                .lock()
+                .await
+                .as_ref()
+                .map_or(0, |i| i.processed_offset);
+            self.spawn_ack_task(writer.clone(), offset).await;
+            return Ok(());
         }
 
         self.apply_single_command(command).await
@@ -597,12 +596,11 @@ impl ReplicaWorker {
                     .replication
                     .poisoned_masters
                     .get(&new_master_run_id)
+                    && *expiry_timestamp.value() > now_unix_secs
                 {
-                    if *expiry_timestamp.value() > now_unix_secs {
-                        return Err(SpinelDBError::ReplicationError(format!(
-                            "Refusing to sync with a poisoned master: {new_master_run_id}"
-                        )));
-                    }
+                    return Err(SpinelDBError::ReplicationError(format!(
+                        "Refusing to sync with a poisoned master: {new_master_run_id}"
+                    )));
                 }
 
                 Ok(HandshakeResult::FullResync)

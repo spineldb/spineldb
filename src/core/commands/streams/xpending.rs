@@ -230,17 +230,17 @@ impl XPending {
             .as_millis();
 
         for (id, pel_info) in range {
-            if let Some(filter) = consumer_filter {
-                if pel_info.consumer_name != *filter {
-                    continue;
-                }
+            if let Some(filter) = consumer_filter
+                && pel_info.consumer_name != *filter
+            {
+                continue;
             }
 
             let idle_time = now_ms.saturating_sub(pel_info.delivery_time_ms as u128) as u64;
-            if let Some(min_idle) = idle_time_filter {
-                if idle_time < min_idle {
-                    continue;
-                }
+            if let Some(min_idle) = idle_time_filter
+                && idle_time < min_idle
+            {
+                continue;
             }
 
             results.push(RespValue::Array(vec![

@@ -192,16 +192,17 @@ impl ExecutableCommand for CachePolicyCmd {
                 drop(policies);
 
                 // If the `prewarm` flag changed, update the prewarm key set.
-                if let Some(old) = old_policy {
-                    if old.prewarm && !policy_to_set.prewarm {
-                        debug!(
-                            "Policy '{}' changed from prewarm=true to false. Cleaning up prewarm keys.",
-                            old.name
-                        );
-                        let mut prewarm_keys = ctx.state.cache.prewarm_keys.write().await;
-                        let matcher = WildMatch::new(&old.key_pattern);
-                        prewarm_keys.retain(|key| !matcher.matches(&String::from_utf8_lossy(key)));
-                    }
+                if let Some(old) = old_policy
+                    && old.prewarm
+                    && !policy_to_set.prewarm
+                {
+                    debug!(
+                        "Policy '{}' changed from prewarm=true to false. Cleaning up prewarm keys.",
+                        old.name
+                    );
+                    let mut prewarm_keys = ctx.state.cache.prewarm_keys.write().await;
+                    let matcher = WildMatch::new(&old.key_pattern);
+                    prewarm_keys.retain(|key| !matcher.matches(&String::from_utf8_lossy(key)));
                 }
 
                 Ok((
@@ -218,16 +219,16 @@ impl ExecutableCommand for CachePolicyCmd {
                 let removed_count = initial_len - policies.len();
                 drop(policies);
 
-                if let Some(deleted_policy) = policy_to_delete {
-                    if deleted_policy.prewarm {
-                        debug!(
-                            "Prewarm policy '{}' deleted. Cleaning up prewarm keys.",
-                            deleted_policy.name
-                        );
-                        let mut prewarm_keys = ctx.state.cache.prewarm_keys.write().await;
-                        let matcher = WildMatch::new(&deleted_policy.key_pattern);
-                        prewarm_keys.retain(|key| !matcher.matches(&String::from_utf8_lossy(key)));
-                    }
+                if let Some(deleted_policy) = policy_to_delete
+                    && deleted_policy.prewarm
+                {
+                    debug!(
+                        "Prewarm policy '{}' deleted. Cleaning up prewarm keys.",
+                        deleted_policy.name
+                    );
+                    let mut prewarm_keys = ctx.state.cache.prewarm_keys.write().await;
+                    let matcher = WildMatch::new(&deleted_policy.key_pattern);
+                    prewarm_keys.retain(|key| !matcher.matches(&String::from_utf8_lossy(key)));
                 }
 
                 Ok((

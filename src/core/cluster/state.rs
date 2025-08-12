@@ -234,24 +234,23 @@ impl ClusterState {
                 node_info.bus_addr = format!("{my_addr}:{my_bus_port}");
                 pong_received = Some(Instant::now());
 
-                if let Some(master_id) = &node_info.replica_of {
-                    if let Some(master_node) = s_state.nodes.iter().find(|n| &n.id == master_id) {
-                        if let Ok(mut config) = server_config.clone().into_mutex().try_lock() {
-                            let parts: Vec<&str> = master_node.addr.split(':').collect();
-                            if parts.len() == 2 {
-                                let host = parts[0].to_string();
-                                if let Ok(port) = parts[1].parse::<u16>() {
-                                    info!(
-                                        "Overriding replication config from nodes.conf: now replicating {}",
-                                        master_node.addr
-                                    );
-                                    config.replication = ReplicationConfig::Replica {
-                                        primary_host: host,
-                                        primary_port: port,
-                                        tls_enabled: false,
-                                    };
-                                }
-                            }
+                if let Some(master_id) = &node_info.replica_of
+                    && let Some(master_node) = s_state.nodes.iter().find(|n| &n.id == master_id)
+                    && let Ok(mut config) = server_config.clone().into_mutex().try_lock()
+                {
+                    let parts: Vec<&str> = master_node.addr.split(':').collect();
+                    if parts.len() == 2 {
+                        let host = parts[0].to_string();
+                        if let Ok(port) = parts[1].parse::<u16>() {
+                            info!(
+                                "Overriding replication config from nodes.conf: now replicating {}",
+                                master_node.addr
+                            );
+                            config.replication = ReplicationConfig::Replica {
+                                primary_host: host,
+                                primary_port: port,
+                                tls_enabled: false,
+                            };
                         }
                     }
                 }
@@ -331,11 +330,11 @@ impl ClusterState {
             .collect();
 
         let mut slots_to_claim = BTreeSet::new();
-        if let Some(old_master_id) = old_master_id {
-            if let Some(old_master_node) = new_nodes.iter_mut().find(|n| n.id == old_master_id) {
-                slots_to_claim = old_master_node.slots.clone();
-                old_master_node.slots.clear();
-            }
+        if let Some(old_master_id) = old_master_id
+            && let Some(old_master_node) = new_nodes.iter_mut().find(|n| n.id == old_master_id)
+        {
+            slots_to_claim = old_master_node.slots.clone();
+            old_master_node.slots.clear();
         }
 
         if let Some(myself) = new_nodes.iter_mut().find(|n| n.id == self.my_id) {
@@ -386,18 +385,17 @@ impl ClusterState {
 
     /// Records a PFAIL report from one node about another.
     pub fn mark_node_as_pfail(&self, node_id: &str, reporter_id: &str) {
-        if let Some(mut runtime_state) = self.nodes.get_mut(node_id) {
-            if !runtime_state
+        if let Some(mut runtime_state) = self.nodes.get_mut(node_id)
+            && !runtime_state
                 .node_info
                 .get_flags()
                 .intersects(NodeFlags::MYSELF | NodeFlags::HANDSHAKE | NodeFlags::NOADDR)
-            {
-                let now = Instant::now();
-                runtime_state
-                    .pfail_reports
-                    .insert(reporter_id.to_string(), now);
-                info!("PFAIL report for {} from {}", node_id, reporter_id);
-            }
+        {
+            let now = Instant::now();
+            runtime_state
+                .pfail_reports
+                .insert(reporter_id.to_string(), now);
+            info!("PFAIL report for {} from {}", node_id, reporter_id);
         }
     }
 
@@ -437,25 +435,25 @@ impl ClusterState {
     /// Promotes a node from PFAIL to FAIL if a majority of masters agree.
     pub async fn promote_pfail_to_fail(&self, node_id: &str) -> bool {
         let needed = (self.count_online_masters() / 2) + 1;
-        if let Some(mut node) = self.nodes.get_mut(node_id) {
-            if node.pfail_reports.len() >= needed {
-                if node.node_info.get_flags().contains(NodeFlags::FAIL) {
-                    return false;
-                }
-                info!("Marking node {} as FAIL", node_id);
-                let mut flags = node.node_info.get_flags();
-                flags.remove(NodeFlags::PFAIL);
-                flags.insert(NodeFlags::FAIL);
-                node.node_info.set_flags(flags);
-                let _ = self.save_config().await;
-                return true;
+        if let Some(mut node) = self.nodes.get_mut(node_id)
+            && node.pfail_reports.len() >= needed
+        {
+            if node.node_info.get_flags().contains(NodeFlags::FAIL) {
+                return false;
             }
+            info!("Marking node {} as FAIL", node_id);
+            let mut flags = node.node_info.get_flags();
+            flags.remove(NodeFlags::PFAIL);
+            flags.insert(NodeFlags::FAIL);
+            node.node_info.set_flags(flags);
+            let _ = self.save_config().await;
+            return true;
         }
         false
     }
 
     /// Returns a reference to this node's own `NodeRuntimeState`.
-    pub fn get_my_config(&self) -> Ref<String, NodeRuntimeState> {
+    pub fn get_my_config(&self) -> Ref<'_, String, NodeRuntimeState> {
         self.nodes
             .get(&self.my_id)
             .expect("Invariant violation: own node config should always exist in the cluster map")
@@ -655,7 +653,7 @@ impl ClusterState {
     }
 
     /// Returns the node that is responsible for a given slot.
-    pub fn get_node_for_slot(&self, slot: u16) -> Option<Ref<String, NodeRuntimeState>> {
+    pub fn get_node_for_slot(&self, slot: u16) -> Option<Ref<'_, String, NodeRuntimeState>> {
         let owner_id = self.slots_map[slot as usize].read();
         let owner_id_str = owner_id.as_deref()?;
         self.nodes.get(owner_id_str)

@@ -51,12 +51,11 @@ impl ExecutableCommand for Exists {
 
         for key in &self.keys {
             let shard_index = ctx.db.get_shard_index(key);
-            if let Some(guard) = guards.get_mut(&shard_index) {
-                if let Some(entry) = guard.peek(key) {
-                    if !entry.is_expired() {
-                        count += 1;
-                    }
-                }
+            if let Some(guard) = guards.get_mut(&shard_index)
+                && let Some(entry) = guard.peek(key)
+                && !entry.is_expired()
+            {
+                count += 1;
             }
         }
 

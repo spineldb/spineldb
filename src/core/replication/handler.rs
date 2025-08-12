@@ -117,21 +117,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         // 3. The requested offset is still present in the replication backlog.
         if repl_id.eq_ignore_ascii_case(master_replid)
             && replica_state == Some(ReplicaSyncState::Online)
+            && let Ok(offset) = offset_str.parse::<u64>()
+            && let Some(missed_frames) = self.state.replication_backlog.get_since(offset).await
         {
-            if let Ok(offset) = offset_str.parse::<u64>() {
-                if let Some(missed_frames) = self.state.replication_backlog.get_since(offset).await
-                {
-                    let frames_only: Vec<RespFrame> =
-                        missed_frames.into_iter().map(|(_, frame)| frame).collect();
+            let frames_only: Vec<RespFrame> =
+                missed_frames.into_iter().map(|(_, frame)| frame).collect();
 
-                    let current_offset = self.state.replication.get_replication_offset();
-                    if self.do_partial_resync(&frames_only).await.is_ok() {
-                        // After sending the backlog, transition to streaming live updates.
-                        self.stream_live_updates(current_offset).await;
-                    }
-                    return Ok(());
-                }
+            let current_offset = self.state.replication.get_replication_offset();
+            if self.do_partial_resync(&frames_only).await.is_ok() {
+                // After sending the backlog, transition to streaming live updates.
+                self.stream_live_updates(current_offset).await;
             }
+            return Ok(());
         }
 
         // --- Full Resync Path ---

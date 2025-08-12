@@ -116,13 +116,11 @@ impl ConnectionHandler {
                                 Err(e) => {
                                     // If an error occurs while in a transaction, the transaction must be aborted.
                                     // This handles errors from ACL, cluster redirection, OOM, etc.
-                                    if self.session.is_in_transaction {
-                                        if let Some(db) = self.state.get_db(self.session.current_db_index) {
-                                            if let Some(mut tx_state) = db.tx_states.get_mut(&self.session_id) {
+                                    if self.session.is_in_transaction
+                                        && let Some(db) = self.state.get_db(self.session.current_db_index)
+                                            && let Some(mut tx_state) = db.tx_states.get_mut(&self.session_id) {
                                                 tx_state.has_error = true;
                                             }
-                                        }
-                                    }
                                     self.send_error_to_client(e).await?;
                                 }
                             }
@@ -145,15 +143,14 @@ impl ConnectionHandler {
         }
 
         // Clean up any lingering transaction state if the connection was not handed off.
-        if !guard.is_handed_off {
-            if let Some(db) = self.state.get_db(self.session.current_db_index) {
-                if db.discard_transaction(self.session_id).is_ok() {
-                    debug!(
-                        "Cleaned up lingering transaction for client {} in DB {}.",
-                        self.addr, self.session.current_db_index
-                    );
-                }
-            }
+        if !guard.is_handed_off
+            && let Some(db) = self.state.get_db(self.session.current_db_index)
+            && db.discard_transaction(self.session_id).is_ok()
+        {
+            debug!(
+                "Cleaned up lingering transaction for client {} in DB {}.",
+                self.addr, self.session.current_db_index
+            );
         }
         Ok(())
     }
@@ -168,12 +165,11 @@ impl ConnectionHandler {
 
         // If command parsing itself fails, mark the transaction as errored.
         if let Err(e) = &command_result {
-            if self.session.is_in_transaction {
-                if let Some(db) = self.state.get_db(self.session.current_db_index) {
-                    if let Some(mut tx_state) = db.tx_states.get_mut(&self.session_id) {
-                        tx_state.has_error = true;
-                    }
-                }
+            if self.session.is_in_transaction
+                && let Some(db) = self.state.get_db(self.session.current_db_index)
+                && let Some(mut tx_state) = db.tx_states.get_mut(&self.session_id)
+            {
+                tx_state.has_error = true;
             }
             return Err(e.clone());
         }

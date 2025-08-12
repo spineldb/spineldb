@@ -219,10 +219,10 @@ impl StreamBlockerManager {
 
             // Wake up all waiters. `take()` ensures each is only used once.
             while let Some(info) = queue.pop_front() {
-                if let Ok(mut guard) = info.waker.lock() {
-                    if let Some(waker) = guard.take() {
-                        let _ = waker.send(());
-                    }
+                if let Ok(mut guard) = info.waker.lock()
+                    && let Some(waker) = guard.take()
+                {
+                    let _ = waker.send(());
                 }
             }
         }
@@ -233,10 +233,10 @@ impl StreamBlockerManager {
     pub fn notify_and_remove_all(&self, key: &Bytes) {
         if let Some((_, mut queue)) = self.waiters.remove(key) {
             while let Some(info) = queue.pop_front() {
-                if let Ok(mut guard) = info.waker.lock() {
-                    if let Some(waker) = guard.take() {
-                        let _ = waker.send(());
-                    }
+                if let Ok(mut guard) = info.waker.lock()
+                    && let Some(waker) = guard.take()
+                {
+                    let _ = waker.send(());
                 }
             }
         }

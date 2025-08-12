@@ -45,12 +45,12 @@ impl<'a> TransactionHandler<'a> {
 
     /// Handles the `MULTI` command, starting a new transaction for the session.
     pub fn handle_multi(&self) -> Result<RespValue, SpinelDBError> {
-        if let Some(tx_state) = self.db.tx_states.get(&self.session_id) {
-            if tx_state.in_transaction {
-                return Err(SpinelDBError::InvalidState(
-                    "MULTI calls can not be nested".to_string(),
-                ));
-            }
+        if let Some(tx_state) = self.db.tx_states.get(&self.session_id)
+            && tx_state.in_transaction
+        {
+            return Err(SpinelDBError::InvalidState(
+                "MULTI calls can not be nested".to_string(),
+            ));
         }
         self.db.start_transaction(self.session_id);
         Ok(RespValue::SimpleString("OK".into()))
@@ -114,12 +114,12 @@ impl<'a> TransactionHandler<'a> {
 
     /// Handles the `WATCH` command, registering keys for optimistic locking.
     pub async fn handle_watch(&self, keys: Vec<Bytes>) -> Result<RespValue, SpinelDBError> {
-        if let Some(tx_state) = self.db.tx_states.get(&self.session_id) {
-            if tx_state.in_transaction {
-                return Err(SpinelDBError::InvalidState(
-                    "WATCH inside MULTI is not allowed".to_string(),
-                ));
-            }
+        if let Some(tx_state) = self.db.tx_states.get(&self.session_id)
+            && tx_state.in_transaction
+        {
+            return Err(SpinelDBError::InvalidState(
+                "WATCH inside MULTI is not allowed".to_string(),
+            ));
         }
         self.db.watch_keys_in_tx(self.session_id, &keys).await?;
         Ok(RespValue::SimpleString("OK".into()))
@@ -167,23 +167,23 @@ impl<'a> TransactionHandler<'a> {
         let all_keys = self.collect_all_keys(&tx_state);
 
         // Perform cluster cross-slot check before acquiring locks.
-        if let Some(cluster_state) = &self.state.cluster {
-            if !all_keys.is_empty() {
-                let first_slot = crate::core::cluster::slot::get_slot(&all_keys[0]);
-                for key in all_keys.iter().skip(1) {
-                    if crate::core::cluster::slot::get_slot(key) != first_slot {
-                        return Err(SpinelDBError::CrossSlot);
-                    }
+        if let Some(cluster_state) = &self.state.cluster
+            && !all_keys.is_empty()
+        {
+            let first_slot = crate::core::cluster::slot::get_slot(&all_keys[0]);
+            for key in all_keys.iter().skip(1) {
+                if crate::core::cluster::slot::get_slot(key) != first_slot {
+                    return Err(SpinelDBError::CrossSlot);
                 }
-                if !cluster_state.i_own_slot(first_slot) {
-                    let owner_node = cluster_state.get_node_for_slot(first_slot);
-                    let addr = owner_node
-                        .map_or_else(|| "".to_string(), |node| node.node_info.addr.clone());
-                    return Err(SpinelDBError::Moved {
-                        slot: first_slot,
-                        addr,
-                    });
-                }
+            }
+            if !cluster_state.i_own_slot(first_slot) {
+                let owner_node = cluster_state.get_node_for_slot(first_slot);
+                let addr =
+                    owner_node.map_or_else(|| "".to_string(), |node| node.node_info.addr.clone());
+                return Err(SpinelDBError::Moved {
+                    slot: first_slot,
+                    addr,
+                });
             }
         }
 

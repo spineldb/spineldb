@@ -109,14 +109,12 @@ static SORTED_COMMAND_SPECS: Lazy<Vec<RespValue>> = Lazy::new(|| {
 
     // Sort the command details alphabetically by name for consistent output.
     details.sort_by(|a, b| {
-        if let RespValue::Array(arr_a) = a {
-            if let RespValue::Array(arr_b) = b {
-                if let RespValue::BulkString(name_a) = &arr_a[0] {
-                    if let RespValue::BulkString(name_b) = &arr_b[0] {
-                        return name_a.cmp(name_b);
-                    }
-                }
-            }
+        if let RespValue::Array(arr_a) = a
+            && let RespValue::Array(arr_b) = b
+            && let RespValue::BulkString(name_a) = &arr_a[0]
+            && let RespValue::BulkString(name_b) = &arr_b[0]
+        {
+            return name_a.cmp(name_b);
         }
         std::cmp::Ordering::Equal
     });

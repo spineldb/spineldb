@@ -170,10 +170,10 @@ impl Db {
         let mut count = 0;
         for key in keys {
             let shard_index = self.get_shard_index(key);
-            if let Some(guard) = locks.get_mut(&shard_index) {
-                if guard.pop(key).is_some() {
-                    count += 1;
-                }
+            if let Some(guard) = locks.get_mut(&shard_index)
+                && guard.pop(key).is_some()
+            {
+                count += 1;
             }
         }
         count

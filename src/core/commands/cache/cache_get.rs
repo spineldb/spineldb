@@ -96,10 +96,10 @@ fn parse_cache_control(header_value: &str) -> (Option<u64>, Option<u64>) {
                 if let Ok(seconds) = value.parse::<u64>() {
                     max_age = Some(seconds);
                 }
-            } else if key.eq_ignore_ascii_case("stale-while-revalidate") {
-                if let Ok(seconds) = value.parse::<u64>() {
-                    swr = Some(seconds);
-                }
+            } else if key.eq_ignore_ascii_case("stale-while-revalidate")
+                && let Ok(seconds) = value.parse::<u64>()
+            {
+                swr = Some(seconds);
             }
         }
     }
@@ -216,15 +216,15 @@ impl CacheGet {
             ])));
         }
 
-        if let Some(req_etag) = &self.if_none_match {
-            if variant.metadata.etag.as_ref() == Some(req_etag) {
-                return Ok(RouteResponse::NoOp); // 304 Not Modified
-            }
+        if let Some(req_etag) = &self.if_none_match
+            && variant.metadata.etag.as_ref() == Some(req_etag)
+        {
+            return Ok(RouteResponse::NoOp); // 304 Not Modified
         }
-        if let Some(req_ims) = &self.if_modified_since {
-            if variant.metadata.last_modified.as_ref() == Some(req_ims) {
-                return Ok(RouteResponse::NoOp); // 304 Not Modified
-            }
+        if let Some(req_ims) = &self.if_modified_since
+            && variant.metadata.last_modified.as_ref() == Some(req_ims)
+        {
+            return Ok(RouteResponse::NoOp); // 304 Not Modified
         }
 
         state.cache.increment_hits();
@@ -460,15 +460,15 @@ impl CacheGet {
         if state.cluster.is_some() {
             let tags: Vec<Bytes> = guard.get_tags_for_key(&self.key);
             for tag in tags {
-                if let Some(purge_epoch_entry) = state.cache.tag_purge_epochs.get(&tag) {
-                    if *tags_epoch < *purge_epoch_entry.value() {
-                        debug!(
-                            "Stale cache entry '{}' due to purged tag '{}'.",
-                            String::from_utf8_lossy(&self.key),
-                            String::from_utf8_lossy(&tag)
-                        );
-                        return false;
-                    }
+                if let Some(purge_epoch_entry) = state.cache.tag_purge_epochs.get(&tag)
+                    && *tags_epoch < *purge_epoch_entry.value()
+                {
+                    debug!(
+                        "Stale cache entry '{}' due to purged tag '{}'.",
+                        String::from_utf8_lossy(&self.key),
+                        String::from_utf8_lossy(&tag)
+                    );
+                    return false;
                 }
             }
         }
@@ -543,22 +543,22 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
 
     let client = reqwest::Client::new();
     let mut http_headers = HeaderMap::new();
-    if let Some(etag) = &variant.metadata.etag {
-        if let Ok(h) = HeaderValue::from_bytes(etag) {
-            http_headers.insert(IF_NONE_MATCH, h);
-        }
+    if let Some(etag) = &variant.metadata.etag
+        && let Ok(h) = HeaderValue::from_bytes(etag)
+    {
+        http_headers.insert(IF_NONE_MATCH, h);
     }
-    if let Some(lm) = &variant.metadata.last_modified {
-        if let Ok(h) = HeaderValue::from_bytes(lm) {
-            http_headers.insert(IF_MODIFIED_SINCE, h);
-        }
+    if let Some(lm) = &variant.metadata.last_modified
+        && let Ok(h) = HeaderValue::from_bytes(lm)
+    {
+        http_headers.insert(IF_MODIFIED_SINCE, h);
     }
     if let Some(hdrs) = &req_headers {
         for (k, v) in hdrs {
-            if let Ok(key) = HeaderName::from_bytes(k) {
-                if let Ok(val) = HeaderValue::from_bytes(v) {
-                    http_headers.insert(key, val);
-                }
+            if let Ok(key) = HeaderName::from_bytes(k)
+                && let Ok(val) = HeaderValue::from_bytes(v)
+            {
+                http_headers.insert(key, val);
             }
         }
     }
@@ -574,10 +574,10 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
                 e
             );
             let now = Instant::now();
-            if let Some(grace_exp) = entry.grace_expiry {
-                if grace_exp > now {
-                    entry.stale_revalidate_expiry = Some(now + Duration::from_secs(10));
-                }
+            if let Some(grace_exp) = entry.grace_expiry
+                && grace_exp > now
+            {
+                entry.stale_revalidate_expiry = Some(now + Duration::from_secs(10));
             }
             return Err(SpinelDBError::HttpClientError(e.to_string()));
         }
@@ -592,10 +592,10 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
             .with_label_values(&["none"])
             .inc();
         update_ttls_from_policy_and_headers(entry, matched_policy.as_ref(), &res_headers);
-        if let DataValue::HttpCache { variants, .. } = &mut entry.data {
-            if let Some(variant) = variants.get_mut(&variant_hash) {
-                variant.last_accessed = Instant::now();
-            }
+        if let DataValue::HttpCache { variants, .. } = &mut entry.data
+            && let Some(variant) = variants.get_mut(&variant_hash)
+        {
+            variant.last_accessed = Instant::now();
         }
         entry.version += 1;
         return Ok(None);
@@ -635,10 +635,10 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
         status
     );
     let now = Instant::now();
-    if let Some(grace_exp) = entry.grace_expiry {
-        if grace_exp > now {
-            entry.stale_revalidate_expiry = Some(now + Duration::from_secs(10));
-        }
+    if let Some(grace_exp) = entry.grace_expiry
+        && grace_exp > now
+    {
+        entry.stale_revalidate_expiry = Some(now + Duration::from_secs(10));
     }
     Err(SpinelDBError::Internal(format!(
         "Origin responded with unexpected status: {status}"
@@ -659,18 +659,17 @@ fn update_ttls_from_policy_and_headers(
 
     let respect_origin = policy.is_some_and(|p| p.respect_origin_headers);
 
-    if respect_origin {
-        if let Some(cc_header) = headers
+    if respect_origin
+        && let Some(cc_header) = headers
             .get(reqwest::header::CACHE_CONTROL)
             .and_then(|v| v.to_str().ok())
-        {
-            let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
-            if parsed_ttl.is_some() {
-                final_ttl = parsed_ttl;
-            }
-            if parsed_swr.is_some() {
-                final_swr = parsed_swr;
-            }
+    {
+        let (parsed_ttl, parsed_swr) = parse_cache_control(cc_header);
+        if parsed_ttl.is_some() {
+            final_ttl = parsed_ttl;
+        }
+        if parsed_swr.is_some() {
+            final_swr = parsed_swr;
         }
     }
 
