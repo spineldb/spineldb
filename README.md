@@ -6,7 +6,7 @@
   <strong>Fast, Safe, and Intelligent. The next-generation in-memory data store.</strong>
 </p>
 <p align="center">
-  <a href="https://github.com/spineldb/spineldb/actions/workflows/rust.yml"><img src="https://github.com/spineldb/spineldb/actions/workflows/rust.yml/badge.svg" alt="CI Status"></a>
+  <a href="https://github.com/spineldb/spineldb/actions/workflows/rust.yml"><img src="https://github.com/spineldb/spineldb/actions/workflows/release.yml/badge.svg" alt="CI Status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
