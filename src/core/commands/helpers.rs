@@ -292,7 +292,7 @@ pub fn parse_key_and_score_member_pairs(
     let remaining_args = parser.remaining_args();
 
     // Ensure that the remaining arguments form valid score-member pairs.
-    if remaining_args.is_empty() || remaining_args.len() % 2 != 0 {
+    if remaining_args.is_empty() || !remaining_args.len().is_multiple_of(2) {
         return Err(SpinelDBError::WrongArgumentCount(cmd.to_string()));
     }
 

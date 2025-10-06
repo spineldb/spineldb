@@ -19,7 +19,7 @@ pub struct GeoAdd {
 
 impl ParseCommand for GeoAdd {
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
-        if args.len() < 4 || (args.len() - 1) % 3 != 0 {
+        if args.len() < 4 || !(args.len() - 1).is_multiple_of(3) {
             return Err(SpinelDBError::WrongArgumentCount("GEOADD".to_string()));
         }
         let key = extract_bytes(&args[0])?;

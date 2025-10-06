@@ -113,7 +113,7 @@ impl ParseCommand for CacheProxy {
 
         let remaining = parser.remaining_args();
         if headers_found {
-            if remaining.len() % 2 != 0 {
+            if !remaining.len().is_multiple_of(2) {
                 return Err(SpinelDBError::WrongArgumentCount(
                     "CACHE.PROXY HEADERS".to_string(),
                 ));

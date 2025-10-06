@@ -67,7 +67,7 @@ impl ParseCommand for CacheGet {
 
         if parser.match_flag("headers") {
             let remaining = parser.remaining_args();
-            if remaining.len() % 2 != 0 {
+            if !remaining.len().is_multiple_of(2) {
                 return Err(SpinelDBError::WrongArgumentCount(
                     "CACHE.GET HEADERS".to_string(),
                 ));

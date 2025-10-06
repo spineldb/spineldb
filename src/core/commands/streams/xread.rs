@@ -77,7 +77,7 @@ impl ParseCommand for XRead {
         // Parse the mandatory 'STREAMS key... id...' part.
         let remaining_args = &args[i..];
         let num_args = remaining_args.len();
-        if num_args == 0 || num_args % 2 != 0 {
+        if num_args == 0 || !num_args.is_multiple_of(2) {
             return Err(SpinelDBError::WrongArgumentCount("XREAD".to_string()));
         }
 

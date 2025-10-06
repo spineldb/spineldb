@@ -88,7 +88,7 @@ impl ParseCommand for Zadd {
             ));
         }
 
-        if (i >= args.len()) || ((args.len() - i) % 2 != 0) {
+        if (i >= args.len()) || !(args.len() - i).is_multiple_of(2) {
             return Err(SpinelDBError::WrongArgumentCount("ZADD".to_string()));
         }
 
