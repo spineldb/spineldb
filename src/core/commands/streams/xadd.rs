@@ -173,7 +173,7 @@ impl ParseCommand for XAdd {
         i += 1;
 
         // Parse the mandatory field-value pairs.
-        if (args.len() - i) % 2 != 0 || (args.len() - i) == 0 {
+        if !(args.len() - i).is_multiple_of(2) || (args.len() - i) == 0 {
             return Err(SpinelDBError::WrongArgumentCount("XADD".to_string()));
         }
         options.fields = args[i..]

@@ -19,7 +19,7 @@ pub struct MSet {
 
 impl ParseCommand for MSet {
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
-        if args.len() < 2 || args.len() % 2 != 0 {
+        if args.len() < 2 || !args.len().is_multiple_of(2) {
             return Err(SpinelDBError::WrongArgumentCount("MSET".to_string()));
         }
 
