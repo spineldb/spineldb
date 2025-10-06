@@ -184,7 +184,6 @@ SpinelDB is actively developed. Our current focus is on hardening the core and e
 
 -   [ ] **Rigorous Testing:** Expand performance and chaos testing suites to validate clustering and failover under adverse conditions.
 -   [ ] **Comprehensive Benchmarking:** Publish detailed benchmarks against Redis and other alternatives, highlighting caching and multi-core performance.
--   [ ] **Deployment & Observability:** Provide official Docker images, Helm charts, and a Grafana dashboard for Prometheus metrics.
 
 ## 🤝 Contributing
 
