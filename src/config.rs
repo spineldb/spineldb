@@ -226,6 +226,8 @@ struct RawConfig {
     password: Option<String>,
     #[serde(default = "default_log_level")]
     log_level: String,
+    #[serde(default = "default_max_clients")]
+    max_clients: usize,
     #[serde(default = "default_maxmemory_config")]
     maxmemory: MaxMemoryConfig,
     #[serde(default)]
@@ -265,6 +267,9 @@ fn default_databases() -> usize {
 }
 fn default_log_level() -> String {
     "info".to_string()
+}
+fn default_max_clients() -> usize {
+    10000
 }
 fn default_maxmemory_config() -> MaxMemoryConfig {
     MaxMemoryConfig::Bytes(512 * 1024 * 1024)
@@ -344,6 +349,7 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     pub log_level: String,
+    pub max_clients: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maxmemory: Option<usize>,
     pub maxmemory_policy: EvictionPolicy,
@@ -375,6 +381,7 @@ impl Default for Config {
             port: default_port(),
             password: None,
             log_level: default_log_level(),
+            max_clients: default_max_clients(),
             maxmemory: Some(512 * 1024 * 1024),
             maxmemory_policy: EvictionPolicy::default(),
             persistence: PersistenceConfig::default(),
@@ -532,6 +539,7 @@ impl Config {
             port: raw_config.port,
             password: raw_config.password,
             log_level: raw_config.log_level,
+            max_clients: raw_config.max_clients,
             maxmemory: resolved_maxmemory,
             maxmemory_policy: raw_config.maxmemory_policy,
             persistence: raw_config.persistence,
@@ -561,6 +569,9 @@ impl Config {
         }
         if self.databases == 0 {
             return Err(anyhow!("databases cannot be 0"));
+        }
+        if self.max_clients == 0 {
+            return Err(anyhow!("max_clients cannot be 0"));
         }
 
         if let Some(mem) = self.maxmemory

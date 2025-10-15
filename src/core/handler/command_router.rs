@@ -73,6 +73,16 @@ impl<'a> Router<'a> {
     /// The main entry point for routing a command. It orchestrates the entire
     /// processing pipeline from validation to execution and metrics recording.
     pub async fn route(&mut self, command: Command) -> Result<RouteResponse, SpinelDBError> {
+        // Emergency read-only check
+        if command.get_flags().contains(CommandFlags::WRITE)
+            && self.state.is_emergency_read_only.load(Ordering::Relaxed)
+        {
+            return Err(SpinelDBError::ReadOnly(
+                "Server is in emergency read-only mode due to a critical propagation failure."
+                    .into(),
+            ));
+        }
+
         let command_name = command.name();
 
         // Reconstruct the full RespFrame for ACL condition evaluation and latency monitoring.
@@ -384,11 +394,15 @@ impl<'a> Router<'a> {
                         // This should be an unreachable state, because the command just executed successfully.
                         // If it happens, it's a critical logic error. We must prevent propagation.
                         error!(
-                            "CRITICAL: Script for executed EVALSHA '{}' vanished before propagation. Command will NOT be propagated.",
+                            "CRITICAL: Script for executed EVALSHA '{}' vanished before propagation. Command will NOT be propagated. Entering emergency read-only mode.",
                             evalsha_cmd.sha1
                         );
-                        // Return early without propagating
-                        return Ok(RouteResponse::Single(resp_value));
+                        self.state
+                            .is_emergency_read_only
+                            .store(true, Ordering::Relaxed);
+                        return Err(SpinelDBError::Internal(
+                            "CRITICAL: Write operation could not be safely propagated. Server entering read-only mode.".into()
+                        ));
                     }
                 } else {
                     UnitOfWork::Command(Box::new(command))

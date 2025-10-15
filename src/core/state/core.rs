@@ -68,6 +68,8 @@ pub struct ServerState {
     pub config: Arc<Mutex<Config>>,
     /// An atomic flag for administratively enabling read-only mode (e.g., during maintenance).
     pub is_read_only: Arc<AtomicBool>,
+    /// An atomic flag to enable read-only mode in case of critical data consistency issues.
+    pub is_emergency_read_only: AtomicBool,
     /// A flag set by a master when it loses contact with the cluster quorum.
     /// This is the primary self-fencing mechanism to prevent split-brain.
     pub is_read_only_due_to_quorum_loss: Arc<AtomicBool>,
@@ -212,6 +214,7 @@ impl ServerState {
             clients: Arc::new(DashMap::new()),
             config: Arc::new(Mutex::new(config)),
             is_read_only: Arc::new(AtomicBool::new(false)),
+            is_emergency_read_only: AtomicBool::new(false),
             is_read_only_due_to_quorum_loss: Arc::new(AtomicBool::new(false)),
             pubsub: PubSubManager::new(),
             scripting: Arc::new(LuaManager::new()),

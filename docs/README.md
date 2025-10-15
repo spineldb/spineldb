@@ -126,6 +126,8 @@ Keep your SpinelDB instances healthy and observable.
 *   ➡️ **[13. Persistence and Backup](./13-persistence-and-backup.md)**
     *   Understanding AOF vs. SPLDB persistence strategies.
     *   Triggering background saves (`BGSAVE`) and AOF rewrites (`BGREWRITEAOF`).
+*   ➡️ **[14. Operations & Troubleshooting](./14-troubleshooting.md)**
+    *   Handling critical server states like Emergency Read-Only Mode.
 
 ---
 

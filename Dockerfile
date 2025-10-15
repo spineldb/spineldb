@@ -1,5 +1,5 @@
 # Stage 1: Build the application in a full Rust environment
-FROM rust:1.88.0 AS builder
+FROM rust:1.90.0 AS builder
 WORKDIR /usr/src/spineldb
 
 # Copy dependency manifests and build script

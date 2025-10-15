@@ -72,6 +72,7 @@ pub async fn setup(
         "SpinelDB server listening on {}:{}",
         listener_config.host, listener_config.port
     );
+    let connection_permits = Arc::new(tokio::sync::Semaphore::new(listener_config.max_clients));
     drop(listener_config);
 
     Ok(ServerContext {
@@ -81,6 +82,7 @@ pub async fn setup(
         shutdown_tx,
         background_tasks: JoinSet::new(),
         acceptor,
+        connection_permits,
     })
 }
 

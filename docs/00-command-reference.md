@@ -73,7 +73,7 @@ These are the top-level commands, often compatible with Redis's standard command
 ### Generic Commands
 
 *   `COMMAND`
-*   `CONFIG GET parameter | SET parameter value`
+*   `CONFIG GET parameter | SET parameter value` (e.g., `CONFIG GET max_clients`)
 *   `TYPE key`
 *   `PUBSUB subcommand [argument ...]`
 *   `PING [message]`

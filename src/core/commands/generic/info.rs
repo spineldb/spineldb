@@ -46,6 +46,14 @@ async fn get_info_string(state: &ServerState, section: &Option<String>) -> Strin
             env!("CARGO_PKG_VERSION")
         ));
         info.push_str(&format!("tcp_port:{}\r\n", config.port));
+        info.push_str(&format!(
+            "emergency_read_only_mode:{}\r\n",
+            if state.is_emergency_read_only.load(Ordering::Relaxed) {
+                "1"
+            } else {
+                "0"
+            }
+        ));
         info.push_str("\r\n");
     }
 

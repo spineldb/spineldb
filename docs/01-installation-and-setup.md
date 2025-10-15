@@ -104,6 +104,10 @@ Create a new `config.toml` file with the following minimal content as a starting
 host = "127.0.0.1"
 port = 7878
 
+# The maximum number of simultaneous client connections.
+# This is a safeguard against resource exhaustion (Denial of Service).
+max_clients = 10000
+
 # The maximum memory limit. Highly recommended for production.
 # Format: Number (bytes), string with unit ("512mb", "2gb"), or percentage ("75%").
 maxmemory = "512mb"
