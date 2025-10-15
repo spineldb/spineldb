@@ -5,7 +5,7 @@ use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
 };
-use crate::core::commands::helpers::{extract_bytes, extract_string, validate_arg_count};
+use crate::core::commands::helpers::{extract_bytes, extract_string};
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::storage::db::ExecutionContext;
@@ -14,21 +14,45 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde_json;
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SetCondition {
+    #[default]
+    None,
+    IfExists,    // XX
+    IfNotExists, // NX
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct JsonSet {
     pub key: Bytes,
     pub path: String,
     pub value_json_str: Bytes,
+    pub condition: SetCondition,
 }
 
 impl ParseCommand for JsonSet {
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
-        validate_arg_count(args, 3, "JSON.SET")?;
-        Ok(JsonSet {
+        if args.len() < 3 || args.len() > 4 {
+            return Err(SpinelDBError::WrongArgumentCount("JSON.SET".to_string()));
+        }
+
+        let mut cmd = JsonSet {
             key: extract_bytes(&args[0])?,
             path: extract_string(&args[1])?,
             value_json_str: extract_bytes(&args[2])?,
-        })
+            ..Default::default()
+        };
+
+        if let Some(condition_arg) = args.get(3) {
+            let condition_str = extract_string(condition_arg)?.to_ascii_uppercase();
+            match condition_str.as_str() {
+                "NX" => cmd.condition = SetCondition::IfNotExists,
+                "XX" => cmd.condition = SetCondition::IfExists,
+                _ => return Err(SpinelDBError::SyntaxError),
+            }
+        }
+
+        Ok(cmd)
     }
 }
 
@@ -44,11 +68,44 @@ impl ExecutableCommand for JsonSet {
         let path = helpers::parse_path(&self.path)?;
 
         let (shard, guard) = ctx.get_single_shard_context_mut()?;
+
+        // For XX, the key must exist.
+        if self.condition == SetCondition::IfExists
+            && path.is_empty()
+            && guard.peek(&self.key).is_none()
+        {
+            return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
+        }
+
+        // For NX on a root path, the key must NOT exist.
+        if self.condition == SetCondition::IfNotExists
+            && path.is_empty()
+            && guard.peek(&self.key).is_some()
+        {
+            return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
+        }
+
         let entry = guard.get_or_insert_with_mut(self.key.clone(), || {
             StoredValue::new(DataValue::Json(serde_json::Value::Null))
         });
 
         if let DataValue::Json(root) = &mut entry.data {
+            // For non-root paths, check path existence inside the JSON document
+            if !path.is_empty() {
+                let path_exists = helpers::find_value_by_segments(root, &path).is_some();
+                match self.condition {
+                    SetCondition::IfExists if !path_exists => {
+                        // For XX, if the path does not exist, return null.
+                        return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
+                    }
+                    SetCondition::IfNotExists if path_exists => {
+                        // For NX, if the path already exists, return null.
+                        return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
+                    }
+                    _ => {} // For None or conditions that passed, proceed.
+                }
+            }
+
             let old_size = helpers::estimate_json_memory(root);
 
             let set_op = |target: &mut serde_json::Value| {
@@ -59,7 +116,9 @@ impl ExecutableCommand for JsonSet {
             if path.is_empty() {
                 *root = new_value;
             } else {
-                helpers::find_and_modify(root, &path, set_op, true)?;
+                // `create_if_not_exist` should be true for NX and None conditions.
+                let create_if_not_exist = self.condition != SetCondition::IfExists;
+                helpers::find_and_modify(root, &path, set_op, create_if_not_exist)?;
             }
 
             let new_size = helpers::estimate_json_memory(root);

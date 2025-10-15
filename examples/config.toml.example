@@ -28,7 +28,7 @@ databases = 16
 # The maximum memory limit SpinelDB can use.
 # Options: a number in bytes (e.g., 536870912), a percentage ("50%"), or a string with units ("1gb", "512mb").
 # "0" means no limit (not recommended in production).
-maxmemory = "10mb"
+maxmemory = "512mb"
 
 # The eviction policy for when 'maxmemory' is reached.
 # Options: no-eviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, allkeys-lfu, volatile-lfu.

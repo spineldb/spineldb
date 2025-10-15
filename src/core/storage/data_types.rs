@@ -245,6 +245,7 @@ impl StoredValue {
                         key: key.clone(),
                         path: ".".to_string(),
                         value_json_str: Bytes::from(json_string),
+                        condition: Default::default(),
                     }),
                 })]
             }

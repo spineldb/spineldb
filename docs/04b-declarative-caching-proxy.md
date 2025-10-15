@@ -36,6 +36,51 @@ CACHE.PROXY key [url] [TTL seconds] [SWR seconds] [GRACE seconds] [TAGS tag1 tag
 
 ---
 
+## Simple Transparent Proxying
+
+For many use cases, you don't need to configure a full `CachePolicy`. You can use `CACHE.PROXY` for simple, ad-hoc proxying by providing the URL directly.
+
+Thanks to an ergonomic improvement, the command is even simpler if you want to use the URL itself as the cache key.
+
+**Syntax:**
+`CACHE.PROXY <url-as-key> [TTL seconds] [HEADERS key value ...]`
+
+**How it Works:**
+When the `key` provided to `CACHE.PROXY` is a valid URL and no other `url` argument is given, SpinelDB automatically uses the key as the URL to fetch on a cache miss.
+
+**Example: Simple API Caching**
+
+Let's cache a response from a public API for 5 minutes (300 seconds).
+
+```shell
+# First call, the URL is also the key
+# SpinelDB will see a cache miss and fetch from the URL.
+127.0.0.1:7878> CACHE.PROXY "https://api.github.com/users/octocat" TTL 300
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json; charset=utf-8"
+3) "{\"login\":\"octocat\",\"id\":583231,...}"
+# Analysis:
+# 1. Cache miss for key "https://api.github.com/users/octocat".
+# 2. SpinelDB fetches from this URL.
+# 3. The response is stored in the cache with a 300-second TTL.
+# 4. The response is returned to the client.
+
+# Second call within 5 minutes
+127.0.0.1:7878> CACHE.PROXY "https://api.github.com/users/octocat"
+1) (integer) 200
+2) 1) "Content-Type"
+   2) "application/json; charset=utf-8"
+3) "{\"login\":\"octocat\",\"id\":583231,...}"
+# Analysis:
+# 1. Cache hit for key "https://api.github.com/users/octocat".
+# 2. The content is served directly from the cache.
+```
+
+This simple mode is perfect for quickly caching external API calls without the overhead of defining policies. For more complex scenarios involving dynamic URLs, tags, and other rules, using `CachePolicy` is the recommended approach.
+
+---
+
 ## How Policies Work with `CACHE.PROXY`
 
 `CACHE.PROXY` is designed to work seamlessly with **`CachePolicy`** definitions (configured via the `CACHE.POLICY` command, detailed in a later chapter). A `CachePolicy` allows you to define declarative rules for caching, including:
