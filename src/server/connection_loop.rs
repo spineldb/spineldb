@@ -65,58 +65,72 @@ pub async fn run(mut ctx: ServerContext) {
                 }
             },
 
-            // Accept new incoming TCP connections.
-            res = ctx.listener.accept() => {
-                if let Ok((socket, addr)) = res {
-                    info!("Accepted new connection from: {}", addr);
-                    ctx.state.stats.increment_total_connections();
-                    metrics::CONNECTIONS_RECEIVED_TOTAL.inc();
-                    metrics::CONNECTED_CLIENTS.inc();
+            // Wait for a connection permit to become available.
+            permit = ctx.connection_permits.clone().acquire_owned() => {
+                if permit.is_err() {
+                    // The semaphore has been closed, which means we are shutting down.
+                    break;
+                }
+                let permit = permit.unwrap(); // The permit is now owned by this scope.
 
-                    session_id_counter = session_id_counter.wrapping_add(1);
-                    let session_id = session_id_counter;
-                    let state_clone = ctx.state.clone();
+                // A permit is available, now accept the new incoming TCP connection.
+                match ctx.listener.accept().await {
+                    Ok((socket, addr)) => {
+                        info!("Accepted new connection from: {}", addr);
+                        ctx.state.stats.increment_total_connections();
+                        metrics::CONNECTIONS_RECEIVED_TOTAL.inc();
+                        metrics::CONNECTED_CLIENTS.inc();
 
-                    // Create per-connection and global shutdown channels.
-                    let (conn_shutdown_tx, conn_shutdown_rx) = broadcast::channel(1);
-                    let global_shutdown_rx = ctx.shutdown_tx.subscribe();
+                        session_id_counter = session_id_counter.wrapping_add(1);
+                        let session_id = session_id_counter;
+                        let state_clone = ctx.state.clone();
 
-                    // Register the new client in the global state.
-                    let client_info = Arc::new(Mutex::new(ClientInfo {
-                        addr,
-                        session_id,
-                        name: None,
-                        db_index: 0,
-                        role: ClientRole::Normal, // Initialize new connections as 'Normal'.
-                        created: Instant::now(),
-                        last_command_time: Instant::now(),
-                    }));
-                    state_clone.clients.insert(session_id, (client_info, conn_shutdown_tx));
+                        // Create per-connection and global shutdown channels.
+                        let (conn_shutdown_tx, conn_shutdown_rx) = broadcast::channel(1);
+                        let global_shutdown_rx = ctx.shutdown_tx.subscribe();
 
-                    // Spawn a task to handle the new connection, including TLS handshake if enabled.
-                    if let Some(acceptor) = ctx.acceptor.clone() {
-                        client_tasks.spawn(async move {
-                            match acceptor.accept(socket).await {
-                                Ok(tls_stream) => {
-                                    info!("TLS handshake successful for {addr}");
-                                    let any_stream = AnyStream::Tls(Box::new(tls_stream));
-                                    let mut handler = ConnectionHandler::new(any_stream, addr, state_clone, session_id, conn_shutdown_rx, global_shutdown_rx).await;
-                                    if let Err(e) = handler.run().await { warn!("Connection from {} terminated unexpectedly: {}", addr, e); }
-                                },
-                                Err(e) => {
-                                    warn!("TLS handshake error for {addr}: {e}");
+                        // Register the new client in the global state.
+                        let client_info = Arc::new(Mutex::new(ClientInfo {
+                            addr,
+                            session_id,
+                            name: None,
+                            db_index: 0,
+                            role: ClientRole::Normal, // Initialize new connections as 'Normal'.
+                            created: Instant::now(),
+                            last_command_time: Instant::now(),
+                        }));
+                        state_clone.clients.insert(session_id, (client_info, conn_shutdown_tx));
+
+                        // Spawn a task to handle the new connection, including TLS handshake if enabled.
+                        // The connection permit is moved into the task and will be released when the task (and thus the connection) ends.
+                        if let Some(acceptor) = ctx.acceptor.clone() {
+                            client_tasks.spawn(async move {
+                                let _permit = permit;
+                                match acceptor.accept(socket).await {
+                                    Ok(tls_stream) => {
+                                        info!("TLS handshake successful for {addr}");
+                                        let any_stream = AnyStream::Tls(Box::new(tls_stream));
+                                        let mut handler = ConnectionHandler::new(any_stream, addr, state_clone, session_id, conn_shutdown_rx, global_shutdown_rx).await;
+                                        if let Err(e) = handler.run().await { warn!("Connection from {} terminated unexpectedly: {}", addr, e); }
+                                    },
+                                    Err(e) => {
+                                        warn!("TLS handshake error for {addr}: {e}");
+                                    }
                                 }
-                            }
-                        });
-                    } else {
-                         client_tasks.spawn(async move {
-                            let any_stream = AnyStream::Tcp(socket);
-                            let mut handler = ConnectionHandler::new(any_stream, addr, state_clone, session_id, conn_shutdown_rx, global_shutdown_rx).await;
-                            if let Err(e) = handler.run().await { warn!("Connection from {} terminated unexpectedly: {}", addr, e); }
-                        });
+                            });
+                        } else {
+                            client_tasks.spawn(async move {
+                                let _permit = permit;
+                                let any_stream = AnyStream::Tcp(socket);
+                                let mut handler = ConnectionHandler::new(any_stream, addr, state_clone, session_id, conn_shutdown_rx, global_shutdown_rx).await;
+                                if let Err(e) = handler.run().await { warn!("Connection from {} terminated unexpectedly: {}", addr, e); }
+                            });
+                        }
                     }
-                } else if let Err(e) = res {
-                    error!("Failed to accept connection: {}", e);
+                    Err(e) => {
+                        error!("Failed to accept connection: {}. Retrying shortly...", e);
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                 }
             },
 

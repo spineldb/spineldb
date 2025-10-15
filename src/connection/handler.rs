@@ -257,6 +257,18 @@ impl ConnectionHandler {
         }
 
         conn_guard.set_handed_off();
+
+        // Explicitly discard any lingering transaction state before handoff.
+        if self.session.is_in_transaction
+            && let Some(db) = self.state.get_db(self.session.current_db_index)
+            && db.discard_transaction(self.session_id).is_ok()
+        {
+            debug!(
+                "Cleaned up lingering transaction for client {} before replica handoff.",
+                self.addr
+            );
+        }
+
         info!("Handing off connection {} to ReplicaHandler.", self.addr);
         let shutdown_rx_for_handler = self.shutdown_rx.resubscribe();
 

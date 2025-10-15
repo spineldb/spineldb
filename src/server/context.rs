@@ -15,4 +15,5 @@ pub struct ServerContext {
     pub shutdown_tx: broadcast::Sender<()>,
     pub background_tasks: JoinSet<Result<(), anyhow::Error>>,
     pub acceptor: Option<TlsAcceptor>,
+    pub connection_permits: Arc<tokio::sync::Semaphore>,
 }

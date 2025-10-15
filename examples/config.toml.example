@@ -15,6 +15,10 @@ host = "127.0.0.1"
 # The TCP port to use.
 port = 7878
 
+# The maximum number of simultaneous client connections.
+# This is a safeguard against resource exhaustion (Denial of Service).
+max_clients = 10000
+
 # The level of detail for logging.
 # Options: "trace", "debug", "info", "warn", "error".
 # Can be changed at runtime with 'CONFIG SET loglevel <level>'.
