@@ -83,6 +83,14 @@ impl ParseCommand for CacheProxy {
             }
         }
 
+        // If no explicit URL is provided, check if the key itself is a URL.
+        // This allows for a simpler command: `CACHE.PROXY <url> [options...]`
+        if cmd.url.is_none()
+            && let Ok(key_str) = std::str::from_utf8(&cmd.key)
+            && (key_str.starts_with("http://") || key_str.starts_with("https://"))
+        {
+            cmd.url = Some(key_str.to_string());
+        }
         let mut parser = ArgParser::new(&args[i..]);
         let mut tags_found = false;
         let mut headers_found = false;
