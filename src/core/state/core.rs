@@ -24,7 +24,7 @@ use crate::core::tasks::lazy_free::LazyFreeItem;
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
@@ -73,6 +73,8 @@ pub struct ServerState {
     /// A flag set by a master when it loses contact with the cluster quorum.
     /// This is the primary self-fencing mechanism to prevent split-brain.
     pub is_read_only_due_to_quorum_loss: Arc<AtomicBool>,
+    /// An atomic counter for tracking in-flight `EVALSHA` commands to prevent race conditions with `SCRIPT FLUSH`.
+    pub evalsha_in_flight: Arc<AtomicUsize>,
     /// The manager for all publish-subscribe channels and patterns.
     pub pubsub: PubSubManager,
     /// Manages Lua scripts for `EVAL` and `EVALSHA`.
@@ -217,6 +219,7 @@ impl ServerState {
             is_emergency_read_only: AtomicBool::new(false),
             is_read_only_due_to_quorum_loss: Arc::new(AtomicBool::new(false)),
             pubsub: PubSubManager::new(),
+            evalsha_in_flight: Arc::new(AtomicUsize::new(0)),
             scripting: Arc::new(LuaManager::new()),
             event_bus: Arc::new(event_bus),
             blocker_manager: Arc::new(BlockerManager::new()),
