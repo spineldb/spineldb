@@ -36,7 +36,7 @@ crc = "3.0"
 bitflags = "2.5"
 lru = "0.16"
 chrono = "0.4.41"
-sysinfo = "0.36"
+sysinfo = "0.37"
 geohash = "0.13.1"
 parking_lot = "0.12.4"
 serde_json = { version = "1.0.140", features = ["indexmap", "preserve_order"] }

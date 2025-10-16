@@ -37,8 +37,7 @@ impl SecureGossipMessage {
         mac.update(&message_bytes);
 
         let signature_bytes = mac.finalize().into_bytes();
-        let signature: Signature = signature_bytes
-            .as_slice()
+        let signature: Signature = (&signature_bytes[..])
             .try_into()
             .map_err(|_| "Invalid signature length")?;
 

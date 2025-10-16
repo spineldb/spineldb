@@ -313,20 +313,48 @@ impl<'a> Router<'a> {
         command: Command,
         db: &Arc<Db>,
     ) -> Result<RouteResponse, SpinelDBError> {
-        // Special guard for SCRIPT FLUSH to prevent race conditions with AOF rewrite.
+        // RAII guard to manage the in-flight counter for EVALSHA commands.
+        // This ensures the counter is decremented even if the function exits early due to an error.
+        struct EvalShaGuard(Arc<ServerState>);
+        impl Drop for EvalShaGuard {
+            fn drop(&mut self) {
+                self.0.evalsha_in_flight.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+
+        let _guard = if let Command::EvalSha(_) = command {
+            self.state.evalsha_in_flight.fetch_add(1, Ordering::Relaxed);
+            Some(EvalShaGuard(self.state.clone()))
+        } else {
+            None
+        };
+
+        // Special guard for SCRIPT FLUSH to prevent race conditions.
         if let Command::Script(ref script_cmd) = command
             && let ScriptSubcommand::Flush = script_cmd.subcommand
-            && self
+        {
+            // Prevent FLUSH during an AOF rewrite.
+            if self
                 .state
                 .persistence
                 .aof_rewrite_state
                 .lock()
                 .await
                 .is_in_progress
-        {
-            return Err(SpinelDBError::InvalidState(
-                "ERR SCRIPT FLUSH is not allowed while an AOF rewrite is in progress.".to_string(),
-            ));
+            {
+                return Err(SpinelDBError::InvalidState(
+                    "ERR SCRIPT FLUSH is not allowed while an AOF rewrite is in progress."
+                        .to_string(),
+                ));
+            }
+
+            // Prevent FLUSH while an EVALSHA is being processed to avoid a TOCTOU race condition.
+            if self.state.evalsha_in_flight.load(Ordering::Relaxed) > 0 {
+                return Err(SpinelDBError::InvalidState(
+                    "ERR SCRIPT FLUSH is not allowed while an EVALSHA command is in progress."
+                        .to_string(),
+                ));
+            }
         }
 
         // Proactively check for memory pressure before executing a write command.
