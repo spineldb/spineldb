@@ -65,17 +65,24 @@ pub async fn run(mut ctx: ServerContext) {
                 }
             },
 
-            // Wait for a connection permit to become available.
-            permit = ctx.connection_permits.clone().acquire_owned() => {
-                if permit.is_err() {
-                    // The semaphore has been closed, which means we are shutting down.
-                    break;
-                }
-                let permit = permit.unwrap(); // The permit is now owned by this scope.
-
-                // A permit is available, now accept the new incoming TCP connection.
-                match ctx.listener.accept().await {
-                    Ok((socket, addr)) => {
+            // Accept a new connection, but only if we can get a permit first.
+            // This combines waiting for the permit and the connection in one logical step,
+            // preventing the main loop from blocking on `accept()` and ignoring shutdown signals.
+            res = async {
+                // This async block is a single future that the select macro will poll.
+                // If `acquire_owned()` waits, the whole `select!` can still poll other branches.
+                let permit = ctx.connection_permits.clone().acquire_owned().await?;
+                // We have the permit. Now wait for the connection.
+                // If accept() waits, the `select!` can still poll other branches.
+                // If accept() fails, the permit is dropped and released automatically.
+                let connection_res = ctx.listener.accept().await;
+                // Make the compiler happy about the error type.
+                let typed_res: Result<_, anyhow::Error> = Ok((permit, connection_res));
+                typed_res
+            } => {
+                match res {
+                    Ok((permit, Ok((socket, addr)))) => {
+                        // We have a permit and a connection. Spawn the handler.
                         info!("Accepted new connection from: {}", addr);
                         ctx.state.stats.increment_total_connections();
                         metrics::CONNECTIONS_RECEIVED_TOTAL.inc();
@@ -105,7 +112,7 @@ pub async fn run(mut ctx: ServerContext) {
                         // The connection permit is moved into the task and will be released when the task (and thus the connection) ends.
                         if let Some(acceptor) = ctx.acceptor.clone() {
                             client_tasks.spawn(async move {
-                                let _permit = permit;
+                                let _permit = permit; // Move permit into the task.
                                 match acceptor.accept(socket).await {
                                     Ok(tls_stream) => {
                                         info!("TLS handshake successful for {addr}");
@@ -120,16 +127,22 @@ pub async fn run(mut ctx: ServerContext) {
                             });
                         } else {
                             client_tasks.spawn(async move {
-                                let _permit = permit;
+                                let _permit = permit; // Move permit into the task.
                                 let any_stream = AnyStream::Tcp(socket);
                                 let mut handler = ConnectionHandler::new(any_stream, addr, state_clone, session_id, conn_shutdown_rx, global_shutdown_rx).await;
                                 if let Err(e) = handler.run().await { warn!("Connection from {} terminated unexpectedly: {}", addr, e); }
                             });
                         }
-                    }
-                    Err(e) => {
+                    },
+                    Ok((_permit, Err(e))) => {
+                        // Accept failed, permit is dropped automatically.
                         error!("Failed to accept connection: {}. Retrying shortly...", e);
                         tokio::time::sleep(Duration::from_millis(100)).await;
+                    },
+                    Err(_) => {
+                        // acquire_owned() failed, which means semaphore was closed.
+                        // This indicates shutdown.
+                        break;
                     }
                 }
             },
