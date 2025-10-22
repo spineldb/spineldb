@@ -20,6 +20,14 @@ pub enum RespValue {
     Null,
     NullArray,
     Error(String),
+    // RESP3 additions
+    Map(Vec<(RespValue, RespValue)>),
+    Set(Vec<RespValue>),
+    Boolean(bool),
+    Double(f64),
+    BigNumber(String),
+    VerbatimString(String, Bytes),
+    Attribute(Vec<(RespValue, RespValue)>, Box<RespValue>),
 }
 
 /// Implements the conversion from the internal `RespValue` to the wire-protocol `RespFrame`.
@@ -36,6 +44,25 @@ impl From<RespValue> for super::RespFrame {
             RespValue::Null => super::RespFrame::Null,
             RespValue::NullArray => super::RespFrame::NullArray,
             RespValue::Error(s) => super::RespFrame::Error(s),
+            // RESP3 additions
+            RespValue::Map(map) => super::RespFrame::Map(
+                map.into_iter()
+                    .map(|(k, v)| (k.into(), v.into()))
+                    .collect(),
+            ),
+            RespValue::Set(set) => {
+                super::RespFrame::Set(set.into_iter().map(Into::into).collect())
+            }
+            RespValue::Boolean(b) => super::RespFrame::Boolean(b),
+            RespValue::Double(d) => super::RespFrame::Double(d),
+            RespValue::BigNumber(bn) => super::RespFrame::BigNumber(bn),
+            RespValue::VerbatimString(f, t) => super::RespFrame::VerbatimString(f, t),
+            RespValue::Attribute(attrs, data) => {
+                super::RespFrame::Attribute(
+                    attrs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+                    Box::new((*data).into()),
+                )
+            }
         }
     }
 }

@@ -55,6 +55,7 @@ pub mod unlink;
 pub mod unsubscribe;
 pub mod unwatch;
 pub mod watch;
+pub mod hello;
 
 // Re-export all command structs for easy access from the parent `commands` module.
 pub use self::acl::Acl;
@@ -111,3 +112,4 @@ pub use self::unlink::Unlink;
 pub use self::unsubscribe::Unsubscribe;
 pub use self::unwatch::Unwatch;
 pub use self::watch::Watch;
+pub use self::hello::Hello;

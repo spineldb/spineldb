@@ -16,6 +16,9 @@ use bytes::Bytes;
 
 // Re-export the CommandSpec trait for easy access by other modules.
 pub use command_spec::CommandSpec;
+pub use generic::Unwatch;
+pub use generic::Watch;
+pub use generic::Hello;
 
 // The macro definition that generates the Command enum and its implementations.
 #[macro_use]
@@ -106,6 +109,7 @@ define_commands! {
         (EvalSha, EvalSha, generic),
         (Acl, Acl, generic),
         (Failover, Failover, generic),
+        (Hello, Hello, generic),
 
         // --- String Commands ---
         (Get, Get, string),
