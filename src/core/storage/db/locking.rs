@@ -78,8 +78,13 @@ impl Db {
                 ExecutionLocks::None
             }
 
-            // Commands that operate on the entire DB state without key-specific locks.
-            Command::DbSize(_) | Command::FlushAll(_) | Command::FlushDb(_) => ExecutionLocks::None,
+            // `DbSize` can operate without locks as it uses atomic counters.
+            Command::DbSize(_) => ExecutionLocks::None,
+
+            // `FlushAll` and `FlushDb` operate on the entire DB state and require all locks.
+            Command::FlushAll(_) | Command::FlushDb(_) => ExecutionLocks::All {
+                guards: self.lock_all_shards().await,
+            },
 
             // Commands operating on multiple keys require locks on all relevant shards.
             _ if keys.len() > 1 => ExecutionLocks::Multi {
