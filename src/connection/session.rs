@@ -32,8 +32,6 @@ pub struct SessionState {
     pub current_db_index: usize,
     /// The `AclUser` associated with the authenticated session, if any.
     pub authenticated_user: Option<Arc<AclUser>>,
-    /// The RESP protocol version negotiated with the client (2 or 3).
-    pub protocol_version: u8,
 }
 
 /// An enum holding a receiver for either a channel or pattern subscription.
@@ -59,7 +57,6 @@ impl SessionState {
             pubsub_receivers: Vec::new(),
             current_db_index: 0,
             authenticated_user: None,
-            protocol_version: 2, // Default to RESP2
         }
     }
 }

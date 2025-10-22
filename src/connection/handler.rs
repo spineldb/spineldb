@@ -60,16 +60,14 @@ impl ConnectionHandler {
     ) -> Self {
         let is_auth_required = state.config.lock().await.password.is_some();
         let acl_enabled = state.acl_config.read().await.enabled;
-        let session = SessionState::new(is_auth_required, acl_enabled);
-        let framed = Some(Framed::new(socket, RespFrameCodec::new(session.protocol_version)));
         Self {
-            framed,
+            framed: Some(Framed::new(socket, RespFrameCodec)),
             addr,
             state,
             session_id,
             shutdown_rx,
             global_shutdown_rx,
-            session,
+            session: SessionState::new(is_auth_required, acl_enabled),
             role: ConnectionRole::Client,
         }
     }
@@ -186,34 +184,6 @@ impl ConnectionHandler {
         // PSYNC is a special command that triggers a protocol switch and handoff.
         if let Command::Psync(psync) = command {
             return self.handle_replica_handoff(psync, conn_guard).await;
-        }
-
-        // HELLO is a special command for protocol negotiation.
-        if let Command::Hello(hello_cmd) = command {
-            let framed = self.framed.as_mut().unwrap();
-            let response = if hello_cmd.version == 2 || hello_cmd.version == 3 {
-                self.session.protocol_version = hello_cmd.version;
-                framed.codec_mut().protocol_version = hello_cmd.version;
-                debug!(
-                    "Session {}: Negotiated protocol version: {}",
-                    self.session_id,
-                    hello_cmd.version
-                );
-                // Respond with a RESP3 Map for HELLO command
-                RespFrame::Map(vec![
-                    (RespFrame::SimpleString("server".to_string()), RespFrame::SimpleString("spineldb".to_string())),
-                    (RespFrame::SimpleString("version".to_string()), RespFrame::SimpleString(env!("CARGO_PKG_VERSION").to_string())),
-                    (RespFrame::SimpleString("proto".to_string()), RespFrame::Integer(hello_cmd.version as i64)),
-                    (RespFrame::SimpleString("id".to_string()), RespFrame::Integer(self.session_id as i64)),
-                    (RespFrame::SimpleString("mode".to_string()), RespFrame::SimpleString("standalone".to_string())),
-                    (RespFrame::SimpleString("role".to_string()), RespFrame::SimpleString("master".to_string())),
-                    (RespFrame::SimpleString("modules".to_string()), RespFrame::Array(vec![])), // No modules for now
-                ])
-            } else {
-                RespFrame::Error(format!("ERR Protocol version {} not supported", hello_cmd.version))
-            };
-            framed.send(response).await?;
-            return Ok(NextAction::Continue);
         }
 
         let mut router = Router::new(
