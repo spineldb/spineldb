@@ -1,6 +1,6 @@
 # SpinelDB: A Modern, Redis-Compatible In-Memory Database in Rust
 <p align="center">
-  <img src="docs/spineldb-logo.svg" alt="SpinelDB Logo" width="200"/>
+  <img src="docs/spineldb-logo.png" alt="SpinelDB Logo" width="200"/>
 </p>
 <p align="center">
   <strong>Fast, Safe, and Intelligent. The next-generation in-memory data store.</strong>
