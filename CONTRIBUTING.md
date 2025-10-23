@@ -6,7 +6,7 @@ This document provides a guide for contributing to SpinelDB.
 
 ## Code of Conduct
 
-This project and everyone participating in it is governed by a Code of Conduct. By participating, you are expected to uphold this code. Please take a moment to read it. (A `CODE_OF_CONDUCT.md` file can be added later).
+This project and everyone participating in it is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
 
 ---
 
