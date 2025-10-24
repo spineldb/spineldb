@@ -88,6 +88,35 @@ pub async fn setup(
 
 async fn setup_cache_manifest(server_state: &Arc<ServerState>) -> Result<()> {
     let cache_path_str = server_state.config.lock().await.cache.on_disk_path.clone();
+    let old_cache_path = std::path::Path::new("cache_files");
+
+    // Migrate old cache directory if it exists
+    if old_cache_path.exists() {
+        let new_cache_path = std::path::Path::new(&cache_path_str);
+        if !new_cache_path.exists() {
+            let parent = new_cache_path.parent().unwrap();
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                anyhow!(
+                    "Failed to create parent directory for cache migration: {}",
+                    e
+                )
+            })?;
+            tokio::fs::rename(old_cache_path, new_cache_path)
+                .await
+                .map_err(|e| anyhow!("Failed to migrate old cache directory: {}", e))?;
+            info!(
+                "Migrated old cache directory to {}",
+                new_cache_path.display()
+            );
+        } else {
+            warn!(
+                "Old cache directory found at '{}', but the new directory '{}' already exists. Please move any important files manually.",
+                old_cache_path.display(),
+                new_cache_path.display()
+            );
+        }
+    }
+
     if !cache_path_str.is_empty() {
         let cache_path = std::path::Path::new(&cache_path_str);
         tokio::fs::create_dir_all(cache_path).await?;
@@ -158,6 +187,23 @@ fn log_startup_info(config: &Config) {
 /// Loads data from AOF or SPLDB based on the configuration.
 async fn load_persistence_data(server_state: &Arc<ServerState>) -> Result<()> {
     let config = server_state.config.lock().await;
+
+    // Create parent directories for persistence files if they don't exist
+    for path_str in [&config.persistence.aof_path, &config.persistence.spldb_path] {
+        let path = std::path::Path::new(path_str);
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                anyhow!(
+                    "Failed to create persistence directory '{}': {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+            info!("Created persistence directory: {}", parent.display());
+        }
+    }
 
     let aof_path_str = &config.persistence.aof_path;
     let aof_path = std::path::Path::new(aof_path_str);

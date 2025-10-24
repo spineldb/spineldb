@@ -317,7 +317,7 @@ fn default_streaming_threshold() -> usize {
     1024 * 1024 // 1 MB
 }
 fn default_disk_path() -> String {
-    "cache_files".to_string()
+    "spineldb_data/cache_files".to_string()
 }
 fn default_max_disk_size() -> u64 {
     0 // No limit
@@ -498,13 +498,13 @@ impl Default for PersistenceConfig {
 }
 
 fn default_aof_path() -> String {
-    "spineldb.aof".to_string()
+    "spineldb_data/spineldb.aof".to_string()
 }
 fn default_appendfsync() -> AppendFsync {
     AppendFsync::EverySec
 }
 fn default_spldb_path() -> String {
-    "dump.spldb".to_string()
+    "spineldb_data/dump.spldb".to_string()
 }
 fn default_save_rules() -> Vec<SaveRule> {
     vec![
