@@ -49,7 +49,7 @@ maxmemory_policy = "allkeys-lru"
 
 # Path to the JSON file containing user definitions (usernames, password hashes).
 # This is REQUIRED if 'acl.enabled = true'.
-acl_file = "users.json"
+acl_file = "spineldb_data/users.json"
 
 # A list of glob patterns for domains that `CACHE.FETCH` and `CACHE.PROXY`
 # are allowed to connect to. If this list is empty, all domains are permitted.
@@ -95,7 +95,7 @@ enabled = false
 [persistence]
 # Set 'spldb_enabled = true' for RDB-style snapshotting.
 spldb_enabled = true
-spldb_path = "dump.spldb"
+spldb_path = "spineldb_data/dump.spldb"
 
 # 'save_rules' trigger automatic SPLDB saves.
 # Format: { seconds = <time>, changes = <key_changes> }
@@ -108,7 +108,7 @@ save_rules = [
 # Set 'aof_enabled = true' for Append-Only File persistence.
 # If both AOF and SPLDB are enabled, AOF is prioritized on startup.
 aof_enabled = false
-aof_path = "spineldb.aof"
+aof_path = "spineldb_data/spineldb.aof"
 
 # 'appendfsync' controls how often AOF data is synced to disk.
 # Options: "always", "everysec" (default), "no".
@@ -165,7 +165,7 @@ auto_unlink_on_del_threshold = 0
 # --- Intelligent Caching Engine ---
 [cache]
 streaming_threshold_bytes = 1048576 # 1MB
-on_disk_path = "cache_files"
+on_disk_path = "spineldb_data/cache_files"
 max_disk_size = 0
 max_variants_per_key = 64
 negative_cache_ttl_seconds = 10

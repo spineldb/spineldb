@@ -40,15 +40,11 @@ const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 // The maximum delay for the exponential backoff reconnection strategy.
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
 
-// An enum to abstract over different stream types (plain TCP or TLS),
-// allowing the replication logic to be generic over the transport layer.
+// An enum to abstract over different stream types (plain TCP or TLS).
 enum ReplicaStream {
     Tcp(TcpStream),
     Tls(Box<ClientTlsStream<TcpStream>>),
 }
-
-// --- Trait Implementations for ReplicaStream ---
-// These implementations simply delegate the calls to the underlying stream type.
 
 impl AsyncRead for ReplicaStream {
     fn poll_read(
@@ -127,8 +123,7 @@ impl ReplicaWorker {
         }
     }
 
-    /// The main run loop for the replica worker. This loop manages the connection
-    /// state and handles reconnection with exponential backoff.
+    /// The main run loop for the replica worker.
     pub async fn run(
         mut self,
         mut shutdown_rx: broadcast::Receiver<()>,
@@ -138,8 +133,6 @@ impl ReplicaWorker {
         let mut current_delay = INITIAL_RECONNECT_DELAY;
 
         loop {
-            // Proactively check the current replication configuration at the start of each cycle.
-            // This makes the worker self-correcting if a reconfiguration signal is missed.
             let (current_primary_host, current_primary_port) = {
                 let config_guard = self.state.config.lock().await;
                 match &config_guard.replication {
@@ -164,7 +157,7 @@ impl ReplicaWorker {
                     current_primary_host, current_primary_port
                 );
                 *last_known = Some((current_primary_host, current_primary_port));
-                current_delay = INITIAL_RECONNECT_DELAY; // Immediately try to connect to the new primary.
+                current_delay = INITIAL_RECONNECT_DELAY;
             }
             drop(last_known);
 
@@ -172,29 +165,26 @@ impl ReplicaWorker {
                 _ = reconfigure_rx.recv() => {
                     info!("Received replication reconfigure signal. Restarting connection cycle immediately.");
                     current_delay = INITIAL_RECONNECT_DELAY;
-                    continue; // Re-enter the loop to check the new config and start a new connection cycle.
+                    continue;
                 }
                 result = self.handle_connection_cycle() => {
                     if let Err(e) = result {
                         warn!("Replication cycle failed: {e}. Reconnecting...");
                     } else {
                         info!("Connection to primary closed cleanly. Reconnecting...");
-                        current_delay = INITIAL_RECONNECT_DELAY; // Reset delay on clean disconnect.
+                        current_delay = INITIAL_RECONNECT_DELAY;
                     }
 
-                    // Apply exponential backoff with jitter to avoid thundering herd on primary restart.
                     let jitter = Duration::from_millis(rand::thread_rng().gen_range(0..500));
                     let wait_time = current_delay + jitter;
                     info!("Will try to reconnect to primary in {wait_time:?}");
 
-                    // Wait for the backoff period, but allow shutdown/reconfigure signals to interrupt.
                     tokio::select! {
                         _ = tokio::time::sleep(wait_time) => {}
                         _ = shutdown_rx.recv() => { info!("Replica worker shutting down during backoff."); return; }
                         _ = reconfigure_rx.recv() => { info!("Reconfigure signal received during backoff. Reconnecting immediately."); }
                     }
 
-                    // Increase the delay for the next attempt.
                     current_delay = (current_delay * 2).min(MAX_RECONNECT_DELAY);
                 }
                 _ = shutdown_rx.recv() => {
@@ -207,7 +197,6 @@ impl ReplicaWorker {
 
     /// Manages a single connection lifecycle: connect, handshake, sync, and process command stream.
     async fn handle_connection_cycle(&mut self) -> Result<(), SpinelDBError> {
-        // Extract current replication config.
         let (host, port, tls_enabled, my_port) = {
             let config_guard = self.state.config.lock().await;
             match &config_guard.replication {
@@ -229,18 +218,15 @@ impl ReplicaWorker {
             }
         };
 
-        // Reset local transaction state for the new connection.
         self.is_in_transaction = false;
         self.queued_tx_commands.clear();
 
-        // Connect to the primary.
         let addr = format!("{host}:{port}");
         info!("Attempting to connect to primary at {}", addr);
         let tcp_stream = TcpStream::connect(&addr)
             .await
             .map_err(|e| SpinelDBError::ReplicationError(format!("Failed to connect: {e}")))?;
 
-        // Optionally perform a TLS handshake.
         let stream: ReplicaStream = if tls_enabled {
             info!("Establishing TLS connection with primary at {addr}");
             let mut root_cert_store = rustls::RootCertStore::empty();
@@ -269,30 +255,23 @@ impl ReplicaWorker {
         let (reader, mut writer) = split(stream);
         let mut framed_reader = FramedRead::new(reader, RespFrameCodec);
 
-        // --- Step 1: Handshake ---
         let handshake_result = self
             .perform_handshake(&mut framed_reader, &mut writer, my_port)
             .await?;
         debug!("Handshake completed with result: {handshake_result:?}");
 
-        // --- Step 2: Synchronization (Full or Partial) ---
         let mut final_reader = if handshake_result == HandshakeResult::FullResync {
-            // A full resync involves receiving and loading an SPLDB snapshot.
-            // The reader needs to be temporarily un-framed to read the raw binary data.
             let reader = framed_reader.into_inner();
             let mut buf_reader = TokioBufReader::new(reader);
             self.read_and_load_spldb(&mut buf_reader).await?;
             info!("Full resync successful. SPLDB loaded.");
-            self.current_db_index = 0; // Reset DB context after loading snapshot.
-            // Re-frame the reader to continue processing the command stream.
+            self.current_db_index = 0;
             FramedRead::new(buf_reader.into_inner(), RespFrameCodec)
         } else {
-            // For a partial resync, we can continue using the existing framed reader.
             info!("Partial resync successful. Resuming command stream.");
             framed_reader
         };
 
-        // --- Step 3: Live Command Stream Processing ---
         let writer_arc = Arc::new(Mutex::new(writer));
         self.process_command_stream(&mut final_reader, writer_arc)
             .await;
@@ -491,10 +470,14 @@ impl ReplicaWorker {
         }
     }
 
+    /// Clears all data on this replica. Called on critical replication failure.
     async fn clear_all_local_data(&mut self) {
         warn!("Clearing all data on this replica due to a critical replication error.");
         for db in &self.state.dbs {
-            db.clear_all_shards().await;
+            let guards = db.lock_all_shards().await;
+            for mut guard in guards {
+                guard.clear();
+            }
         }
         self.current_db_index = 0;
     }
@@ -573,7 +556,6 @@ impl ReplicaWorker {
         .encode_to_vec()?;
         writer.write_all(&psync_cmd).await?;
 
-        // Process the PSYNC response.
         let sync_response = framed.next().await.ok_or_else(|| {
             SpinelDBError::ReplicationError("Connection closed during PSYNC".into())
         })??;

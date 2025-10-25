@@ -24,21 +24,22 @@ pub struct Db {
     pub tx_states: Arc<DashMap<u64, TransactionState>>,
 }
 
+/// Defines the direction for list push operations.
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum PushDirection {
     Left,
     Right,
 }
 
+/// Defines the direction for list pop operations.
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum PopDirection {
     Left,
     Right,
 }
 
-// --- Implementations for Db ---
-
 impl Db {
+    /// Creates a new, empty `Db` instance.
     pub fn new() -> Self {
         let shards = (0..NUM_SHARDS).map(|_| Arc::new(DbShard::new())).collect();
         Self {
@@ -82,14 +83,6 @@ impl Db {
     /// Gets a reference to a shard by its index.
     pub fn get_shard(&self, index: usize) -> &Arc<DbShard> {
         &self.shards[index]
-    }
-
-    /// Clears all data from all shards in this database.
-    pub async fn clear_all_shards(&self) {
-        for shard in &self.shards {
-            let mut guard = shard.entries.lock().await;
-            guard.clear();
-        }
     }
 
     /// Inserts a value during a data loading process (SPLDB/AOF).
@@ -141,7 +134,6 @@ impl Db {
     }
 
     /// Gets a random sample of keys from the database, regardless of expiry.
-    /// Used by the CacheRevalidator.
     pub async fn get_random_keys(&self, sample_size: usize) -> Vec<Bytes> {
         let mut rng = rand::rngs::SmallRng::from_entropy();
         let mut keys = Vec::with_capacity(sample_size);

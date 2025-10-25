@@ -17,59 +17,77 @@ A `[x]` checkbox indicates a feature that is already implemented (at least for t
 
 ## 2. Data Types
 
-- [x] **Strings**: Including bit operations (BITCOUNT, BITPOS, SETBIT).
-- [x] **Lists**: (LPUSH, RPOP, LINDEX, LLEN, etc.)
+- [x] **Strings**
+- [x] **Bitmaps/Bitfields** (BITFIELD and BITOP tests needed)
+- [ ] **HyperLogLogs**
+- [x] **Lists**
 - [x] **Hashes**
 - [x] **Sets**
 - [x] **Sorted Sets**
-- [x] **Geospatial**: (GEOADD, GEODIST, etc.)
-- [x] **Native JSON**: Support for atomic JSON operations.
 - [x] **Streams**
-- [ ] **HyperLogLogs**
-- [ ] **Bitmaps/Bitfields** (partially implemented)
+- [x] **Geospatial**
+- [x] **Native JSON**
 
-## 3. Persistence
+## 3. Advanced Data Structures & Search
+
+- [ ] **SpinelSearch**: Full-text search engine capabilities.
+- [ ] **SpinelGraph**: Graph database functionality.
+- [ ] **SpinelTimeSeries**: Time-series data support.
+- [ ] **SpinelBloom**: Probabilistic data structures (Bloom and Cuckoo filters).
+
+## 4. Persistence
 
 - [x] **AOF (Append-Only File)**: Logs every write operation.
 - [x] **AOF Rewrite**: Automatic background rewriting of the AOF file.
 - [x] **Snapshotting (.spldb)**: Point-in-time data snapshots.
 
-## 4. High Availability & Scalability
+## 5. High Availability & Scalability
 
 - [x] **Master-Replica Replication**: (PSYNC/SYNC).
+- [x] **Read-Only Replicas**: Replicas are read-only by default.
 - [x] **SpinelDB Cluster**: Automatic data partitioning, horizontal scalability.
 - [x] **Gossip Protocol**: For node discovery and health checks within the cluster.
-- [x] **Automatic Failover (Warden)**: Automatic promotion of a replica to master.
-- [ ] Configurable read-only replicas.
+- [x] **Automatic Failover (Warden)**: Automatic promotion of a replica to master (SpinelDB's equivalent to Sentinel).
+- [x] **Sharded Pub/Sub**: Cluster-wide Pub/Sub support.
 
-## 5. Advanced Features
+## 6. Advanced Features
 
-- [x] **Intelligent Caching Engine**: Including a declarative caching proxy.
 - [x] **Transactions**: (MULTI, EXEC, DISCARD, WATCH).
 - [x] **Pub/Sub**: (SUBSCRIBE, PUBLISH, PSUBSCRIBE).
+- [x] **Intelligent Caching Engine**: Including a declarative caching proxy.
+- [ ] **Client-Side Caching**: Server-assisted client-side caching.
+
+## 7. Extensibility & Scripting
+
 - [x] **Lua Scripting**: (EVAL, EVALSHA).
-- [x] **Security**: Authentication (AUTH) and Access Control Lists (ACL).
 - [ ] **SpinelDB Functions**: The evolution of Lua scripting for more advanced server-side logic.
+- [ ] **Redis Gears**: Programmable data processing across the cluster.
 - [ ] **Modules API**: Allow for the development of custom functionality as loadable modules.
 
-## 6. Operations & Monitoring
+## 8. Security
+
+- [x] **Authentication**: (AUTH).
+- [x] **Access Control Lists (ACL)**.
+- [ ] **Advanced ACLs**: Granular permissions with selectors.
+
+## 9. Operations & Monitoring
 
 - [x] **Introspection**: `INFO`, `COMMAND`, `LATENCY` commands.
 - [x] **Docker Support**: `Dockerfile` for easy deployment.
 - [x] **CI/CD Pipeline**: Automated testing and releases via GitHub Actions.
-- [x] Prometheus Metrics: A `/metrics` endpoint for integration with modern monitoring systems.
+- [x] **Prometheus Metrics**: A `/metrics` endpoint for integration with modern monitoring systems.
 - [ ] **Official Helm Chart**: For easy deployment on Kubernetes.
 
-## 7. Ecosystem & Clients
+## 10. Ecosystem & Clients
 
 - [x] High compatibility with popular Redis clients.
 - [ ] Official Rust client.
 - [ ] Official clients for other popular languages (Python, JavaScript/TypeScript, Go, Java).
 
-## 8. Documentation
+## 11. Documentation
 
 - [x] Command reference documentation.
 - [x] Core concepts documentation (Replication, Cluster, Caching, etc.).
 - [ ] Public documentation website (e.g., using `mdBook` or `Docusaurus`).
 - [ ] More comprehensive Getting Started Guide.
-- [ ] Contribution guidelines (`CONTRIBUTING.md`).
+- [x] Contribution guidelines (`CONTRIBUTING.md`).

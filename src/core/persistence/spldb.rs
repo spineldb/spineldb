@@ -228,8 +228,12 @@ pub async fn load_from_bytes(data: &Bytes, dbs: &[Arc<Db>]) -> io::Result<()> {
     }
     info!("SPLDB checksum verified successfully.");
 
+    // Clear all databases before loading data.
     for db in dbs.iter() {
-        db.clear_all_shards().await;
+        let guards = db.lock_all_shards().await;
+        for mut guard in guards {
+            guard.clear();
+        }
     }
 
     let mut parser = SpldbParser::new(Bytes::from(data_part.to_vec()), dbs);
