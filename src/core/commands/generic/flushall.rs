@@ -50,6 +50,7 @@ impl ExecutableCommand for FlushAll {
             ));
         }
 
+        // In cluster mode, broadcast FLUSHDB to all other primary nodes first.
         if let Some(cluster_state) = &ctx.state.cluster {
             info!("FLUSHALL received in cluster mode. Broadcasting FLUSHDB to all masters.");
 
@@ -126,16 +127,14 @@ impl ExecutableCommand for FlushAll {
                     }
                 }
             }
+        }
 
-            // Only flush local data after all remote nodes have been successfully flushed.
-            info!("All remote masters flushed successfully. Flushing local data.");
-            for db in &ctx.state.dbs {
-                db.clear_all_shards().await;
-            }
-        } else {
-            // Standalone mode: flush all local databases.
-            for db in &ctx.state.dbs {
-                db.clear_all_shards().await;
+        // Flush all local databases.
+        info!("Flushing all local databases.");
+        for db in &ctx.state.dbs {
+            let guards = db.lock_all_shards().await;
+            for mut guard in guards {
+                guard.clear();
             }
         }
 
@@ -151,24 +150,31 @@ impl CommandSpec for FlushAll {
     fn name(&self) -> &'static str {
         "flushall"
     }
+
     fn arity(&self) -> i64 {
         1
     }
+
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::NO_PROPAGATE
     }
+
     fn first_key(&self) -> i64 {
         0
     }
+
     fn last_key(&self) -> i64 {
         0
     }
+
     fn step(&self) -> i64 {
         0
     }
+
     fn get_keys(&self) -> Vec<Bytes> {
         vec![]
     }
+
     fn to_resp_args(&self) -> Vec<Bytes> {
         vec![]
     }

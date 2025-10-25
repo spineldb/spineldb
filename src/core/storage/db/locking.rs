@@ -58,8 +58,8 @@ impl Db {
                 ExecutionLocks::None
             }
 
-            // `SORT` needs special handling as its keys can be determined at runtime.
-            // A lock on the primary key is acquired initially, and can be upgraded later.
+            // `SORT` needs special handling. A lock on the primary key is acquired initially
+            // and can be upgraded later by the command handler.
             Command::Sort(_) => {
                 let shard_index = self.get_shard_index(&keys[0]);
                 ExecutionLocks::Single {
@@ -68,7 +68,7 @@ impl Db {
                 }
             }
 
-            // `CACHE.PURGETAG` handles its own granular locking and does not require pre-locking.
+            // Commands that handle their own granular locking do not require pre-locking.
             Command::Cache(c)
                 if matches!(
                     c.subcommand,
@@ -81,10 +81,13 @@ impl Db {
             // `DbSize` can operate without locks as it uses atomic counters.
             Command::DbSize(_) => ExecutionLocks::None,
 
-            // `FlushAll` and `FlushDb` operate on the entire DB state and require all locks.
-            Command::FlushAll(_) | Command::FlushDb(_) => ExecutionLocks::All {
+            // `FlushDb` operates on the current DB and requires all of its locks.
+            Command::FlushDb(_) => ExecutionLocks::All {
                 guards: self.lock_all_shards().await,
             },
+
+            // `FlushAll` handles its own cross-DB locking, so the router should not acquire any locks.
+            Command::FlushAll(_) => ExecutionLocks::None,
 
             // Commands operating on multiple keys require locks on all relevant shards.
             _ if keys.len() > 1 => ExecutionLocks::Multi {
