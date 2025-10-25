@@ -1,25 +1,19 @@
 // src/core/warden/failover.rs
 
 //! Contains the core logic for performing an automated failover orchestrated by a Warden leader.
-//!
-//! This module is invoked by a `MasterMonitor` task after it has won a leader election.
-//! It is responsible for selecting the best replica, promoting it to a new primary,
-//! and reconfiguring all other replicas (and the old primary, if reachable) to follow the
-//! new primary. This process is designed to be as safe and atomic as possible.
 
 use super::client::WardenClient;
 use super::state::{FailoverState, MasterState, MasterStatus};
 use crate::core::protocol::RespFrame;
 use parking_lot::Mutex;
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::time::{Duration, Instant, sleep};
 use tracing::{debug, error, info, warn};
 
-/// The main entry point for the failover process. This function orchestrates all steps.
-/// It is spawned as a new task by the `MasterMonitor` that won the leader election.
+/// The main entry point for the failover process.
 pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
     let (master_name, old_master_addr, old_master_runid) = {
         let state = state_arc.lock();
@@ -56,7 +50,6 @@ pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
         candidate_addr, master_name
     );
 
-    // Perform a final health check on the candidate right before attempting promotion.
     if WardenClient::connect(candidate_addr).await.is_err() {
         warn!(
             "Promotion candidate {} failed final health check. Aborting failover.",
@@ -142,7 +135,7 @@ pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
     }
 
     // --- Step 5: Update the Warden's internal state with the new primary information ---
-    let (other_replicas, failover_timeout) = {
+    let failover_timeout = {
         let mut state = state_arc.lock();
         state.status = MasterStatus::Ok;
         state.addr = candidate_addr;
@@ -150,27 +143,28 @@ pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
         state.primary_state.down_since = None;
         state.last_failover_time = std::time::Instant::now();
 
-        let replicas: Vec<SocketAddr> = state
+        let other_replicas: HashSet<SocketAddr> = state
             .replicas
             .iter()
             .filter(|e| *e.key() != candidate_addr)
             .map(|e| *e.key())
             .collect();
+        state.replicas_pending_reconfiguration = other_replicas;
 
         state.replicas.remove(&candidate_addr);
-        state.reset_failover_state();
-        (replicas, state.config.failover_timeout)
+        state.failover_state = FailoverState::None;
+
+        state.config.failover_timeout
     };
 
-    // --- Step 6: Spawn a persistent task to reconfigure all other replicas and poison the old master's run ID ---
+    // --- Step 6: Spawn a task to reconfigure all other replicas ---
     info!(
-        "Spawning persistent task to reconfigure {} replica(s) and poison old master '{}'",
-        other_replicas.len(),
+        "Spawning task to reconfigure remaining replicas and poison old master '{}'",
         old_master_runid
     );
 
     tokio::spawn(run_post_failover_reconfiguration(
-        other_replicas,
+        state_arc.clone(),
         candidate_addr,
         new_master_runid,
         old_master_runid,
@@ -184,7 +178,6 @@ pub async fn start_failover(state_arc: Arc<Mutex<MasterState>>) {
 }
 
 /// Polls an instance until its `INFO REPLICATION` output shows `role:master`.
-/// Returns the new `master_replid` on success, or `None` on timeout.
 async fn wait_for_promotion(addr: SocketAddr) -> Option<String> {
     const PROMOTION_TIMEOUT_SECS: u64 = 15;
     const POLL_INTERVAL_SECS: u64 = 1;
@@ -230,33 +223,38 @@ fn select_best_replica(state: &MasterState) -> Option<SocketAddr> {
 }
 
 /// A background task to ensure all replicas are eventually reconfigured after a failover.
-async fn run_post_failover_reconfiguration(
-    replicas: Vec<SocketAddr>,
+pub async fn run_post_failover_reconfiguration(
+    state_arc: Arc<Mutex<MasterState>>,
     new_master_addr: SocketAddr,
     new_master_runid: String,
     old_master_runid: String,
     timeout: Duration,
 ) {
-    if replicas.is_empty() {
-        return;
-    }
-
-    let mut replicas_to_process: BTreeSet<SocketAddr> = replicas.into_iter().collect();
     let start_time = Instant::now();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
 
-    while !replicas_to_process.is_empty() {
+    loop {
+        if state_arc.lock().replicas_pending_reconfiguration.is_empty() {
+            break;
+        }
+
         if start_time.elapsed() > timeout {
             warn!(
-                "Post-failover reconfiguration timed out. Could not reconfigure replicas: {:?}",
-                replicas_to_process
+                "Post-failover reconfiguration timed out for master '{}'. Unreconfigured replicas: {:?}",
+                state_arc.lock().config.name,
+                state_arc.lock().replicas_pending_reconfiguration
             );
-            return;
+            break;
         }
 
         interval.tick().await;
 
-        for replica_addr in replicas_to_process.clone() {
+        let replicas_to_process = state_arc.lock().replicas_pending_reconfiguration.clone();
+        if replicas_to_process.is_empty() {
+            continue;
+        }
+
+        for replica_addr in replicas_to_process {
             let res = reconfigure_and_verify_one_replica(
                 replica_addr,
                 new_master_addr,
@@ -271,7 +269,10 @@ async fn run_post_failover_reconfiguration(
                         "Successfully verified reconfiguration for replica {}. Removing from processing queue.",
                         replica_addr
                     );
-                    replicas_to_process.remove(&replica_addr);
+                    state_arc
+                        .lock()
+                        .replicas_pending_reconfiguration
+                        .remove(&replica_addr);
                 }
                 Ok(false) => {
                     debug!(
@@ -288,7 +289,12 @@ async fn run_post_failover_reconfiguration(
             }
         }
     }
-    info!("All replicas successfully reconfigured to follow the new master.");
+
+    state_arc.lock().reset_failover_state();
+    info!(
+        "Post-failover reconfiguration task finished for master '{}'.",
+        state_arc.lock().config.name
+    );
 }
 
 /// Helper to handle the command-and-verify logic for a single replica.
