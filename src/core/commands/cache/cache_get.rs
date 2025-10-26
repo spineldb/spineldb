@@ -1,4 +1,5 @@
 // src/core/commands/cache/cache_get.rs
+
 //! Implements the `CACHE.GET` command, which retrieves a cached object.
 //! This implementation supports content variants via the `Vary` header,
 //! and advanced stale content serving strategies like stale-while-revalidate.
@@ -280,13 +281,28 @@ impl CacheGet {
         variant.last_accessed = Instant::now();
 
         if let Some(url) = self.revalidate_url.clone().or(revalidate_url_from_cache) {
-            let swr_lock = state
-                .cache
-                .swr_locks
-                .entry(self.key.clone())
-                .or_default()
-                .clone();
-            if swr_lock.try_lock().is_ok() {
+            // --- LOGIC REVISED TO REMOVE UNNECESSARY LOOP ---
+            let is_leader = match state.cache.swr_locks.entry(self.key.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                    if let Some(strong_lock) = entry.get().upgrade() {
+                        strong_lock.try_lock().is_ok()
+                    } else {
+                        let new_strong = Arc::new(tokio::sync::Mutex::new(()));
+                        let _guard = new_strong.try_lock().unwrap();
+                        *entry.get_mut() = Arc::downgrade(&new_strong);
+                        true
+                    }
+                }
+                dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                    let new_strong = Arc::new(tokio::sync::Mutex::new(()));
+                    let _guard = new_strong.try_lock().unwrap();
+                    vacant.insert(Arc::downgrade(&new_strong));
+                    true
+                }
+            };
+            // --- END OF REVISED LOGIC ---
+
+            if is_leader {
                 debug!(
                     "Acquired SWR lock for key '{}'. Spawning background revalidation.",
                     String::from_utf8_lossy(&self.key)

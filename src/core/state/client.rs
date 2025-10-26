@@ -31,4 +31,8 @@ pub struct ClientInfo {
     pub role: ClientRole,
     pub created: Instant,
     pub last_command_time: Instant,
+    /// The name of the client library, set by CLIENT SETINFO.
+    pub library_name: Option<String>,
+    /// The version of the client library, set by CLIENT SETINFO.
+    pub library_version: Option<String>,
 }

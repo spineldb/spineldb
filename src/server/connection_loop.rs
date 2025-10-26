@@ -105,6 +105,8 @@ pub async fn run(mut ctx: ServerContext) {
                             role: ClientRole::Normal, // Initialize new connections as 'Normal'.
                             created: Instant::now(),
                             last_command_time: Instant::now(),
+                            library_name: None,
+                            library_version: None,
                         }));
                         state_clone.clients.insert(session_id, (client_info, conn_shutdown_tx));
 

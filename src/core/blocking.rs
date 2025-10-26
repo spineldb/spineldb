@@ -275,12 +275,26 @@ impl BlockerManager {
                         };
 
                         if let Err(return_err) = return_push_cmd.execute(&mut source_ctx).await {
-                            error!(
-                                "CRITICAL DATA LOSS: Failed to return element '{}' back to source list '{}' after BLMOVE failure. Error: {}",
+                            // --- THIS IS THE FIXED PART ---
+                            let error_message = format!(
+                                "CRITICAL DATA LOSS: Failed to return element '{}' back to source list '{}' after BLMOVE failure. Original PUSH error: {}. Return PUSH error: {}.",
                                 String::from_utf8_lossy(&popped.value),
                                 String::from_utf8_lossy(source_key),
+                                e,
                                 return_err
                             );
+                            error!("{}", error_message);
+
+                            // Set server to emergency read-only mode.
+                            ctx.state
+                                .is_emergency_read_only
+                                .store(true, std::sync::atomic::Ordering::SeqCst);
+                            warn!(
+                                "Server has been put into emergency read-only mode due to potential data loss."
+                            );
+
+                            // The original error `e` is still what the client should see.
+                            // The `return_err` is for logging and server state management.
                         }
 
                         return Err(e);

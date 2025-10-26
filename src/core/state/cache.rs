@@ -17,8 +17,8 @@ use dashmap::DashMap;
 use futures::future::{BoxFuture, Shared};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -47,7 +47,8 @@ pub struct CacheState {
     /// Per-key shared futures to prevent cache stampedes on `CACHE.FETCH`.
     pub fetch_locks: Arc<DashMap<Bytes, SharedFetch>>,
     /// Per-key locks to prevent stampedes on stale-while-revalidate (SWR) background fetches.
-    pub swr_locks: Arc<DashMap<Bytes, Arc<Mutex<()>>>>,
+    /// Uses Weak pointers to allow for automatic cleanup when no longer in use.
+    pub swr_locks: Arc<DashMap<Bytes, Weak<Mutex<()>>>>,
     /// Counter for cache hits.
     pub hits: AtomicU64,
     /// Counter for cache misses.
