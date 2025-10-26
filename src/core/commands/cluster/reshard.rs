@@ -7,6 +7,7 @@ use crate::core::state::ServerState;
 use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use anyhow::anyhow;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -18,7 +19,6 @@ pub async fn execute(
     destination_node_id: &str,
     slots: &[u16],
 ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-    // Create two clones of the Arc. One for the task, one for accessing the JoinSet.
     let state_for_task = ctx.state.clone();
     let state_for_spawning = ctx.state.clone();
 
@@ -26,7 +26,6 @@ pub async fn execute(
     let dest_clone = destination_node_id.to_owned();
     let slots_clone = slots.to_vec();
 
-    // The async block now moves `state_for_task`.
     let task = async move {
         info!(
             "Starting background resharding task: {:?} slots from {} to {}",
@@ -41,18 +40,16 @@ pub async fn execute(
         }
     };
 
-    // Use the second clone, `state_for_spawning`, to access the critical_tasks lock.
     state_for_spawning.critical_tasks.lock().await.spawn(task);
 
-    // The command returns immediately with OK.
     Ok((
         RespValue::SimpleString("OK".into()),
         WriteOutcome::DidNotWrite,
     ))
 }
 
-/// The main resharding orchestrator. It connects to both nodes and manages the
-/// multi-step process of migrating slots and keys.
+/// The main resharding orchestrator. It connects to all nodes and manages the
+/// multi-step process of migrating slots and keys using a connection pool.
 async fn run_reshard_orchestrator(
     state: Arc<ServerState>,
     source_id: String,
@@ -64,7 +61,7 @@ async fn run_reshard_orchestrator(
         .as_ref()
         .ok_or_else(|| anyhow!("Not in cluster mode"))?;
 
-    // --- Step 1: Pre-flight checks and client setup ---
+    // --- Step 1: Pre-flight checks ---
     let source_node = cluster
         .nodes
         .get(&source_id)
@@ -89,21 +86,46 @@ async fn run_reshard_orchestrator(
         ));
     }
 
-    let source_addr: SocketAddr = source_node.addr.parse()?;
-    let dest_addr: SocketAddr = dest_node.addr.parse()?;
+    // --- Step 2: Establish a persistent connection pool to all cluster nodes ---
+    info!("[RESHARD] Building connection pool to all cluster nodes...");
+    let mut client_pool: HashMap<String, ClusterClient> = HashMap::new();
 
-    info!(
-        "[RESHARD] Connecting to source node {} ({})",
-        source_id, source_addr
-    );
-    let mut source_client = ClusterClient::connect(source_addr).await?;
-    info!(
-        "[RESHARD] Connecting to destination node {} ({})",
-        dest_id, dest_addr
-    );
-    let mut dest_client = ClusterClient::connect(dest_addr).await?;
+    for node_entry in cluster.nodes.iter() {
+        let node_id = node_entry.key();
+        let node_info = &node_entry.value().node_info;
+        if let Ok(addr) = node_info.addr.parse::<SocketAddr>() {
+            match ClusterClient::connect(addr).await {
+                Ok(client) => {
+                    client_pool.insert(node_id.clone(), client);
+                    info!("-> Connected to node {} ({})", node_id, addr);
+                }
+                Err(e) => {
+                    warn!(
+                        "-> FAILED to connect to node {} ({}): {}. It may not receive resharding updates.",
+                        node_id, addr, e
+                    );
+                }
+            }
+        }
+    }
 
-    // --- Step 2: Iterate through each slot and migrate it ---
+    // --- PERBAIKAN: Ambil (pindahkan) client dari pool, jangan meminjamnya ---
+    // Remove the source and destination clients from the pool to get mutable ownership.
+    // The rest of the pool will be used for broadcasting.
+    let mut source_client = client_pool.remove(&source_id).ok_or_else(|| {
+        anyhow!(
+            "Failed to establish connection to source node {}",
+            source_id
+        )
+    })?;
+    let mut dest_client = client_pool.remove(&dest_id).ok_or_else(|| {
+        anyhow!(
+            "Failed to establish connection to destination node {}",
+            dest_id
+        )
+    })?;
+
+    // --- Step 3: Iterate through each slot and migrate it ---
     for slot in slots {
         info!("[RESHARD SLOT {}] Starting process.", slot);
         if !source_node.slots.contains(&slot) {
@@ -114,7 +136,7 @@ async fn run_reshard_orchestrator(
             continue;
         }
 
-        // --- Step 2a: Set IMPORTING/MIGRATING state ---
+        // --- Step 3a: Set IMPORTING/MIGRATING state ---
         info!(
             "[RESHARD SLOT {}] Step 1/5: Setting slot to IMPORTING on destination {}.",
             slot, dest_id
@@ -141,7 +163,7 @@ async fn run_reshard_orchestrator(
             ])
             .await?;
 
-        // --- Step 2b: Migrate all keys in the slot ---
+        // --- Step 3b: Migrate all keys in the slot ---
         info!("[RESHARD SLOT {}] Step 3/5: Migrating keys...", slot);
         loop {
             let keys_to_move = source_client.get_keys_in_slot(slot, 10).await?;
@@ -164,43 +186,33 @@ async fn run_reshard_orchestrator(
             }
         }
 
-        // --- Step 2c: Finalize the slot ownership change across the cluster ---
+        // --- Step 3c: Finalize the slot ownership change across the cluster ---
         info!(
             "[RESHARD SLOT {}] Step 4/5: Broadcasting final ownership to all nodes.",
             slot
         );
-        for node_entry in cluster.nodes.iter() {
-            let node_info = &node_entry.value().node_info;
-            info!("  -> Notifying node {} ({})", node_info.id, &node_info.addr);
-            if let Ok(node_addr) = node_info.addr.parse() {
-                if let Ok(mut client) = ClusterClient::connect(node_addr).await {
-                    let setslot_args = vec![
-                        "SETSLOT".into(),
-                        slot.to_string().into(),
-                        "NODE".into(),
-                        dest_id.clone().into(),
-                    ];
-                    if let Err(e) = client.cluster_setslot(setslot_args).await {
-                        warn!(
-                            "Failed to notify node {}: {}. Gossip will eventually sync.",
-                            &node_info.addr, e
-                        );
-                    }
-                } else {
-                    warn!(
-                        "Failed to connect to node {} for SETSLOT. Gossip will eventually sync.",
-                        &node_info.addr
-                    );
-                }
-            } else {
+        let setslot_args = vec![
+            "SETSLOT".into(),
+            slot.to_string().into(),
+            "NODE".into(),
+            dest_id.clone().into(),
+        ];
+
+        // Broadcast to the remaining clients in the pool
+        for (node_id, client) in client_pool.iter_mut() {
+            info!("  -> Notifying node {}", node_id);
+            if let Err(e) = client.cluster_setslot(setslot_args.clone()).await {
                 warn!(
-                    "Could not parse address for node {}: {}",
-                    node_info.id, &node_info.addr
+                    "Failed to notify node {}: {}. Gossip will eventually sync.",
+                    node_id, e
                 );
             }
         }
+        // Also send to source and destination
+        source_client.cluster_setslot(setslot_args.clone()).await?;
+        dest_client.cluster_setslot(setslot_args.clone()).await?;
 
-        // --- Step 2d: Persist the configuration ---
+        // --- Step 3d: Persist the configuration ---
         info!(
             "[RESHARD SLOT {}] Step 5/5: Saving new cluster configuration.",
             slot
