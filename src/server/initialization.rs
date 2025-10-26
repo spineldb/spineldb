@@ -7,7 +7,7 @@ use super::context::ServerContext;
 use crate::config::Config;
 use crate::core::persistence::{AofLoader, spldb::SpldbLoader};
 use crate::core::state::ServerState;
-use crate::core::tasks::cache_gc::garbage_collect_from_manifest;
+use crate::core::tasks::cache_gc::garbage_collect_and_compact_manifest;
 use anyhow::{Result, anyhow};
 use std::fs::File;
 use std::io::BufReader;
@@ -59,7 +59,7 @@ pub async fn setup(
 
     load_persistence_data(&server_state).await?;
 
-    if let Err(e) = garbage_collect_from_manifest(&server_state).await {
+    if let Err(e) = garbage_collect_and_compact_manifest(&server_state).await {
         warn!(
             "On-disk cache garbage collection failed: {}. This may lead to wasted disk space.",
             e
@@ -86,11 +86,12 @@ pub async fn setup(
     })
 }
 
+/// Initializes the on-disk cache manifest file and directory.
 async fn setup_cache_manifest(server_state: &Arc<ServerState>) -> Result<()> {
     let cache_path_str = server_state.config.lock().await.cache.on_disk_path.clone();
     let old_cache_path = std::path::Path::new("cache_files");
 
-    // Migrate old cache directory if it exists
+    // Migrate old cache directory if it exists for backward compatibility.
     if old_cache_path.exists() {
         let new_cache_path = std::path::Path::new(&cache_path_str);
         if !new_cache_path.exists() {
@@ -188,7 +189,7 @@ fn log_startup_info(config: &Config) {
 async fn load_persistence_data(server_state: &Arc<ServerState>) -> Result<()> {
     let config = server_state.config.lock().await;
 
-    // Create parent directories for persistence files if they don't exist
+    // Create parent directories for persistence files if they don't exist.
     for path_str in [&config.persistence.aof_path, &config.persistence.spldb_path] {
         let path = std::path::Path::new(path_str);
         if let Some(parent) = path.parent()
@@ -205,6 +206,7 @@ async fn load_persistence_data(server_state: &Arc<ServerState>) -> Result<()> {
         }
     }
 
+    // Check for leftover AOF temp files from a previous crashed rewrite.
     let aof_path_str = &config.persistence.aof_path;
     let aof_path = std::path::Path::new(aof_path_str);
     if let Some(parent_dir) = aof_path.parent()
