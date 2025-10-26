@@ -534,7 +534,7 @@ impl Config {
         let available_memory = get_available_memory()?;
         let resolved_maxmemory = resolve_maxmemory(raw_config.maxmemory, available_memory)?;
 
-        let config = Config {
+        let mut config = Config {
             host: raw_config.host,
             port: raw_config.port,
             password: raw_config.password,
@@ -555,12 +555,12 @@ impl Config {
             metrics: raw_config.metrics,
         };
 
-        config.validate()?;
+        config.validate(available_memory)?;
         Ok(config)
     }
 
     /// Validates the resolved configuration to ensure logical consistency.
-    fn validate(&self) -> Result<()> {
+    fn validate(&mut self, available_memory: u64) -> Result<()> {
         if self.port == 0 {
             return Err(anyhow!("port cannot be 0"));
         }
@@ -574,14 +574,26 @@ impl Config {
             return Err(anyhow!("max_clients cannot be 0"));
         }
 
-        if let Some(mem) = self.maxmemory
-            && mem > 0
-            && mem < 1_000_000
-        {
-            warn!(
-                "low maxmemory setting: {} bytes. This may cause performance issues.",
-                mem
-            );
+        if let Some(mem) = self.maxmemory {
+            if mem > 0 && mem < 1_000_000 {
+                warn!(
+                    "low maxmemory setting: {} bytes. This may cause performance issues.",
+                    mem
+                );
+            }
+            if mem as u64 > available_memory {
+                warn!(
+                    "WARNING: maxmemory is set to {} bytes, which is greater than the total available memory ({} bytes).",
+                    mem, available_memory
+                );
+            }
+        }
+
+        if self.persistence.aof_enabled {
+            self.validate_persistence_path(&self.persistence.aof_path, "aof_path")?;
+        }
+        if self.persistence.spldb_enabled {
+            self.validate_persistence_path(&self.persistence.spldb_path, "spldb_path")?;
         }
 
         if self.persistence.spldb_enabled {
@@ -614,7 +626,10 @@ impl Config {
 
         if self.cluster.enabled {
             if self.cluster.failover_quorum == 0 {
-                return Err(anyhow!("cluster.failover_quorum cannot be 0"));
+                self.cluster.failover_quorum = 2;
+                warn!(
+                    "WARNING: cluster.failover_quorum is not set. Defaulting to 2. This is safe for a 3-master cluster. For other setups, please set it to (N/2 + 1) where N is the total number of masters."
+                );
             }
             if self.cluster.failover_quorum == 1 {
                 warn!(
@@ -641,6 +656,29 @@ impl Config {
                     "metrics.port cannot be the same as the main server port"
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// Helper to validate persistence paths.
+    fn validate_persistence_path(&self, path_str: &str, name: &str) -> Result<()> {
+        let path = std::path::Path::new(path_str);
+        if path.is_dir() {
+            return Err(anyhow!(
+                "{} path '{}' cannot be a directory.",
+                name,
+                path_str
+            ));
+        }
+        if let Some(parent) = path.parent()
+            && parent.exists()
+            && !parent.is_dir()
+        {
+            return Err(anyhow!(
+                "Parent path for {} ('{}') exists but is not a directory.",
+                name,
+                parent.display()
+            ));
         }
         Ok(())
     }
