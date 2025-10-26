@@ -105,7 +105,7 @@ impl ExecutableCommand for BitOp {
 
         let max_len = string_operands.iter().map(|s| s.len()).max().unwrap_or(0);
 
-        // Perform a pre-flight check against maxmemory before allocating the result buffer.
+        // --- Pre-flight check against maxmemory ---
         if let Some(maxmem) = ctx.state.config.lock().await.maxmemory {
             let dest_shard_index = ctx.db.get_shard_index(&self.dest_key);
             let old_dest_size = guards
@@ -122,10 +122,14 @@ impl ExecutableCommand for BitOp {
                 if policy == EvictionPolicy::NoEviction {
                     return Err(SpinelDBError::MaxMemoryReached);
                 }
+
+                // Attempt to evict a key to make space.
                 if !ctx.db.evict_one_key(&ctx.state).await {
+                    // Eviction failed, so we are still over the limit.
                     return Err(SpinelDBError::MaxMemoryReached);
                 }
-                // Re-check after eviction.
+
+                // Re-check memory after eviction.
                 let total_memory_after_evict: usize =
                     ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
                 if total_memory_after_evict.saturating_add(estimated_increase) > maxmem {
