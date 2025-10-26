@@ -3,6 +3,7 @@
 //! Defines the `DbShard` and `ShardCache` structs, which form the fundamental
 //! storage units within a `Db`.
 
+use crate::core::cluster::slot::get_slot;
 use crate::core::storage::data_types::StoredValue;
 use bytes::Bytes;
 use lru::LruCache;
@@ -30,13 +31,15 @@ pub struct DbShard {
 }
 
 /// A `ShardCache` wraps the `LruCache` and manages associated metadata like
-/// memory accounting, key counting, and the tag-to-keys index.
+/// memory accounting, key counting, and secondary indexes.
 #[derive(Debug)]
 pub struct ShardCache {
     /// The underlying key-value store with LRU behavior.
     store: LruCache<Bytes, StoredValue>,
     /// An index mapping tags to a set of keys associated with that tag.
     pub tag_index: HashMap<Bytes, HashSet<Bytes>>,
+    /// A secondary index mapping a cluster slot to the keys within it.
+    pub slot_index: HashMap<u16, HashSet<Bytes>>,
     /// A shared atomic counter for the shard's total memory usage.
     memory_counter: Arc<AtomicUsize>,
     /// A shared atomic counter for the shard's total key count.
@@ -82,6 +85,7 @@ impl ShardCache {
         Self {
             store: LruCache::new(capacity),
             tag_index: HashMap::with_capacity(DEFAULT_TAG_INDEX_CAPACITY),
+            slot_index: HashMap::new(),
             memory_counter,
             key_counter,
         }
@@ -90,7 +94,6 @@ impl ShardCache {
     /// Puts a key-value pair into the cache, handling all memory and key count accounting.
     /// It returns the old value if the key already existed.
     pub fn put(&mut self, key: Bytes, mut value: StoredValue) -> Option<StoredValue> {
-        // Always calculate the accurate size of the data payload before insertion.
         value.size = value.data.memory_usage();
         let new_item_mem = key.len() + value.size;
 
@@ -101,24 +104,34 @@ impl ShardCache {
             let old_item_mem = key.len() + old.size;
             let mem_diff = new_item_mem as isize - old_item_mem as isize;
             self.update_memory(mem_diff);
-            // Tags from the old value must be cleared before adding new ones.
             self.remove_key_from_tags(&key);
         } else {
-            // This is a new key.
+            // This is a new key, update memory, key counters, and the slot index.
             self.update_memory(new_item_mem as isize);
             self.key_counter.fetch_add(1, Ordering::Relaxed);
+
+            let slot = get_slot(&key);
+            self.slot_index.entry(slot).or_default().insert(key.clone());
         }
         old_value
     }
 
     /// Removes a key from the cache, returning the value if the key was present.
-    /// This method handles all necessary memory and key count decrements.
     pub fn pop(&mut self, key: &Bytes) -> Option<StoredValue> {
         if let Some(popped_value) = self.store.pop(key) {
             let mem_to_free = key.len() + popped_value.size;
             self.update_memory(-(mem_to_free as isize));
             self.key_counter.fetch_sub(1, Ordering::Relaxed);
             self.remove_key_from_tags(key);
+
+            let slot = get_slot(key);
+            if let Some(keys_in_slot) = self.slot_index.get_mut(&slot) {
+                keys_in_slot.remove(key);
+                if keys_in_slot.is_empty() {
+                    self.slot_index.remove(&slot);
+                }
+            }
+
             Some(popped_value)
         } else {
             None
@@ -132,6 +145,15 @@ impl ShardCache {
             self.update_memory(-(mem_to_free as isize));
             self.key_counter.fetch_sub(1, Ordering::Relaxed);
             self.remove_key_from_tags(&k);
+
+            let slot = get_slot(&k);
+            if let Some(keys_in_slot) = self.slot_index.get_mut(&slot) {
+                keys_in_slot.remove(&k);
+                if keys_in_slot.is_empty() {
+                    self.slot_index.remove(&slot);
+                }
+            }
+
             Some((k, v))
         } else {
             None
@@ -156,6 +178,7 @@ impl ShardCache {
         }
         self.store.clear();
         self.tag_index.clear();
+        self.slot_index.clear();
         self.memory_counter.store(0, Ordering::Relaxed);
         self.key_counter.store(0, Ordering::Relaxed);
     }
@@ -226,7 +249,7 @@ impl ShardCache {
         }
     }
 
-    // Returns all tags associated with a given key.
+    /// Returns all tags associated with a given key.
     pub fn get_tags_for_key(&self, key: &Bytes) -> Vec<Bytes> {
         self.tag_index
             .iter()

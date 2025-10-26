@@ -2,7 +2,6 @@
 
 use super::shard::DbShard;
 use super::transaction::TransactionState;
-use crate::core::cluster::slot::get_slot as get_cluster_slot;
 use crate::core::storage::data_types::StoredValue;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -63,17 +62,29 @@ impl Db {
             .sum()
     }
 
-    /// Gets a list of keys belonging to a specific cluster slot.
+    /// Gets a list of keys belonging to a specific cluster slot using the slot index.
     pub async fn get_keys_in_slot(&self, slot: u16, count: usize) -> Vec<Bytes> {
-        let all_guards = self.lock_all_shards().await;
-        let mut keys_in_slot = Vec::new();
-        for guard in all_guards {
-            for (key, value) in guard.iter() {
-                if keys_in_slot.len() >= count {
-                    return keys_in_slot;
-                }
-                if !value.is_expired() && get_cluster_slot(key) == slot {
-                    keys_in_slot.push(key.clone());
+        let mut keys_in_slot = Vec::with_capacity(count);
+
+        // Iterate through all shards, as keys for a single slot can be distributed
+        // across shards based on their primary hash (not the slot hash).
+        for shard in &self.shards {
+            if keys_in_slot.len() >= count {
+                break;
+            }
+
+            let guard = shard.entries.lock().await;
+
+            // Use the secondary index for an efficient O(1) lookup within the shard.
+            if let Some(keys_for_slot) = guard.slot_index.get(&slot) {
+                for key in keys_for_slot {
+                    // It's still necessary to check for expiration.
+                    if guard.peek(key).is_some_and(|v| !v.is_expired()) {
+                        keys_in_slot.push(key.clone());
+                        if keys_in_slot.len() >= count {
+                            break;
+                        }
+                    }
                 }
             }
         }

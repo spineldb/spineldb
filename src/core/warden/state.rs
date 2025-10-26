@@ -7,7 +7,7 @@ use super::client::WardenClient;
 use super::config::MonitoredMaster;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -113,9 +113,9 @@ pub struct MasterState {
     pub last_failover_time: Instant,
     /// The last epoch this Warden has cast a vote for, preventing duplicate voting.
     pub last_voted_epoch: u64,
-    /// Tracks ongoing reconfiguration tasks to prevent spawning duplicate tasks for the same replica.
-    /// Key: Replica address. Value: A cloneable mutex acting as a lock.
-    pub reconfigurations_in_progress: HashMap<SocketAddr, Arc<Mutex<()>>>,
+    /// [BARU] A set of replica addresses that still need to be reconfigured after a failover.
+    /// This state is persisted across Warden restarts (in memory).
+    pub replicas_pending_reconfiguration: HashSet<SocketAddr>,
 }
 
 impl MasterState {
@@ -141,24 +141,23 @@ impl MasterState {
             // Initialize with a time far in the past to allow the first failover immediately.
             last_failover_time: Instant::now() - Duration::from_secs(3600 * 24),
             last_voted_epoch: 0,
-            reconfigurations_in_progress: HashMap::new(),
+            // [BARU] Initialize the new set.
+            replicas_pending_reconfiguration: HashSet::new(),
         }
     }
 
     /// Resets the failover-related fields to their default state.
-    /// This is called after a failover completes or is aborted.
     pub fn reset_failover_state(&mut self) {
         self.failover_state = FailoverState::None;
         self.failover_start_time = None;
         self.promotion_candidate = None;
         self.votes.clear();
-        // Also clear any in-progress reconfiguration locks.
-        self.reconfigurations_in_progress.clear();
+        // [BARU] Also clear any pending reconfiguration tasks.
+        self.replicas_pending_reconfiguration.clear();
     }
 }
 
 /// The top-level, globally shared state for the entire Warden process.
-/// It is wrapped in an `Arc` and passed to all tasks.
 #[derive(Debug)]
 pub struct GlobalWardenState {
     /// The unique run ID of this Warden instance.

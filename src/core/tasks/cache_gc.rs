@@ -5,20 +5,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::fs::{self, File as TokioFile, OpenOptions};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::core::state::ServerState;
 use crate::core::storage::cache_types::{ManifestEntry, ManifestState};
 
-/// The interval for the on-disk cache garbage collector.
-const ON_DISK_CACHE_GC_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
+/// The interval for the on-disk cache garbage collector and compactor.
+const GC_COMPACTION_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 /// Grace period before a PENDING file is considered for deletion.
 const GC_PENDING_GRACE_PERIOD: Duration = Duration::from_secs(300); // 5 minutes
 
-/// A task that periodically cleans up orphaned cache files from the on-disk cache directory.
+/// A task that periodically cleans up orphaned cache files and compacts the manifest.
 pub struct OnDiskCacheGCTask {
     state: Arc<ServerState>,
 }
@@ -28,21 +28,21 @@ impl OnDiskCacheGCTask {
         Self { state }
     }
 
-    /// The main run loop for the garbage collection task.
+    /// The main run loop for the garbage collection and compaction task.
     pub async fn run(self, mut shutdown_rx: broadcast::Receiver<()>) {
-        info!("On-disk cache garbage collection task started.");
-        let mut interval = tokio::time::interval(ON_DISK_CACHE_GC_INTERVAL);
+        info!("On-disk cache GC and compaction task started.");
+        let mut interval = tokio::time::interval(GC_COMPACTION_INTERVAL);
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    info!("Running periodic on-disk cache garbage collection cycle...");
-                    if let Err(e) = garbage_collect_from_manifest(&self.state).await {
-                        warn!("On-disk cache GC cycle failed: {}", e);
+                    info!("Running periodic on-disk cache GC and compaction cycle...");
+                    if let Err(e) = garbage_collect_and_compact_manifest(&self.state).await {
+                        warn!("On-disk cache GC/compaction cycle failed: {}", e);
                     }
                 }
                 _ = shutdown_rx.recv() => {
-                    info!("On-disk cache garbage collection task shutting down.");
+                    info!("On-disk cache GC and compaction task shutting down.");
                     return;
                 }
             }
@@ -50,93 +50,141 @@ impl OnDiskCacheGCTask {
     }
 }
 
-/// The core logic for a single garbage collection cycle based on the manifest.
-pub async fn garbage_collect_from_manifest(state: &Arc<ServerState>) -> anyhow::Result<()> {
+/// The core logic for a single garbage collection and compaction cycle.
+pub async fn garbage_collect_and_compact_manifest(state: &Arc<ServerState>) -> anyhow::Result<()> {
     let manifest_path = get_manifest_path(state).await?;
     if !manifest_path.exists() {
+        debug!("Manifest file does not exist, skipping GC/compaction cycle.");
         return Ok(());
     }
 
-    // Lock the manifest writer to prevent concurrent writes during GC.
-    let _writer_guard = state.cache.manifest_writer.lock().await;
+    // --- Phase 1: Lock, close, and read the existing manifest ---
+    let latest_entries = {
+        let mut writer_guard = state.cache.manifest_writer.lock().await;
 
-    let manifest_file = TokioFile::open(&manifest_path).await?;
-    let mut reader = BufReader::new(manifest_file);
-    let mut line = String::new();
-
-    let mut latest_entries: HashMap<PathBuf, ManifestEntry> = HashMap::new();
-
-    // 1. Read the entire manifest to get the latest state for each file path.
-    while reader.read_line(&mut line).await? > 0 {
-        if let Ok(entry) = serde_json::from_str::<ManifestEntry>(&line) {
-            latest_entries.insert(entry.path.clone(), entry);
+        // Take ownership of the writer, closing the file handle. This is critical.
+        if let Some(mut writer) = writer_guard.take() {
+            writer.flush().await?;
         }
-        line.clear();
-    }
+        drop(writer_guard); // Release the lock on the Option<>, not the file itself.
+
+        let manifest_file = TokioFile::open(&manifest_path).await?;
+        let mut reader = BufReader::new(manifest_file);
+        let mut line = String::new();
+        let mut entries: HashMap<PathBuf, ManifestEntry> = HashMap::new();
+
+        // Read the entire manifest to get the latest state for each file path.
+        while reader.read_line(&mut line).await? > 0 {
+            if let Ok(entry) = serde_json::from_str::<ManifestEntry>(&line) {
+                entries.insert(entry.path.clone(), entry);
+            }
+            line.clear();
+        }
+        entries
+    };
 
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    let mut deleted_count = 0;
+    let mut deleted_files_count = 0;
     let mut new_manifest_content = String::new();
 
-    // 2. Process each path and decide its fate.
-    for (path, entry) in latest_entries {
-        let mut keep_entry = true;
+    // --- Phase 2: Process entries for GC and build the new, compacted manifest content ---
+    for (_path, entry) in latest_entries {
+        let mut keep_entry_in_new_manifest = false;
+
         match entry.state {
             ManifestState::Pending => {
-                // If a file is stuck in PENDING for too long, it's from a crashed write.
                 if entry.timestamp + GC_PENDING_GRACE_PERIOD.as_secs() < now_secs {
-                    if let Err(e) = tokio::fs::remove_file(&path).await {
-                        warn!("GC failed to remove stale PENDING file {:?}: {}", path, e);
-                    } else {
-                        deleted_count += 1;
+                    // This file was part of a write that likely crashed. Clean it up.
+                    match fs::remove_file(&entry.path).await {
+                        Ok(_) => deleted_files_count += 1,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // Already gone, still count it as "cleaned up".
+                            deleted_files_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "GC failed to remove stale PENDING file {:?}: {}",
+                                entry.path, e
+                            );
+                            keep_entry_in_new_manifest = true; // Retry next time
+                        }
                     }
-                    keep_entry = false; // Don't keep this stale entry in the new manifest.
+                } else {
+                    // The write might still be in progress. Keep the entry for the next cycle.
+                    keep_entry_in_new_manifest = true;
                 }
             }
             ManifestState::PendingDelete => {
-                if let Err(e) = tokio::fs::remove_file(&path).await {
-                    // It might have already been deleted, which is fine.
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        warn!("GC failed to remove PENDING_DELETE file {:?}: {}", path, e);
-                    } else {
-                        deleted_count += 1;
+                // This file is marked for deletion.
+                match fs::remove_file(&entry.path).await {
+                    Ok(_) => deleted_files_count += 1,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Already gone, successfully cleaned.
+                        deleted_files_count += 1;
                     }
-                } else {
-                    deleted_count += 1;
+                    Err(e) => {
+                        warn!(
+                            "GC failed to remove PENDING_DELETE file {:?}: {}",
+                            entry.path, e
+                        );
+                        keep_entry_in_new_manifest = true; // Retry next time
+                    }
                 }
-                keep_entry = false; // This entry has been processed.
             }
             ManifestState::Committed => {
-                // Keep committed entries in the manifest.
+                // Keep committed entries, but verify the file still exists on disk.
+                if fs::metadata(&entry.path).await.is_ok() {
+                    keep_entry_in_new_manifest = true;
+                } else {
+                    warn!(
+                        "Manifest entry for {:?} is committed, but file not found. Discarding entry.",
+                        entry.path
+                    );
+                }
             }
         }
-        if keep_entry {
+
+        if keep_entry_in_new_manifest {
             new_manifest_content.push_str(&serde_json::to_string(&entry)?);
             new_manifest_content.push('\n');
         }
     }
 
-    // 3. Atomically rewrite the manifest with only the valid, active entries.
-    let temp_manifest_path = manifest_path.with_extension("tmp.gc");
-    tokio::fs::write(&temp_manifest_path, new_manifest_content).await?;
-    tokio::fs::rename(&temp_manifest_path, &manifest_path).await?;
+    // --- Phase 3: Atomically rewrite the manifest and re-open the writer ---
+    {
+        let temp_manifest_path = manifest_path.with_extension("tmp.gc_compact");
+        fs::write(&temp_manifest_path, &new_manifest_content).await?;
+        fs::rename(&temp_manifest_path, &manifest_path).await?;
 
-    if deleted_count > 0 {
+        let new_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&manifest_path)
+            .await?;
+
+        let new_writer = BufWriter::new(new_file);
+
+        let mut writer_guard = state.cache.manifest_writer.lock().await;
+        *writer_guard = Some(new_writer);
+    }
+
+    if deleted_files_count > 0 {
         info!(
-            "On-disk cache GC cycle complete. Removed {} files.",
-            deleted_count
+            "On-disk cache GC/compaction cycle complete. Removed {} files.",
+            deleted_files_count
         );
     } else {
-        debug!("On-disk cache GC cycle complete. No files to remove.");
+        debug!("On-disk cache GC/compaction cycle complete. No files to remove.");
     }
 
     Ok(())
 }
 
+/// Helper to get the path to the cache manifest file.
 async fn get_manifest_path(state: &Arc<ServerState>) -> anyhow::Result<PathBuf> {
     let cache_path_str = state.config.lock().await.cache.on_disk_path.clone();
     if cache_path_str.is_empty() {
