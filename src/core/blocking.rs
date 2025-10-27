@@ -274,8 +274,11 @@ impl BlockerManager {
                             authenticated_user: ctx.authenticated_user.clone(),
                         };
 
+                        // [REVISED] This is the critical data loss prevention block.
                         if let Err(return_err) = return_push_cmd.execute(&mut source_ctx).await {
-                            // --- THIS IS THE FIXED PART ---
+                            // This is a critical failure. The element was popped from the source,
+                            // failed to be pushed to the destination, AND failed to be returned
+                            // to the source. The data is now lost.
                             let error_message = format!(
                                 "CRITICAL DATA LOSS: Failed to return element '{}' back to source list '{}' after BLMOVE failure. Original PUSH error: {}. Return PUSH error: {}.",
                                 String::from_utf8_lossy(&popped.value),
@@ -285,18 +288,20 @@ impl BlockerManager {
                             );
                             error!("{}", error_message);
 
-                            // Set server to emergency read-only mode.
+                            // Enter emergency read-only mode to prevent further data corruption
+                            // and alert the operator.
                             ctx.state
                                 .is_emergency_read_only
                                 .store(true, std::sync::atomic::Ordering::SeqCst);
                             warn!(
-                                "Server has been put into emergency read-only mode due to potential data loss."
+                                "Server has been put into emergency read-only mode due to potential data loss during BLMOVE."
                             );
 
                             // The original error `e` is still what the client should see.
                             // The `return_err` is for logging and server state management.
                         }
 
+                        // Return the original error from the destination push to the client.
                         return Err(e);
                     }
 
