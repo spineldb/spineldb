@@ -8,6 +8,7 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use tracing::debug;
 
 /// The maximum number of latency samples to store in the history.
 /// This acts as a circular buffer.
@@ -51,43 +52,48 @@ impl LatencyMonitor {
     }
 
     /// Adds a new latency sample to the monitor.
-    /// If the history buffer is full, the oldest sample is removed.
-    /// Large command arguments are truncated to prevent excessive memory usage.
+    /// This uses `try_lock` to avoid blocking the command execution path under contention.
     pub fn add_sample(
         &self,
         command_name: &'static str,
         command_args: Vec<Bytes>,
         latency: Duration,
     ) {
-        let mut samples = self.samples.lock();
-        let mut next_id_guard = self.next_id.lock();
+        // Use a non-blocking lock to prevent adding latency to the hot path.
+        if let Some(mut samples) = self.samples.try_lock() {
+            // A separate lock for the ID is acceptable as it's only held briefly.
+            let mut next_id_guard = self.next_id.lock();
 
-        if samples.len() == LATENCY_HISTORY_LEN {
-            samples.pop_front();
+            if samples.len() == LATENCY_HISTORY_LEN {
+                samples.pop_front();
+            }
+
+            // Truncate any arguments that exceed the defined maximum length.
+            let truncated_args: Vec<Bytes> = command_args
+                .into_iter()
+                .map(|arg| {
+                    if arg.len() > SLOWLOG_MAX_ARG_LEN {
+                        let mut truncated = arg.slice(..SLOWLOG_MAX_ARG_LEN).to_vec();
+                        truncated.extend_from_slice(b"... (truncated)");
+                        Bytes::from(truncated)
+                    } else {
+                        arg
+                    }
+                })
+                .collect();
+
+            samples.push_back(LatencySample {
+                timestamp: Instant::now(),
+                latency,
+                command_name,
+                command_args: truncated_args,
+            });
+
+            *next_id_guard += 1;
+        } else {
+            // If the lock is contended, it's better to drop the sample than to block.
+            debug!("Skipping latency sample due to contention on monitor lock.");
         }
-
-        // Truncate any arguments that exceed the defined maximum length.
-        let truncated_args: Vec<Bytes> = command_args
-            .into_iter()
-            .map(|arg| {
-                if arg.len() > SLOWLOG_MAX_ARG_LEN {
-                    let mut truncated = arg.slice(..SLOWLOG_MAX_ARG_LEN).to_vec();
-                    truncated.extend_from_slice(b"... (truncated)");
-                    Bytes::from(truncated)
-                } else {
-                    arg
-                }
-            })
-            .collect();
-
-        samples.push_back(LatencySample {
-            timestamp: Instant::now(),
-            latency,
-            command_name,
-            command_args: truncated_args,
-        });
-
-        *next_id_guard += 1;
     }
 
     /// Implements the `SLOWLOG GET [count]` command.
@@ -175,7 +181,7 @@ impl LatencyMonitor {
         let samples = self.samples.lock();
 
         if samples.is_empty() {
-            return "No latency samples available. Latency monitoring is disabled.".to_string();
+            return "No latency samples available.".to_string();
         }
 
         let mut max_latency = Duration::from_micros(0);

@@ -16,6 +16,7 @@ pub fn glob_match(pattern: &[u8], string: &[u8]) -> bool {
 
 /// The recursive implementation of `glob_match`.
 fn glob_match_recursive(mut pattern: &[u8], mut string: &[u8], depth: u32) -> bool {
+    // Prevent stack overflow from maliciously crafted patterns.
     if depth > MAX_GLOB_RECURSION_DEPTH {
         return false;
     }
@@ -31,6 +32,7 @@ fn glob_match_recursive(mut pattern: &[u8], mut string: &[u8], depth: u32) -> bo
                     return true;
                 }
                 for i in 0..=string.len() {
+                    // Recurse to check if the rest of the pattern matches the rest of the string.
                     if glob_match_recursive(pattern, &string[i..], depth + 1) {
                         return true;
                     }
