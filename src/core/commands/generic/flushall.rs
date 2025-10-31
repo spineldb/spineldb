@@ -46,7 +46,7 @@ impl ExecutableCommand for FlushAll {
             .load(Ordering::Relaxed)
         {
             return Err(SpinelDBError::InvalidState(
-                "Cannot FLUSHALL when a background save is in progress".into(),
+                "Cannot FLUSHALL when a background save is in progress".to_string(),
             ));
         }
 
@@ -138,6 +138,7 @@ impl ExecutableCommand for FlushAll {
             }
         }
 
+        // Reset the dirty keys counter after flushing.
         ctx.state
             .persistence
             .dirty_keys_counter
@@ -156,6 +157,8 @@ impl CommandSpec for FlushAll {
     }
 
     fn flags(&self) -> CommandFlags {
+        // NO_PROPAGATE is correct because FLUSHALL handles its own cluster-wide
+        // propagation by sending FLUSHDB to each master individually.
         CommandFlags::WRITE | CommandFlags::NO_PROPAGATE
     }
 
