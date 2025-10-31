@@ -18,6 +18,7 @@ use crate::core::latency::LatencyMonitor;
 use crate::core::pubsub::PubSubManager;
 use crate::core::replication::backlog::ReplicationBacklog;
 use crate::core::scripting::lua_manager::LuaManager;
+use crate::core::search::index::SearchIndex;
 use crate::core::storage::db::Db;
 use crate::core::stream_blocking::StreamBlockerManager;
 use crate::core::tasks::lazy_free::LazyFreeItem;
@@ -77,6 +78,8 @@ pub struct ServerState {
     pub evalsha_in_flight: Arc<AtomicUsize>,
     /// The manager for all publish-subscribe channels and patterns.
     pub pubsub: PubSubManager,
+    /// A map of all search indexes, keyed by index name.
+    pub search_indexes: Arc<DashMap<String, Arc<SearchIndex>>>,
     /// Manages Lua scripts for `EVAL` and `EVALSHA`.
     pub scripting: Arc<LuaManager>,
     /// The central event bus that propagates write commands to the AOF and replication subsystems.
@@ -219,6 +222,7 @@ impl ServerState {
             is_emergency_read_only: AtomicBool::new(false),
             is_read_only_due_to_quorum_loss: Arc::new(AtomicBool::new(false)),
             pubsub: PubSubManager::new(),
+            search_indexes: Arc::new(DashMap::new()),
             evalsha_in_flight: Arc::new(AtomicUsize::new(0)),
             scripting: Arc::new(LuaManager::new()),
             event_bus: Arc::new(event_bus),

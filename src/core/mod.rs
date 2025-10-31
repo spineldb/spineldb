@@ -16,12 +16,13 @@ pub mod protocol;
 pub mod pubsub;
 pub mod replication;
 pub mod scripting;
+pub mod search;
 pub mod state;
 pub mod storage;
 pub mod stream_blocking;
 pub mod tasks;
+pub mod types;
 pub mod warden;
-
 pub use commands::Command;
 pub use errors::SpinelDBError;
 pub use protocol::RespValue;

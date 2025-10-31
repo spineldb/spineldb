@@ -34,6 +34,7 @@ pub mod json;
 pub mod key_extractor;
 pub mod list;
 pub mod scan;
+pub mod search;
 pub mod set;
 pub mod streams;
 pub mod string;
@@ -46,7 +47,8 @@ define_commands! {
     dispatchers: {
         (Cache, Cache, cache),
         (Cluster, ClusterInfo, cluster),
-        (Json, Json, json)
+        (Json, Json, json),
+        (Ft, Ft, search)
     },
     standard: {
         // --- Generic Commands ---
