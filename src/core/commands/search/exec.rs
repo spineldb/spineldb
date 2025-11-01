@@ -6,7 +6,7 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use ordered_float::OrderedFloat;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct FtSearchCommand {
@@ -14,6 +14,8 @@ pub struct FtSearchCommand {
     pub query: String,
     pub offset: usize,
     pub count: usize,
+    pub with_scores: bool,
+    pub with_payloads: bool,
 }
 
 impl Default for FtSearchCommand {
@@ -23,6 +25,8 @@ impl Default for FtSearchCommand {
             query: String::new(),
             offset: 0,
             count: 10,
+            with_scores: false,
+            with_payloads: false,
         }
     }
 }
@@ -58,6 +62,7 @@ impl ExecutableCommand for FtSearchCommand {
                 Term::General(_) | Term::GeneralPhrase(_) => {
                     // General terms are allowed to search across all text fields
                 }
+                _ => {}
             }
         }
 
@@ -66,6 +71,7 @@ impl ExecutableCommand for FtSearchCommand {
         let mut text_results: Option<HashSet<u64>> = None;
         let mut numeric_results: Option<HashSet<u64>> = None;
         let mut phrase_results: Option<HashSet<u64>> = None;
+        let mut negated_results: Option<HashSet<u64>> = None;
 
         // 1. Separate and process text and numeric terms
         for term in &query_terms {
@@ -126,7 +132,7 @@ impl ExecutableCommand for FtSearchCommand {
                     }
                 }
                 Term::GeneralPhrase(words) => {
-                    let mut current_phrase_docs: Option<HashSet<u64>> = None;
+                    let mut current_phrase_docs: Option<HashMap<u64, Vec<u32>>> = None;
                     for field_name in index.inverted_indexes.keys() {
                         // Only search text fields for general phrases
                         if let Some(field_schema) = index.schema.fields.get(field_name)
@@ -136,7 +142,9 @@ impl ExecutableCommand for FtSearchCommand {
                             let docs = Self::find_phrase_in_field(&index, field_name, words)
                                 .unwrap_or_default();
                             if let Some(results) = &mut current_phrase_docs {
-                                results.extend(docs);
+                                for (doc_id, positions) in docs {
+                                    results.entry(doc_id).or_default().extend(positions);
+                                }
                             } else {
                                 current_phrase_docs = Some(docs);
                             }
@@ -147,10 +155,11 @@ impl ExecutableCommand for FtSearchCommand {
                         results.retain(|id| {
                             current_phrase_docs
                                 .as_ref()
-                                .is_some_and(|cpd| cpd.contains(id))
+                                .is_some_and(|cpd| cpd.contains_key(id))
                         });
                     } else {
-                        phrase_results = current_phrase_docs;
+                        phrase_results =
+                            current_phrase_docs.map(|cpd| cpd.keys().cloned().collect());
                     }
                 }
                 Term::FieldPhrase(field_name, words) => {
@@ -163,39 +172,110 @@ impl ExecutableCommand for FtSearchCommand {
                         Self::find_phrase_in_field(&index, field_name, words).unwrap_or_default();
 
                     if let Some(results) = &mut phrase_results {
-                        results.retain(|id| current_phrase_docs.contains(id));
+                        results.retain(|id| current_phrase_docs.contains_key(id));
                     } else {
-                        phrase_results = Some(current_phrase_docs);
+                        phrase_results = Some(current_phrase_docs.keys().cloned().collect());
                     }
                 }
+                Term::Not(negated_term) => {
+                    let mut negated_docs: Option<HashSet<u64>> = None;
+                    match &**negated_term {
+                        Term::General(value) => {
+                            let value_spinel: SpinelString = value.clone().into();
+                            let current_term_docs = index
+                                .inverted_indexes
+                                .iter()
+                                .filter_map(|(_, inverted_index)| inverted_index.get(&value_spinel))
+                                .flat_map(|entry| {
+                                    entry.value().keys().cloned().collect::<HashSet<u64>>()
+                                })
+                                .collect::<HashSet<u64>>();
+                            negated_docs = Some(current_term_docs);
+                        }
+                        Term::Field(field_name, value) => {
+                            let value_spinel: SpinelString = value.clone().into();
+                            let current_term_docs = index
+                                .inverted_indexes
+                                .get(field_name)
+                                .and_then(|inverted_index| inverted_index.get(&value_spinel))
+                                .map(|entry| {
+                                    entry.value().keys().cloned().collect::<HashSet<u64>>()
+                                })
+                                .unwrap_or_default();
+                            negated_docs = Some(current_term_docs);
+                        }
+                        _ => {}
+                    }
+
+                    if let Some(docs) = negated_docs {
+                        if let Some(results) = &mut negated_results {
+                            results.extend(docs);
+                        } else {
+                            negated_results = Some(docs);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
         // 2. Combine results from all searches
         let mut final_ids: Option<HashSet<u64>> = None;
-        let all_results = [text_results, numeric_results, phrase_results];
-        for result_set in all_results.iter().flatten() {
+        let result_sets = [text_results, numeric_results, phrase_results];
+        let mut all_results = result_sets.iter().flatten().collect::<Vec<_>>();
+
+        all_results.sort_by_key(|a| a.len());
+
+        for result_set in all_results {
             if let Some(final_set) = &mut final_ids {
                 final_set.retain(|id| result_set.contains(id));
             } else {
                 final_ids = Some(result_set.clone());
             }
         }
+
+        if let Some(negated) = negated_results
+            && let Some(final_set) = &mut final_ids
+        {
+            *final_set = final_set.difference(&negated).cloned().collect();
+        }
+
         let final_ids = final_ids.unwrap_or_default();
 
-        // 3. Retrieve documents and format response
+        // 3. Calculate scores for matching documents
+        let mut scored_docs = Vec::new();
+        for id in final_ids {
+            let score = self.calculate_score(id, &query, &index)?;
+            scored_docs.push((id, score));
+        }
+
+        // 4. Sort by score (descending)
+        scored_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // 5. Retrieve documents and format response
         // Add safety check for the number of results to prevent memory exhaustion
-        let ids_to_process = final_ids.iter().skip(self.offset).take(self.count);
+        let ids_to_process = scored_docs.iter().skip(self.offset).take(self.count);
         let mut matching_docs = Vec::new();
         let max_docs_to_return = std::cmp::min(self.count, 1000); // Additional safety limit
 
-        for (idx, id) in ids_to_process.enumerate() {
+        for (idx, (id, score)) in ids_to_process.enumerate() {
             if idx >= max_docs_to_return {
                 break; // Safety limit reached
             }
 
             if let Some(doc) = index.documents.get(id) {
-                matching_docs.push(RespValue::BulkString(doc.id.clone()));
+                if self.with_scores {
+                    matching_docs.push(RespValue::BulkString(doc.id.clone()));
+                    matching_docs.push(RespValue::BulkString(score.to_string().into()));
+                } else {
+                    matching_docs.push(RespValue::BulkString(doc.id.clone()));
+                }
+
+                if self.with_payloads {
+                    // Add payloads if requested (not currently implemented in document model)
+                }
+
+                // Add document fields as an array
                 let mut hash_resp_array = Vec::new();
                 for (field, value) in &doc.fields {
                     hash_resp_array.push(RespValue::BulkString(field.clone()));
@@ -205,7 +285,7 @@ impl ExecutableCommand for FtSearchCommand {
             }
         }
 
-        let mut result = vec![RespValue::Integer(matching_docs.len() as i64 / 2)];
+        let mut result = vec![RespValue::Integer(scored_docs.len() as i64)];
         result.extend(matching_docs);
 
         Ok((RespValue::Array(result), WriteOutcome::DidNotWrite))
@@ -221,15 +301,15 @@ impl FtSearchCommand {
         index: &crate::core::search::index::SearchIndex,
         field_name: &str,
         words: &[String],
-    ) -> Result<HashSet<u64>, SpinelDBError> {
+    ) -> Result<HashMap<u64, Vec<u32>>, SpinelDBError> {
         if words.is_empty() {
-            return Ok(HashSet::new());
+            return Ok(HashMap::new());
         }
 
         let inverted_index = match index.inverted_indexes.get(field_name) {
             Some(ii) => ii,
             None => {
-                return Ok(HashSet::new());
+                return Ok(HashMap::new());
             }
         };
 
@@ -240,18 +320,16 @@ impl FtSearchCommand {
             Some(postings) => postings,
             None => {
                 // First word not in index, so phrase can't match
-                return Ok(HashSet::new());
+                return Ok(HashMap::new());
             }
         };
 
-        let mut phrase_matching_docs = HashSet::new();
+        let mut phrase_matching_docs: HashMap<u64, Vec<u32>> = HashMap::new();
 
         // For each document that contains the first word
         for (doc_id, first_word_positions) in first_word_postings.value().iter() {
             // Check if subsequent words appear in sequence after the first word
-            let mut found_phrase = false;
-
-            'pos_loop: for &pos in first_word_positions {
+            for &pos in &first_word_positions.positions {
                 let mut current_pos = pos;
                 let mut word_idx = 1; // Start checking from second word
 
@@ -267,7 +345,7 @@ impl FtSearchCommand {
                             // Look for a position that is exactly current_pos + 1
                             let expected_pos = current_pos + 1;
                             let mut found_next_word_at_expected_pos = false;
-                            for &pos_next_word in next_word_positions {
+                            for &pos_next_word in &next_word_positions.positions {
                                 if pos_next_word == expected_pos {
                                     current_pos = pos_next_word;
                                     word_idx += 1;
@@ -290,17 +368,160 @@ impl FtSearchCommand {
 
                 if word_idx == words.len() {
                     // All words found in sequence
-                    found_phrase = true;
-                    break 'pos_loop;
+                    phrase_matching_docs.entry(*doc_id).or_default().push(pos);
                 }
-            }
-
-            if found_phrase {
-                phrase_matching_docs.insert(*doc_id);
             }
         }
 
         Ok(phrase_matching_docs)
+    }
+
+    /// Calculate a simple TF-IDF based score for a document
+    fn calculate_score(
+        &self,
+        doc_id: u64,
+        query: &crate::core::search::query::Query,
+        index: &crate::core::search::index::SearchIndex,
+    ) -> Result<f64, SpinelDBError> {
+        let mut score = 0.0;
+
+        for term in &query.terms {
+            let term_score = match term {
+                crate::core::search::query::Term::General(value) => {
+                    self.calculate_term_score(doc_id, value, index, None)?
+                }
+                crate::core::search::query::Term::Field(field_name, value) => {
+                    self.calculate_term_score(doc_id, value, index, Some(field_name))?
+                }
+                crate::core::search::query::Term::FieldPhrase(field_name, words) => {
+                    let phrase_docs =
+                        FtSearchCommand::find_phrase_in_field(index, field_name, words)?;
+                    if let Some(positions) = phrase_docs.get(&doc_id) {
+                        // Add a bonus for each phrase match
+                        1.5 * positions.len() as f64
+                    } else {
+                        0.0
+                    }
+                }
+                crate::core::search::query::Term::GeneralPhrase(words) => {
+                    let mut score = 0.0;
+                    for field_name in index.inverted_indexes.keys() {
+                        if let Some(field_schema) = index.schema.fields.get(field_name)
+                            && field_schema.field_type
+                                == crate::core::search::schema::FieldType::Text
+                        {
+                            let phrase_docs =
+                                FtSearchCommand::find_phrase_in_field(index, field_name, words)?;
+                            if let Some(positions) = phrase_docs.get(&doc_id) {
+                                // Add a bonus for each phrase match
+                                score += 1.5 * positions.len() as f64;
+                            }
+                        }
+                    }
+                    score
+                }
+                _ => 1.0, // Default score for other term types
+            };
+            score += term_score;
+        }
+
+        Ok(score)
+    }
+
+    /// Calculate TF-IDF score for a specific term in a document
+    fn calculate_term_score(
+        &self,
+        doc_id: u64,
+        term: &str,
+        index: &crate::core::search::index::SearchIndex,
+        field_name: Option<&str>,
+    ) -> Result<f64, SpinelDBError> {
+        let term_spinel: crate::core::types::SpinelString = term.to_lowercase().into();
+        let mut total_score = 0.0;
+
+        let doc_count = index.doc_count.load(std::sync::atomic::Ordering::Relaxed) as f64;
+
+        // If field is specified, only check that field
+        if let Some(field) = field_name {
+            if let Some(inverted_index) = index.inverted_indexes.get(field)
+                && let Some(term_info_map) = inverted_index.get(&term_spinel)
+                && let Some(term_info) = term_info_map.value().get(&doc_id)
+            {
+                let tf = term_info.frequency as f64
+                    / self
+                        .get_document_length(doc_id, index, Some(field))
+                        .max(1.0);
+                let num_docs_with_term = term_info_map.len() as f64;
+                let idf = (doc_count / num_docs_with_term).log10();
+                let weight = self.get_field_weight(index, field);
+                total_score += tf * idf * weight;
+            }
+        } else {
+            // Check all text fields
+            for (field, inverted_index) in &index.inverted_indexes {
+                if let Some(field_schema) = index.schema.fields.get(field)
+                    && matches!(
+                        field_schema.field_type,
+                        crate::core::search::schema::FieldType::Text
+                            | crate::core::search::schema::FieldType::Tag
+                    )
+                    && let Some(term_info_map) = inverted_index.get(&term_spinel)
+                    && let Some(term_info) = term_info_map.value().get(&doc_id)
+                {
+                    let tf = term_info.frequency as f64
+                        / self
+                            .get_document_length(doc_id, index, Some(field))
+                            .max(1.0);
+                    let num_docs_with_term = term_info_map.len() as f64;
+                    let idf = (doc_count / num_docs_with_term).log10();
+                    let weight = self.get_field_weight(index, field);
+                    total_score += tf * idf * weight;
+                }
+            }
+        }
+
+        Ok(total_score)
+    }
+
+    /// Get an estimated document length for a specific field or across all fields
+    fn get_document_length(
+        &self,
+        doc_id: u64,
+        index: &crate::core::search::index::SearchIndex,
+        field_name: Option<&str>,
+    ) -> f64 {
+        let mut total_length = 0.0;
+
+        if let Some(doc) = index.documents.get(&doc_id) {
+            if let Some(field) = field_name {
+                if let Some(length) = doc
+                    .field_lengths
+                    .get(&SpinelString::from(field.to_string()))
+                {
+                    total_length = *length as f64;
+                }
+            } else {
+                total_length = doc.field_lengths.values().sum::<u32>() as f64;
+            }
+        }
+
+        total_length.max(1.0) // Prevent division by zero
+    }
+
+    /// Get the weight for a field if specified in schema
+    fn get_field_weight(
+        &self,
+        index: &crate::core::search::index::SearchIndex,
+        field_name: &str,
+    ) -> f64 {
+        if let Some(field) = index.schema.fields.get(field_name) {
+            for option in &field.options {
+                if let crate::core::search::schema::FieldOption::Weight(weight) = option {
+                    return weight.0;
+                }
+            }
+        }
+        1.0 // Default weight
     }
 }
 
@@ -315,6 +536,8 @@ impl FtSearchCommand {
 
         let mut offset = 0;
         let mut count = 10;
+        let mut with_scores = false;
+        let mut with_payloads = false;
 
         let mut i = 2;
         while i < args.len() {
@@ -351,6 +574,14 @@ impl FtSearchCommand {
 
                     i += 3;
                 }
+                "withscores" => {
+                    with_scores = true;
+                    i += 1;
+                }
+                "withpayloads" => {
+                    with_payloads = true;
+                    i += 1;
+                }
                 _ => {
                     return Err(SpinelDBError::SyntaxError);
                 }
@@ -362,6 +593,8 @@ impl FtSearchCommand {
             query,
             offset,
             count,
+            with_scores,
+            with_payloads,
         })
     }
 }

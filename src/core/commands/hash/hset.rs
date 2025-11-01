@@ -97,13 +97,25 @@ impl ExecutableCommand for HSet {
             let mut index = search_index_arc.lock().await;
             if self.key.starts_with(index.prefix.as_bytes()) {
                 let mut fields_map = HashMap::new();
+                let mut field_lengths = HashMap::new();
                 for (field_key, field_value) in &self.fields {
                     fields_map.insert(field_key.clone(), field_value.clone());
+                    let field_name_str = String::from_utf8_lossy(field_key).to_string();
+                    println!(
+                        "Processing field: {} (from key: {:?})",
+                        field_name_str, field_key
+                    );
+                    if let Some(field_schema) = index.schema.fields.get(&field_name_str) {
+                        let tokens = index
+                            .tokenize_text(field_schema.field_type.clone(), &field_value.clone());
+                        field_lengths.insert(field_key.clone(), tokens.len() as u32);
+                    }
                 }
                 let document = Document {
                     id: self.key.clone(),
                     score: 1.0, // Default score
                     fields: fields_map,
+                    field_lengths,
                 };
                 index.add(document, true)?;
             }

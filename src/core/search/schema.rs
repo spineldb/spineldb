@@ -2,6 +2,7 @@
 
 use crate::core::SpinelDBError;
 use anyhow::Result;
+use ordered_float::OrderedFloat;
 use std::collections::{HashMap, HashSet};
 use strum_macros::{Display, EnumString};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumString, Display)]
@@ -10,13 +11,30 @@ pub enum FieldType {
     Text,
     Tag,
     Numeric,
+    Geo,
+    Vector,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumString, Display)]
-#[strum(serialize_all = "UPPERCASE")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display)]
 pub enum FieldOption {
     Sortable,
     NoIndex,
+    Weight(OrderedFloat<f64>),
+    WithSuffixTrie,
+}
+
+impl std::str::FromStr for FieldOption {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "SORTABLE" => Ok(FieldOption::Sortable),
+            "NOINDEX" => Ok(FieldOption::NoIndex),
+            "WEIGHT" => Err(()), // Special handling needed for Weight with value
+            "WITHSUFFIXTRIE" => Ok(FieldOption::WithSuffixTrie),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -62,7 +80,17 @@ impl Schema {
 
             let mut options = HashSet::new();
             while i < args.len() {
-                if let Ok(option) = args[i].parse::<FieldOption>() {
+                let arg_upper = args[i].to_uppercase();
+                if arg_upper == "WEIGHT" {
+                    if i + 1 >= args.len() {
+                        return Err(SpinelDBError::SyntaxError);
+                    }
+                    let weight_value = args[i + 1]
+                        .parse::<f64>()
+                        .map_err(|_| SpinelDBError::SyntaxError)?;
+                    options.insert(FieldOption::Weight(OrderedFloat(weight_value)));
+                    i += 2; // Skip both WEIGHT and its value
+                } else if let Ok(option) = args[i].parse::<FieldOption>() {
                     options.insert(option);
                     i += 1;
                 } else {

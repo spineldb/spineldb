@@ -10,8 +10,15 @@ use ordered_float::OrderedFloat;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// A map from a term (e.g., a word or a tag) to a map of internal document IDs to a list of term positions.
-pub type InvertedIndex = DashMap<SpinelString, HashMap<u64, Vec<u32>>>;
+/// A struct holding term occurrence information for scoring
+#[derive(Debug, Clone)]
+pub struct TermInfo {
+    pub positions: Vec<u32>,
+    pub frequency: u32,
+}
+
+/// A map from a term (e.g., a word or a tag) to a map of internal document IDs to term occurrence information.
+pub type InvertedIndex = DashMap<SpinelString, HashMap<u64, TermInfo>>;
 
 /// A map from a numeric value to a list of internal document IDs.
 pub type NumericIndex = BTreeMap<OrderedFloat<f64>, Vec<u64>>;
@@ -31,6 +38,7 @@ pub struct SearchIndex {
     pub numeric_indexes: HashMap<String, NumericIndex>,
     /// A map from a document's external ID (doc_id) to its internal ID.
     pub doc_id_map: DashMap<SpinelString, u64>,
+    pub doc_count: AtomicU64,
     next_doc_id: AtomicU64,
 }
 
@@ -41,7 +49,7 @@ impl SearchIndex {
         for (field_name, field) in &schema.fields {
             if !field.options.contains(&FieldOption::NoIndex) {
                 match field.field_type {
-                    FieldType::Text | FieldType::Tag => {
+                    FieldType::Text | FieldType::Tag | FieldType::Geo | FieldType::Vector => {
                         inverted_indexes.insert(field_name.clone(), InvertedIndex::new());
                     }
                     FieldType::Numeric => {
@@ -59,12 +67,14 @@ impl SearchIndex {
             inverted_indexes,
             numeric_indexes,
             doc_id_map: DashMap::new(),
+            doc_count: AtomicU64::new(0),
             next_doc_id: AtomicU64::new(0),
         }
     }
 
     /// Adds a document to the index.
     pub fn add(&mut self, document: Document, replace: bool) -> Result<(), SpinelDBError> {
+        println!("Adding document: {:?} (replace: {})", document.id, replace);
         let doc_id = document.id.clone();
 
         let should_remove_old = if let Some(_old_internal_id) = self.doc_id_map.get(&doc_id) {
@@ -82,6 +92,7 @@ impl SearchIndex {
 
         let internal_id = self.next_doc_id.fetch_add(1, Ordering::SeqCst);
         self.doc_id_map.insert(doc_id.clone(), internal_id);
+        self.doc_count.fetch_add(1, Ordering::SeqCst);
 
         // Collect fields to index first to avoid borrowing issues
         let fields_to_index: Vec<(String, FieldType, SpinelString)> = document
@@ -118,6 +129,7 @@ impl SearchIndex {
         if let Some((_, internal_id)) = self.doc_id_map.remove(doc_id)
             && let Some((_, document)) = self.documents.remove(&internal_id)
         {
+            self.doc_count.fetch_sub(1, Ordering::SeqCst);
             // Collect fields to deindex first to avoid borrowing issues
             let fields_to_deindex: Vec<(String, FieldType, SpinelString)> = document
                 .fields
@@ -155,18 +167,24 @@ impl SearchIndex {
         value: &SpinelString,
         internal_id: u64,
     ) {
+        println!(
+            "Indexing field: {} (type: {:?}) for doc_id: {}",
+            field_name, field_type, internal_id
+        );
         match field_type {
             FieldType::Text | FieldType::Tag => {
                 let terms = self.tokenize_text(field_type, value);
 
                 if let Some(inverted_index) = self.inverted_indexes.get_mut(field_name) {
                     for (term, pos) in terms {
-                        inverted_index
-                            .entry(term)
-                            .or_default()
-                            .entry(internal_id)
-                            .or_default()
-                            .push(pos);
+                        let mut posting_list = inverted_index.entry(term).or_default();
+                        let term_info =
+                            posting_list.entry(internal_id).or_insert_with(|| TermInfo {
+                                positions: Vec::new(),
+                                frequency: 0,
+                            });
+                        term_info.positions.push(pos);
+                        term_info.frequency += 1;
                     }
                 }
             }
@@ -181,6 +199,15 @@ impl SearchIndex {
                         .push(internal_id);
                 }
             }
+
+            // Placeholder for Geo and Vector indexing
+            FieldType::Geo => {
+                // TODO: Implement geospatial indexing
+            }
+
+            FieldType::Vector => {
+                // TODO: Implement vector similarity indexing
+            }
         }
     }
 
@@ -188,24 +215,40 @@ impl SearchIndex {
     fn deindex_field(
         &mut self,
         field_name: &str,
-        _field_type: FieldType,
+        field_type: FieldType,
         value: &SpinelString,
         internal_id: u64,
     ) {
-        // Call tokenize_text before getting a mutable borrow of inverted_indexes
-        let terms = self.tokenize_text(FieldType::Text, value);
+        match field_type {
+            FieldType::Text | FieldType::Tag => {
+                // Call tokenize_text before getting a mutable borrow of inverted_indexes
+                let terms = self.tokenize_text(field_type, value);
 
-        if let Some(inverted_index) = self.inverted_indexes.get_mut(field_name) {
-            for (term, _) in terms {
-                if let Some(mut posting_list) = inverted_index.get_mut(&term) {
-                    posting_list.remove(&internal_id);
+                if let Some(inverted_index) = self.inverted_indexes.get_mut(field_name) {
+                    for (term, _) in terms {
+                        if let Some(mut posting_list) = inverted_index.get_mut(&term) {
+                            posting_list.remove(&internal_id);
+                        }
+                    }
                 }
+            }
+            FieldType::Numeric => {
+                // For numeric fields, we need to iterate through the index to find entries with internal_id
+                if let Some(numeric_index) = self.numeric_indexes.get_mut(field_name) {
+                    for (_value, doc_ids) in numeric_index.iter_mut() {
+                        doc_ids.retain(|&id| id != internal_id);
+                    }
+                }
+            }
+            // Placeholder for Geo and Vector deindexing
+            FieldType::Geo | FieldType::Vector => {
+                // TODO: Implement geospatial and vector deindexing
             }
         }
     }
 
     /// Simple tokenizer for text and tag fields.
-    fn tokenize_text(
+    pub fn tokenize_text(
         &self,
         field_type: FieldType,
         value: &SpinelString,
@@ -235,6 +278,9 @@ impl SearchIndex {
             }
             FieldType::Numeric => {
                 // Numeric fields are not tokenized into text terms.
+            }
+            FieldType::Geo | FieldType::Vector => {
+                // Geo and Vector fields are not tokenized into text terms.
             }
         }
         tokens

@@ -10,4 +10,5 @@ pub struct Document {
     pub id: SpinelString,
     pub score: f64,
     pub fields: HashMap<SpinelString, SpinelString>,
+    pub field_lengths: HashMap<SpinelString, u32>,
 }
