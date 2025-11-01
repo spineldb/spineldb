@@ -79,7 +79,7 @@ pub struct ServerState {
     /// The manager for all publish-subscribe channels and patterns.
     pub pubsub: PubSubManager,
     /// A map of all search indexes, keyed by index name.
-    pub search_indexes: Arc<DashMap<String, Arc<SearchIndex>>>,
+    pub search_indexes: Arc<DashMap<String, Arc<Mutex<SearchIndex>>>>,
     /// Manages Lua scripts for `EVAL` and `EVALSHA`.
     pub scripting: Arc<LuaManager>,
     /// The central event bus that propagates write commands to the AOF and replication subsystems.

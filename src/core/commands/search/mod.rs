@@ -44,16 +44,22 @@ impl ParseCommand for Ft {
 
         let sub_str = extract_string(&args[0])?.to_ascii_lowercase();
         let command_args = &args[1..];
-        let command_args_as_bytes = command_args
+        let command_args_as_spinel_strings = command_args
             .iter()
             .map(extract_bytes)
             .collect::<Result<Vec<SpinelString>, SpinelDBError>>()?;
 
         match sub_str.as_str() {
-            "create" => Ok(Ft::Create(FtCreateCommand::parse(&command_args_as_bytes)?)),
-            "drop" | "dropindex" => Ok(Ft::Drop(FtDropCommand::parse(&command_args_as_bytes)?)),
-            "info" => Ok(Ft::Info(FtInfoCommand::parse(&command_args_as_bytes)?)),
-            "search" => Ok(Ft::Search(FtSearchCommand::parse(&command_args_as_bytes)?)),
+            "create" => Ok(Ft::Create(FtCreateCommand::parse(command_args)?)),
+            "drop" | "dropindex" => Ok(Ft::Drop(FtDropCommand::parse(
+                &command_args_as_spinel_strings,
+            )?)),
+            "info" => Ok(Ft::Info(FtInfoCommand::parse(
+                &command_args_as_spinel_strings,
+            )?)),
+            "search" => Ok(Ft::Search(FtSearchCommand::parse(
+                &command_args_as_spinel_strings,
+            )?)),
             _ => Err(SpinelDBError::UnknownCommand(format!(
                 "FT.{} subcommand not found",
                 sub_str

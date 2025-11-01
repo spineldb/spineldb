@@ -8,12 +8,14 @@ use crate::core::commands::helpers::parse_key_and_field_value_pairs;
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::storage::db::ExecutionContext;
+use crate::core::storage::document::Document;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use indexmap::IndexMap;
+use std::collections::HashMap;
 
-/// Represents the `HSET` command.
+// Represents the `HSET` command.
 #[derive(Debug, Clone, Default)]
 pub struct HSet {
     pub key: Bytes,
@@ -88,6 +90,24 @@ impl ExecutableCommand for HSet {
         } else {
             WriteOutcome::DidNotWrite
         };
+
+        // Update search indexes
+        for mut mut_ref in ctx.state.search_indexes.iter_mut() {
+            let search_index_arc = mut_ref.value_mut();
+            let mut index = search_index_arc.lock().await;
+            if self.key.starts_with(index.prefix.as_bytes()) {
+                let mut fields_map = HashMap::new();
+                for (field_key, field_value) in &self.fields {
+                    fields_map.insert(field_key.clone(), field_value.clone());
+                }
+                let document = Document {
+                    id: self.key.clone(),
+                    score: 1.0, // Default score
+                    fields: fields_map,
+                };
+                index.add(document, true)?;
+            }
+        }
 
         Ok((RespValue::Integer(new_fields_count), outcome))
     }

@@ -18,11 +18,12 @@ impl ExecutableCommand for FtInfoCommand {
         &self,
         ctx: &mut crate::core::storage::db::ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        let index = ctx
+        let search_index_arc = ctx
             .state
             .search_indexes
             .get(&self.index_name)
             .ok_or_else(|| SpinelDBError::Internal("Index does not exist".to_string()))?;
+        let index = search_index_arc.lock().await;
 
         let mut info = Vec::new();
         info.push(RespValue::SimpleString("index_name".to_string()));
