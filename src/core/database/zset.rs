@@ -1,4 +1,4 @@
-// src/core/storage/db/zset.rs
+// src/core/storage/zset.rs
 
 use bytes::Bytes;
 use std::collections::{BTreeSet, HashMap, btree_set};

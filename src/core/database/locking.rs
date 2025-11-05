@@ -1,4 +1,4 @@
-// src/core/storage/db/locking.rs
+// src/core/storage/locking.rs
 
 use super::core::{Db, NUM_SHARDS};
 use super::shard::ShardCache;

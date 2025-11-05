@@ -1,4 +1,4 @@
-// src/core/storage/db/context.rs
+// src/core/storage/context.rs
 
 use super::core::Db;
 use super::locking::ExecutionLocks;
