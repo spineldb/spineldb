@@ -1,10 +1,10 @@
 // src/core/handler/actions/transaction.rs
 
 use crate::connection::SessionState;
+use crate::core::database::Db;
 use crate::core::handler::command_router::RouteResponse;
 use crate::core::handler::transaction_handler::TransactionHandler;
 use crate::core::state::ServerState;
-use crate::core::storage::db::Db;
 use crate::core::{RespValue, SpinelDBError};
 use bytes::Bytes;
 use std::sync::Arc;

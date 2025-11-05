@@ -6,9 +6,9 @@ use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
 };
 use crate::core::commands::helpers::{extract_bytes, extract_string};
+use crate::core::database::{Db, ExecutionContext};
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::{Db, ExecutionContext};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -293,7 +293,7 @@ impl Sort {
     fn get_value_from_guards<'b>(
         &self,
         key: &Bytes,
-        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::database::ShardCache>>,
         db: &Db,
     ) -> Result<Option<StoredValue>, SpinelDBError> {
         let shard_index = db.get_shard_index(key);
@@ -395,7 +395,7 @@ impl Sort {
         &self,
         dest_key: &Bytes,
         items: Vec<Bytes>,
-        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::storage::db::ShardCache>>,
+        guards: &mut BTreeMap<usize, MutexGuard<'b, crate::core::database::ShardCache>>,
         db: &Db,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let list: VecDeque<Bytes> = items.into_iter().collect();

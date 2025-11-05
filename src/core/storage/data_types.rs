@@ -17,7 +17,7 @@ use crate::core::commands::set;
 use crate::core::commands::streams;
 use crate::core::commands::string;
 use crate::core::commands::zset;
-use crate::core::storage::db::zset::SortedSet;
+use crate::core::database::zset::SortedSet;
 use crate::core::storage::stream::Stream;
 use bytes::Bytes;
 use indexmap::IndexMap;

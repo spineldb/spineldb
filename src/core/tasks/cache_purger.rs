@@ -106,7 +106,7 @@ impl CachePurgerTask {
             let unlink_cmd = Command::Unlink(crate::core::commands::generic::Unlink {
                 keys: keys_to_delete,
             });
-            let mut unlink_ctx = crate::core::storage::db::ExecutionContext {
+            let mut unlink_ctx = crate::core::database::ExecutionContext {
                 state: self.state.clone(),
                 locks: db.determine_locks_for_command(&unlink_cmd).await,
                 db: &db,
