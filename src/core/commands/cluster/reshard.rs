@@ -11,7 +11,7 @@ use futures::future::join_all;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 // --- Constants for resharding configuration ---
@@ -121,9 +121,7 @@ async fn run_reshard_orchestrator(
     }
 
     // A simple connection pool for concurrent migrations from the source node.
-    let (client_tx, client_rx) = mpsc::channel(CONCURRENT_MIGRATIONS);
-    // Wrap the receiver in an Arc<Mutex> to allow shared access from multiple tasks.
-    let client_rx = Arc::new(Mutex::new(client_rx));
+    let (client_tx, mut client_rx) = mpsc::channel(CONCURRENT_MIGRATIONS);
 
     for _ in 0..CONCURRENT_MIGRATIONS {
         let client = ClusterClient::connect(source_addr).await?;
@@ -164,7 +162,7 @@ async fn run_reshard_orchestrator(
             .await?;
 
         // Temporarily borrow a client from the pool for admin commands.
-        let mut source_admin_client = client_rx.lock().await.recv().await.unwrap();
+        let mut source_admin_client = client_rx.recv().await.unwrap();
 
         info!(
             "[RESHARD SLOT {}] Step 2/5: Setting slot to MIGRATING on source {}.",
@@ -190,20 +188,18 @@ async fn run_reshard_orchestrator(
                 break;
             }
 
-            // Process the current batch of keys concurrently.
-            let migration_tasks = keys_to_move.into_iter().map(|key| {
-                let client_tx_clone = client_tx.clone();
-                let client_rx_clone = Arc::clone(&client_rx); // [NEW] Clone the Arc to the receiver.
+            // Create a future for each key migration.
+            let mut migration_tasks = Vec::new();
+            for key in keys_to_move {
+                // Acquire a client from the pool for this specific task.
+                let mut client = client_rx
+                    .recv()
+                    .await
+                    .ok_or_else(|| anyhow!("Client pool was closed unexpectedly"))?;
+                let tx = client_tx.clone();
                 let dest_node_clone = dest_node.clone();
-                async move {
-                    // [MODIFIED] Lock the mutex to access the receiver and borrow a client.
-                    let mut client = client_rx_clone
-                        .lock()
-                        .await
-                        .recv()
-                        .await
-                        .ok_or_else(|| anyhow!("Failed to get client from pool"))?;
 
+                let task = async move {
                     debug!(
                         "[RESHARD SLOT {}] Migrating key: {}",
                         slot,
@@ -219,11 +215,12 @@ async fn run_reshard_orchestrator(
 
                     let result = client.migrate_key(dest_host, dest_port, key, 0, 5000).await;
 
-                    // Return the client to the pool via the sender.
-                    let _ = client_tx_clone.send(client).await;
+                    // Return the client to the pool.
+                    let _ = tx.send(client).await;
                     result
-                }
-            });
+                };
+                migration_tasks.push(task);
+            }
 
             // Wait for all migrations in the current batch to complete.
             let results = join_all(migration_tasks).await;
@@ -258,7 +255,7 @@ async fn run_reshard_orchestrator(
         ];
 
         // Authoritatively set the new owner for the slot on all involved nodes.
-        let mut source_client_for_broadcast = client_rx.lock().await.recv().await.unwrap();
+        let mut source_client_for_broadcast = client_rx.recv().await.unwrap();
         source_client_for_broadcast
             .cluster_setslot(setslot_args.clone())
             .await?;
