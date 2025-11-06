@@ -1,4 +1,4 @@
-// src/core/storage/core.rs
+// src/core/database/core.rs
 
 use super::shard::DbShard;
 use super::transaction::TransactionState;

@@ -1,4 +1,4 @@
-// src/core/storage/shard.rs
+// src/core/database/shard.rs
 
 //! Defines the `DbShard` and `ShardCache` structs, which form the fundamental
 //! storage units within a `Db`.

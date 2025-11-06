@@ -1,4 +1,4 @@
-// src/core/storage/eviction.rs
+// src/core/database/eviction.rs
 
 //! Implements the memory eviction logic for a `Db` instance. This is triggered
 //! by the background EvictionManager when `maxmemory` is reached.
