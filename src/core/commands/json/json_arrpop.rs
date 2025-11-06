@@ -82,16 +82,19 @@ impl ExecutableCommand for JsonArrPop {
                     (len as i64 + index_to_pop) as usize
                 };
 
+                // Explicitly check for out-of-bounds access.
                 if final_index >= len {
-                    return Ok(Value::Null); // Index out of bounds
+                    return Ok(Value::Null); // Index out of bounds, nothing to pop.
                 }
 
                 popped_value = arr.remove(final_index);
                 Ok(popped_value.clone())
             };
 
-            // Use find_and_modify to get the popped value
-            helpers::find_and_modify(root, &path, pop_op, false)?;
+            // find_and_modify returns an error if the path does not exist.
+            if helpers::find_and_modify(root, &path, pop_op, false).is_err() {
+                return Ok((RespValue::Null, WriteOutcome::DidNotWrite));
+            }
 
             if popped_value.is_null() {
                 return Ok((RespValue::Null, WriteOutcome::DidNotWrite));

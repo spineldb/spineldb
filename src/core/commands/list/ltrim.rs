@@ -11,7 +11,6 @@ use crate::core::storage::data_types::DataValue;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Default)]
 pub struct LTrim {
@@ -70,21 +69,23 @@ impl ExecutableCommand for LTrim {
         }
 
         let len = list.len() as i64;
+
+        // Convert Redis-style indices (which can be negative) to 0-based usize indices.
         let start = if self.start >= 0 {
             self.start
         } else {
             len + self.start
         }
-        .max(0);
+        .max(0) as usize;
         let stop = if self.stop >= 0 {
             self.stop
         } else {
             len + self.stop
         }
-        .max(0);
+        .max(0) as usize;
 
-        if start > stop || start >= len {
-            // The range is empty or invalid, so the entire list should be deleted.
+        // If the start is after the end, or the start is beyond the list, the list becomes empty.
+        if start > stop || start >= list.len() {
             shard_cache_guard.pop(&self.key);
             return Ok((
                 RespValue::SimpleString("OK".into()),
@@ -92,47 +93,38 @@ impl ExecutableCommand for LTrim {
             ));
         }
 
-        let start_usize = start as usize;
-        let desired_len = (stop - start + 1) as usize;
-        let mut mem_freed = 0;
+        // The stop index is inclusive, so the end of the retained slice is `stop + 1`.
+        let end_exclusive = (stop + 1).min(list.len());
 
-        // Efficiently drain elements from the front.
-        for val in list.drain(0..start_usize) {
-            mem_freed += val.len();
-        }
+        // Efficiently retain only the specified slice.
+        let original_len = list.len();
+        list.drain(end_exclusive..);
+        list.drain(0..start);
 
-        // Efficiently truncate elements from the end.
-        if list.len() > desired_len {
-            for val in list.drain(desired_len..) {
-                mem_freed += val.len();
-            }
-        }
-
-        if mem_freed == 0 {
+        // If nothing was removed, it's a no-op.
+        if list.len() == original_len {
             return Ok((
                 RespValue::SimpleString("OK".into()),
                 WriteOutcome::DidNotWrite,
             ));
         }
 
-        // After trimming, if the list is now empty, delete the key.
-        if list.is_empty() {
+        let outcome = if list.is_empty() {
             shard_cache_guard.pop(&self.key);
-            return Ok((
-                RespValue::SimpleString("OK".into()),
-                WriteOutcome::Delete { keys_deleted: 1 },
-            ));
-        }
+            WriteOutcome::Delete { keys_deleted: 1 }
+        } else {
+            // The list was modified but is not empty. Recalculate size.
+            let new_size = list.iter().map(|b| b.len()).sum();
+            let old_size = entry.size;
+            let mem_diff = new_size as isize - old_size as isize;
 
-        // The list was modified but is not empty. Update metadata.
-        entry.size -= mem_freed;
-        entry.version = entry.version.wrapping_add(1);
-        shard.current_memory.fetch_sub(mem_freed, Ordering::Relaxed);
+            entry.size = new_size;
+            entry.version = entry.version.wrapping_add(1);
+            shard.update_memory(mem_diff);
+            WriteOutcome::Write { keys_modified: 1 }
+        };
 
-        Ok((
-            RespValue::SimpleString("OK".into()),
-            WriteOutcome::Write { keys_modified: 1 },
-        ))
+        Ok((RespValue::SimpleString("OK".into()), outcome))
     }
 }
 
