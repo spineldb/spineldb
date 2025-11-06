@@ -1,4 +1,4 @@
-// src/core/storage/db/transaction.rs
+// src/core/database/transaction.rs
 
 use super::Db;
 use crate::core::Command;

@@ -24,8 +24,8 @@ use crate::core::commands::command_trait::{
 };
 use crate::core::commands::helpers::{extract_bytes, validate_arg_count};
 use crate::core::commands::scan::glob_match;
+use crate::core::database::{ExecutionContext, ExecutionLocks};
 use crate::core::protocol::RespFrame;
-use crate::core::storage::db::{ExecutionContext, ExecutionLocks};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;

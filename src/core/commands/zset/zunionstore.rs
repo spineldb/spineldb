@@ -6,8 +6,8 @@ use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
 };
 use crate::core::commands::helpers::{extract_bytes, extract_string};
+use crate::core::database::ExecutionContext;
 use crate::core::protocol::RespFrame;
-use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -60,17 +60,15 @@ impl ExecutableCommand for ZUnionStore {
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let mut zsets = Vec::with_capacity(self.keys.len());
         // Temporarily take ownership of the guards to pass to the helper.
-        let mut temp_guards = match std::mem::replace(
-            &mut ctx.locks,
-            crate::core::storage::db::ExecutionLocks::None,
-        ) {
-            crate::core::storage::db::ExecutionLocks::Multi { guards } => guards,
-            _ => {
-                return Err(SpinelDBError::Internal(
-                    "ZUNIONSTORE requires multi-key lock".into(),
-                ));
-            }
-        };
+        let mut temp_guards =
+            match std::mem::replace(&mut ctx.locks, crate::core::database::ExecutionLocks::None) {
+                crate::core::database::ExecutionLocks::Multi { guards } => guards,
+                _ => {
+                    return Err(SpinelDBError::Internal(
+                        "ZUNIONSTORE requires multi-key lock".into(),
+                    ));
+                }
+            };
 
         for key in &self.keys {
             zsets.push(get_zset_from_guard(key, ctx.db, &mut temp_guards)?.unwrap_or_default());
@@ -79,7 +77,7 @@ impl ExecutableCommand for ZUnionStore {
         let result_zset = ZSetOp::union(&zsets, &self.weights, self.aggregate);
 
         // Put the guards back into the context before calling the store helper.
-        ctx.locks = crate::core::storage::db::ExecutionLocks::Multi {
+        ctx.locks = crate::core::database::ExecutionLocks::Multi {
             guards: temp_guards,
         };
 

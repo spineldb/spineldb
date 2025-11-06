@@ -6,9 +6,9 @@
 //! handled during slot migrations.
 
 use crate::core::cluster::slot::get_slot;
+use crate::core::database::ExecutionContext;
 use crate::core::state::ServerState;
 use crate::core::storage::data_types::DataValue;
-use crate::core::storage::db::ExecutionContext;
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
@@ -84,7 +84,7 @@ impl StreamBlockerManager {
         // Record the sequence number of each stream *before* releasing the lock.
         // This is crucial for verifying a real change after waking up.
         let mut initial_sequences = HashMap::new();
-        if let crate::core::storage::db::ExecutionLocks::Multi { guards } = &mut ctx.locks {
+        if let crate::core::database::ExecutionLocks::Multi { guards } = &mut ctx.locks {
             for key in keys {
                 let shard_index = ctx.db.get_shard_index(key);
                 let sequence = guards
@@ -133,7 +133,7 @@ impl StreamBlockerManager {
                 return StreamBlockerResult::TimedOut; // Assume failure if locks can't be reacquired
             }
             let mut state_changed = false;
-            if let crate::core::storage::db::ExecutionLocks::Multi { guards } = &mut ctx.locks {
+            if let crate::core::database::ExecutionLocks::Multi { guards } = &mut ctx.locks {
                 for key in keys {
                     let initial_seq = initial_sequences.get(key).unwrap_or(&0);
                     let shard_index = ctx.db.get_shard_index(key);

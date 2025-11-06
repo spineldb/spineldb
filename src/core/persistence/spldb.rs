@@ -6,11 +6,11 @@
 //! single values, used by the MIGRATE/RESTORE commands.
 
 use crate::core::SpinelDBError;
+use crate::core::database::Db;
+use crate::core::database::zset::SortedSet;
 use crate::core::state::ServerState;
 use crate::core::storage::cache_types::{CacheBody, CacheVariant, HttpMetadata};
 use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::Db;
-use crate::core::storage::db::zset::SortedSet;
 use crate::core::storage::stream::{
     ConsumerGroup, PendingEntryInfo, Stream, StreamEntry, StreamId,
 };

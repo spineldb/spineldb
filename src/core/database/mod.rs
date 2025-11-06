@@ -1,4 +1,4 @@
-// src/core/storage/db/mod.rs
+// src/core/database/mod.rs
 
 //! The core database storage engine.
 //! This module defines the `Db` struct, which is a sharded, in-memory key-value store.

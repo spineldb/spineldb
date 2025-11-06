@@ -2,8 +2,8 @@
 
 //! Implements the active, sampling-based TTL expiration manager.
 
+use crate::core::database::Db;
 use crate::core::metrics;
-use crate::core::storage::db::Db;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;

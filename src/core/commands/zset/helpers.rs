@@ -1,8 +1,8 @@
 // src/core/commands/zset/helpers.rs
 
 use crate::core::commands::helpers::extract_string;
+use crate::core::database::zset::{LexBoundary, ScoreBoundary, ZSetEntry};
 use crate::core::protocol::RespFrame;
-use crate::core::storage::db::zset::{LexBoundary, ScoreBoundary, ZSetEntry};
 use crate::core::{RespValue, SpinelDBError};
 use bytes::Bytes;
 

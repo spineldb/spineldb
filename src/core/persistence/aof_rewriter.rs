@@ -151,7 +151,7 @@ async fn do_rewrite_blocking(
             temp_file.write_all(&select_cmd.encode_to_vec()?)?;
 
             // Iterate through each shard in the database.
-            for shard_index in 0..crate::core::storage::db::NUM_SHARDS {
+            for shard_index in 0..crate::core::database::NUM_SHARDS {
                 let shard = db.get_shard(shard_index);
                 let guard = shard.entries.lock().await;
 

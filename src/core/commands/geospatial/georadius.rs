@@ -6,10 +6,10 @@ use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
 };
 use crate::core::commands::helpers::{extract_bytes, extract_string};
+use crate::core::database::zset::{ScoreBoundary, SortedSet};
+use crate::core::database::{Db, ExecutionContext, ExecutionLocks};
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::zset::{ScoreBoundary, SortedSet};
-use crate::core::storage::db::{Db, ExecutionContext, ExecutionLocks};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -175,7 +175,7 @@ impl GeoRadius {
     async fn execute_store<'a>(
         &self,
         results: Vec<GeoPoint>,
-        guards: &mut BTreeMap<usize, MutexGuard<'a, crate::core::storage::db::ShardCache>>,
+        guards: &mut BTreeMap<usize, MutexGuard<'a, crate::core::database::ShardCache>>,
         db: &Db,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let mut keys_modified = 0;
@@ -246,7 +246,7 @@ impl GeoRadius {
     /// Performs the main geo query logic using geohashes.
     async fn get_members_in_radius<'a>(
         &self,
-        guards: &BTreeMap<usize, MutexGuard<'a, crate::core::storage::db::ShardCache>>,
+        guards: &BTreeMap<usize, MutexGuard<'a, crate::core::database::ShardCache>>,
         db: &Db,
     ) -> Result<Vec<GeoPoint>, SpinelDBError> {
         let (center_lon, center_lat) = match &self.center {

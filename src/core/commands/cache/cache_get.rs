@@ -11,12 +11,12 @@ use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
 };
 use crate::core::commands::helpers::{ArgParser, extract_bytes};
+use crate::core::database::ExecutionContext;
 use crate::core::handler::command_router::RouteResponse;
 use crate::core::protocol::RespFrame;
 use crate::core::state::ServerState;
 use crate::core::storage::cache_types::{CacheBody, CachePolicy};
 use crate::core::storage::data_types::{DataValue, StoredValue};
-use crate::core::storage::db::ExecutionContext;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -190,7 +190,7 @@ impl CacheGet {
     async fn serve_fresh_content<'b>(
         &self,
         state: Arc<ServerState>,
-        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+        guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
         let entry = guard.get_mut(&self.key).unwrap();
         let DataValue::HttpCache {
@@ -259,7 +259,7 @@ impl CacheGet {
     async fn serve_stale_and_revalidate<'b>(
         &self,
         state: Arc<ServerState>,
-        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+        guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
         state.cache.increment_stale_hits();
         let entry = guard.get_mut(&self.key).unwrap();
@@ -336,7 +336,7 @@ impl CacheGet {
     async fn serve_from_grace_or_revalidate<'b>(
         &self,
         state: Arc<ServerState>,
-        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+        guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
         let (revalidate_url_from_cache, variant_hash) = {
             let entry = guard.peek(&self.key).unwrap();
@@ -406,7 +406,7 @@ impl CacheGet {
     async fn handle_force_revalidate<'b>(
         &self,
         state: Arc<ServerState>,
-        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+        guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
         let Some(entry) = guard.peek(&self.key) else {
             state.cache.increment_misses();
@@ -460,7 +460,7 @@ impl CacheGet {
     fn is_entry_valid<'b>(
         &self,
         state: &Arc<ServerState>,
-        guard: &mut MutexGuard<'b, crate::core::storage::db::ShardCache>,
+        guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> bool {
         let Some(entry) = guard.peek(&self.key) else {
             return false;
@@ -526,7 +526,7 @@ pub(crate) async fn revalidate_and_update_cache<'a>(
     url: String,
     variant_hash: u64,
     req_headers: Option<Vec<(Bytes, Bytes)>>,
-    guard: &mut MutexGuard<'a, crate::core::storage::db::ShardCache>,
+    guard: &mut MutexGuard<'a, crate::core::database::ShardCache>,
 ) -> Result<Option<CacheBody>, SpinelDBError> {
     state.cache.increment_revalidations();
     debug!(
