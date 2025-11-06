@@ -2,7 +2,7 @@
 
 //! Contains shared logic for parsing JSON paths and manipulating serde_json::Value.
 
-use crate::core::{RespValue, SpinelDBError};
+use crate::core::SpinelDBError;
 use jsonpath_lib::select as find_values_with_jsonpath;
 use serde_json::{Map, Number, Value};
 use std::str::FromStr;
@@ -214,28 +214,6 @@ pub fn format_json_number(num: &Number) -> String {
             .to_string()
     } else {
         num.to_string()
-    }
-}
-
-/// Recursively converts a `serde_json::Value` to a `RespValue` for client responses.
-pub fn json_value_to_resp_value(val: &Value) -> RespValue {
-    match val {
-        Value::Null => RespValue::Null,
-        Value::Bool(b) => RespValue::Integer(i64::from(*b)),
-        Value::Number(n) => RespValue::BulkString(n.to_string().into()),
-        Value::String(s) => RespValue::BulkString(s.clone().into()),
-        Value::Array(arr) => {
-            let items = arr.iter().map(json_value_to_resp_value).collect();
-            RespValue::Array(items)
-        }
-        Value::Object(map) => {
-            let mut items = Vec::with_capacity(map.len() * 2);
-            for (k, v) in map {
-                items.push(RespValue::BulkString(k.clone().into()));
-                items.push(json_value_to_resp_value(v));
-            }
-            RespValue::Array(items)
-        }
     }
 }
 

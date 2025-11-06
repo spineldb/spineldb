@@ -12,9 +12,8 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use ryu;
-use std::sync::atomic::Ordering;
 
-// --- Helper Bersama untuk INCRBYFLOAT ---
+/// Shared logic for INCRBYFLOAT.
 pub async fn do_incr_decr_by_float(
     key: &Bytes,
     by: f64,
@@ -31,27 +30,19 @@ pub async fn do_incr_decr_by_float(
                 .map_err(|_| SpinelDBError::NotAFloat)?;
             let new_val = current_val + by;
 
-            let old_size = s.len();
-
             let mut buffer = ryu::Buffer::new();
             let formatted_new_val = buffer.format(new_val);
-            *s = Bytes::copy_from_slice(formatted_new_val.as_bytes());
+            let new_bytes = Bytes::copy_from_slice(formatted_new_val.as_bytes());
 
-            let new_size = s.len();
+            let old_size = s.len();
+            let new_size = new_bytes.len();
+            *s = new_bytes;
 
             let mem_diff = new_size as isize - old_size as isize;
             entry.size = (entry.size as isize + mem_diff) as usize;
             entry.version = entry.version.wrapping_add(1);
 
-            if mem_diff > 0 {
-                shard
-                    .current_memory
-                    .fetch_add(mem_diff as usize, Ordering::Relaxed);
-            } else {
-                shard
-                    .current_memory
-                    .fetch_sub(mem_diff.unsigned_abs(), Ordering::Relaxed);
-            }
+            shard.update_memory(mem_diff);
 
             return Ok((
                 RespValue::BulkString(Bytes::copy_from_slice(formatted_new_val.as_bytes())),
@@ -62,7 +53,7 @@ pub async fn do_incr_decr_by_float(
         }
     }
 
-    // Key tidak ada, buat baru
+    // Key does not exist, create it with the increment value.
     let mut buffer = ryu::Buffer::new();
     let formatted_val = buffer.format(by);
     let new_val_bytes = Bytes::copy_from_slice(formatted_val.as_bytes());

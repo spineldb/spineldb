@@ -20,11 +20,12 @@ pub struct JsonArrIndex {
     pub path: String,
     pub value_to_find: Value,
     pub start_index: i64,
+    pub end_index: Option<i64>,
 }
 
 impl ParseCommand for JsonArrIndex {
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
-        if args.len() < 3 || args.len() > 4 {
+        if args.len() < 3 || args.len() > 5 {
             return Err(SpinelDBError::WrongArgumentCount(
                 "JSON.ARRINDEX".to_string(),
             ));
@@ -32,10 +33,16 @@ impl ParseCommand for JsonArrIndex {
         let value_to_find: Value = serde_json::from_slice(&extract_bytes(&args[2])?)
             .map_err(|_| SpinelDBError::InvalidState("Invalid JSON value".into()))?;
 
-        let start_index = if args.len() == 4 {
+        let start_index = if args.len() >= 4 {
             extract_string(&args[3])?.parse()?
         } else {
             0
+        };
+
+        let end_index = if args.len() == 5 {
+            Some(extract_string(&args[4])?.parse()?)
+        } else {
+            None
         };
 
         Ok(JsonArrIndex {
@@ -43,6 +50,7 @@ impl ParseCommand for JsonArrIndex {
             path: extract_string(&args[1])?,
             value_to_find,
             start_index,
+            end_index,
         })
     }
 }
@@ -75,12 +83,28 @@ impl ExecutableCommand for JsonArrIndex {
                     }
                     .max(0) as usize;
 
-                    let position = arr
-                        .iter()
-                        .skip(start)
-                        .position(|v| v == &self.value_to_find)
-                        .map(|p| (p + start) as i64)
-                        .unwrap_or(-1);
+                    let end = self
+                        .end_index
+                        .map(|end_index| {
+                            if end_index >= 0 {
+                                end_index
+                            } else {
+                                len + end_index
+                            }
+                        })
+                        .unwrap_or(len - 1)
+                        .min(len.saturating_sub(1)) as usize;
+
+                    let position = if start > end {
+                        -1
+                    } else {
+                        arr.iter()
+                            .skip(start)
+                            .take(end - start + 1)
+                            .position(|v| v == &self.value_to_find)
+                            .map(|p| (p + start) as i64)
+                            .unwrap_or(-1)
+                    };
 
                     Ok((RespValue::Integer(position), WriteOutcome::DidNotWrite))
                 }
@@ -122,8 +146,11 @@ impl CommandSpec for JsonArrIndex {
                 .unwrap_or_else(|_| "null".to_string())
                 .into(),
         ];
-        if self.start_index != 0 {
+        if self.start_index != 0 || self.end_index.is_some() {
             args.push(self.start_index.to_string().into());
+        }
+        if let Some(end_index) = self.end_index {
+            args.push(end_index.to_string().into());
         }
         args
     }

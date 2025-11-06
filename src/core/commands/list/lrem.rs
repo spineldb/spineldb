@@ -11,7 +11,6 @@ use crate::core::storage::data_types::DataValue;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 
 /// Represents the `LREM` command, which removes elements from a list.
@@ -78,18 +77,20 @@ impl ExecutableCommand for LRem {
                 }
             });
         } else if self.count < 0 {
-            // Remove from tail to head using an O(N) approach to avoid O(N*M) performance.
+            // Remove from tail to head with an in-place approach.
             let limit = self.count.abs();
-            let mut new_list = VecDeque::with_capacity(list.len());
-            for item in list.iter().rev() {
-                if removed_count < limit && item == &self.element {
+            let mut i = list.len();
+            while i > 0 {
+                i -= 1;
+                if list[i] == self.element {
+                    list.remove(i);
                     removed_count += 1;
                     mem_freed += element_len;
-                } else {
-                    new_list.push_front(item.clone());
+                    if removed_count == limit {
+                        break;
+                    }
                 }
             }
-            *list = new_list;
         } else {
             // count == 0: remove all occurrences.
             let original_len = list.len();

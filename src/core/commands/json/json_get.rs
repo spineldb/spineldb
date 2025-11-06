@@ -68,45 +68,46 @@ impl ExecutableCommand for JsonGet {
             // --- Single Path Logic ---
             if self.paths.len() == 1 {
                 let path_str = &self.paths[0];
-
                 let found_values = helpers::find_values_by_jsonpath(root, path_str)?;
 
-                return if found_values.is_empty() {
-                    Ok((RespValue::Null, WriteOutcome::DidNotWrite))
-                } else if found_values.len() == 1 {
-                    // If only one value is found, format it as a standard RESP value.
-                    Ok((
-                        helpers::json_value_to_resp_value(found_values[0]),
-                        WriteOutcome::DidNotWrite,
-                    ))
-                } else {
-                    // If the path returns multiple values, the response is a single bulk string
-                    // containing a JSON array of the results.
-                    let json_array: Vec<&Value> = found_values.into_iter().collect();
-                    let response_str = serde_json::to_string(&json_array)?;
-                    Ok((
-                        RespValue::BulkString(response_str.into()),
-                        WriteOutcome::DidNotWrite,
-                    ))
+                // According to RedisJSON, if a single path query returns multiple values,
+                // they are wrapped in a JSON array string. If it returns one value,
+                // that value is returned directly. If none, null is returned.
+                // This logic handles all cases cleanly.
+                let response = match found_values.len() {
+                    0 => RespValue::Null,
+                    1 => {
+                        // The JSON value is serialized to a string for the client.
+                        let json_str = serde_json::to_string(found_values[0])?;
+                        RespValue::BulkString(json_str.into())
+                    }
+                    _ => {
+                        let json_array: Vec<&Value> = found_values.into_iter().collect();
+                        let response_str = serde_json::to_string(&json_array)?;
+                        RespValue::BulkString(response_str.into())
+                    }
                 };
+                return Ok((response, WriteOutcome::DidNotWrite));
             }
 
             // --- Multiple Path Logic ---
-            let mut results = serde_json::Map::new();
+            // The result is a single JSON object string where keys are paths.
+            let mut results_map = serde_json::Map::new();
             for path_str in &self.paths {
                 let found_values = helpers::find_values_by_jsonpath(root, path_str)?;
-                if !found_values.is_empty() {
+
+                // If a path yields results, wrap them in a JSON array.
+                // If not, the value for that path is JSON null.
+                let result_value = if !found_values.is_empty() {
                     let json_array: Vec<&Value> = found_values.into_iter().collect();
-                    results.insert(
-                        path_str.clone(),
-                        Value::Array(json_array.into_iter().cloned().collect()),
-                    );
+                    Value::Array(json_array.into_iter().cloned().collect())
                 } else {
-                    // If a path is not found, include it with a `null` value.
-                    results.insert(path_str.clone(), Value::Null);
-                }
+                    Value::Null
+                };
+                results_map.insert(path_str.clone(), result_value);
             }
-            let response_json = Value::Object(results);
+
+            let response_json = Value::Object(results_map);
             let response_str = serde_json::to_string(&response_json)?;
 
             Ok((

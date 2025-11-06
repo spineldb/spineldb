@@ -5,111 +5,132 @@ use crate::core::commands::helpers::{extract_bytes, extract_string};
 use crate::core::protocol::RespFrame;
 use bytes::Bytes;
 
-/// The maximum recursion depth for glob pattern matching to prevent stack overflow.
-const MAX_GLOB_RECURSION_DEPTH: u32 = 128;
-
 /// Matches a string against a Redis-style glob pattern.
 /// Supports `*`, `?`, `[...]`, `[^...]`, and `\`.
+/// This implementation is iterative to prevent stack overflow from complex patterns.
 pub fn glob_match(pattern: &[u8], string: &[u8]) -> bool {
-    glob_match_recursive(pattern, string, 0)
-}
+    let mut p_idx = 0;
+    let mut s_idx = 0;
+    let mut star_p_idx = None; // Index in pattern after the last '*'
+    let mut star_s_idx = None; // Index in string to backtrack to on mismatch
 
-/// The recursive implementation of `glob_match`.
-fn glob_match_recursive(mut pattern: &[u8], mut string: &[u8], depth: u32) -> bool {
-    // Prevent stack overflow from maliciously crafted patterns.
-    if depth > MAX_GLOB_RECURSION_DEPTH {
-        return false;
-    }
-
-    loop {
-        match pattern.first() {
-            // Empty pattern matches only an empty string.
-            None => return string.is_empty(),
-            // `*` matches any sequence of characters.
-            Some(b'*') => {
-                pattern = &pattern[1..];
-                if pattern.is_empty() {
-                    return true;
-                }
-                for i in 0..=string.len() {
-                    // Recurse to check if the rest of the pattern matches the rest of the string.
-                    if glob_match_recursive(pattern, &string[i..], depth + 1) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            // `?` matches any single character.
+    while s_idx < string.len() {
+        match pattern.get(p_idx) {
+            // Match a single character
             Some(b'?') => {
-                if string.is_empty() {
-                    return false;
-                }
-                pattern = &pattern[1..];
-                string = &string[1..];
+                p_idx += 1;
+                s_idx += 1;
             }
-            // `[...]` matches any character in the set.
+            // Star wildcard: save backtrack position and advance pattern
+            Some(b'*') => {
+                star_p_idx = Some(p_idx + 1);
+                star_s_idx = Some(s_idx);
+                p_idx += 1;
+            }
+            // Character set match
             Some(b'[') => {
-                if string.is_empty() {
-                    return false;
-                }
-                pattern = &pattern[1..];
-                let (negated, p_rest) = if pattern.first() == Some(&b'^') {
-                    (true, &pattern[1..])
-                } else {
-                    (false, pattern)
-                };
-                pattern = p_rest;
-                let mut matched = false;
-                let s_char = string[0];
-                loop {
-                    if pattern.is_empty() {
-                        return false; // Unmatched bracket
+                match parse_char_set(&pattern[p_idx..], string[s_idx]) {
+                    Some(len) => {
+                        p_idx += len;
+                        s_idx += 1;
                     }
-                    if pattern.first() == Some(&b']') {
-                        pattern = &pattern[1..];
-                        break;
-                    }
-                    let p_start = pattern[0];
-                    pattern = &pattern[1..];
-                    if pattern.first() == Some(&b'-')
-                        && !pattern[1..].is_empty()
-                        && pattern[1] != b']'
-                    {
-                        let p_end = pattern[1];
-                        pattern = &pattern[2..];
-                        if s_char >= p_start && s_char <= p_end {
-                            matched = true;
+                    None => {
+                        // Mismatch, try backtracking to the last star
+                        if let (Some(p), Some(s)) = (star_p_idx, star_s_idx) {
+                            p_idx = p;
+                            s_idx = s + 1;
+                            star_s_idx = Some(s + 1);
+                        } else {
+                            return false;
                         }
-                    } else if s_char == p_start {
-                        matched = true;
                     }
                 }
-                if negated {
-                    matched = !matched;
-                }
-                if !matched {
-                    return false;
-                }
-                string = &string[1..];
             }
-            // `\` escapes the next character.
-            Some(b'\\') => {
-                pattern = &pattern[1..];
-                if pattern.is_empty() || pattern.first() != string.first() {
-                    return false;
+            // Escaped character
+            Some(b'\\') if p_idx + 1 < pattern.len() => {
+                if pattern[p_idx + 1] == string[s_idx] {
+                    p_idx += 2;
+                    s_idx += 1;
+                } else {
+                    // Mismatch, backtrack
+                    if let (Some(p), Some(s)) = (star_p_idx, star_s_idx) {
+                        p_idx = p;
+                        s_idx = s + 1;
+                        star_s_idx = Some(s + 1);
+                    } else {
+                        return false;
+                    }
                 }
-                pattern = &pattern[1..];
-                string = &string[1..];
             }
-            // A literal character must match exactly.
-            Some(&p_char) => {
-                if string.is_empty() || p_char != string[0] {
+            // Exact character match
+            Some(&p_char) if p_char == string[s_idx] => {
+                p_idx += 1;
+                s_idx += 1;
+            }
+            // Mismatch: backtrack to the last star if available
+            _ => {
+                if let (Some(p), Some(s)) = (star_p_idx, star_s_idx) {
+                    p_idx = p;
+                    s_idx = s + 1;
+                    star_s_idx = Some(s + 1);
+                } else {
                     return false;
                 }
-                pattern = &pattern[1..];
-                string = &string[1..];
             }
         }
+    }
+
+    // After exhausting the string, consume any trailing stars in the pattern.
+    while p_idx < pattern.len() && pattern[p_idx] == b'*' {
+        p_idx += 1;
+    }
+
+    // Match is successful only if the entire pattern is consumed.
+    p_idx == pattern.len()
+}
+
+/// Helper to parse a character set `[...]` and check if it matches a character.
+/// Returns the length of the set pattern segment if it matches, otherwise `None`.
+fn parse_char_set(pattern_segment: &[u8], char_to_match: u8) -> Option<usize> {
+    if pattern_segment.len() < 3 || pattern_segment[0] != b'[' {
+        return None;
+    }
+
+    let mut p_idx = 1;
+    let negated = if pattern_segment.get(p_idx) == Some(&b'^') {
+        p_idx += 1;
+        true
+    } else {
+        false
+    };
+
+    let mut matched = false;
+    while p_idx < pattern_segment.len() && pattern_segment[p_idx] != b']' {
+        let p_char = pattern_segment[p_idx];
+
+        // Check for a range, e.g., `a-z`
+        if p_idx + 2 < pattern_segment.len()
+            && pattern_segment[p_idx + 1] == b'-'
+            && pattern_segment[p_idx + 2] != b']'
+        {
+            let end_range = pattern_segment[p_idx + 2];
+            if char_to_match >= p_char && char_to_match <= end_range {
+                matched = true;
+            }
+            p_idx += 3;
+        } else {
+            // Single character match
+            if p_char == char_to_match {
+                matched = true;
+            }
+            p_idx += 1;
+        }
+    }
+
+    if p_idx < pattern_segment.len() && (matched != negated) {
+        Some(p_idx + 1) // Return total length including `[` and `]`
+    } else {
+        None
     }
 }
 

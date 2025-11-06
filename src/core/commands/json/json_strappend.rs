@@ -33,8 +33,23 @@ impl ParseCommand for JsonStrAppend {
         Ok(JsonStrAppend {
             key: extract_bytes(&args[0])?,
             path: extract_string(&args[1])?,
-            // The value to append is a raw string, not a JSON literal
-            value_to_append: extract_string(&args[2])?,
+            // The value to append is a JSON string literal, so we parse it
+            value_to_append: {
+                let json_str_arg = extract_string(&args[2])?;
+                let parsed_value: Value = serde_json::from_str(&json_str_arg).map_err(|_| {
+                    SpinelDBError::InvalidRequest(
+                        "Value to append must be a valid JSON string".to_string(),
+                    )
+                })?;
+                parsed_value
+                    .as_str()
+                    .ok_or_else(|| {
+                        SpinelDBError::InvalidRequest(
+                            "Value to append must be a JSON string".to_string(),
+                        )
+                    })?
+                    .to_string()
+            },
         })
     }
 }
