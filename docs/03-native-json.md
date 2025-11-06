@@ -119,8 +119,16 @@ Let's work with the `tags` array in our user object.
 "\"support\""
 
 # Find the index of an element
-127.0.0.1:7878> JSON.ARRINDEX user:1 $.tags "dev"
+127.0.0.1:7878> JSON.ARRINDEX user:1 $.tags "\"dev\""
 (integer) 2
+
+# Find the index of an element within a range (from index 0 to 1)
+127.0.0.1:7878> JSON.SET user:1 $.tags '[\"admin\", \"dev\", \"beta\", \"dev\"]'
+OK
+127.0.0.1:7878> JSON.ARRINDEX user:1 $.tags "\"dev\"" 0 1
+(integer) 1
+127.0.0.1:7878> JSON.ARRINDEX user:1 $.tags "\"dev\"" 2 3
+(integer) 3
 
 # Trim the array to keep only elements from index 0 to 1
 127.0.0.1:7878> JSON.ARRTRIM user:1 $.tags 0 1
@@ -275,12 +283,17 @@ Let's work with the `name` field in our user object.
 
 ```shell
 # Append a string to the 'name' field
+# The value to append must be a valid JSON string
+127.0.0.1:7878> JSON.SET user:1 $.name '"Alice"'
+OK
 127.0.0.1:7878> JSON.STRAPPEND user:1 $.name '" Smith"'
-(integer) 10
+(integer) 11
+127.0.0.1:7878> JSON.GET user:1 $.name
+"\"Alice Smith\""
 
 # Get the length of the 'name' field
 127.0.0.1:7878> JSON.STRLEN user:1 $.name
-(integer) 10
+(integer) 11
 ```
 
 ---
