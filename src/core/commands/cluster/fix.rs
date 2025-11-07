@@ -105,8 +105,7 @@ async fn run_fix_orchestrator(state: Arc<ServerState>) -> Result<Vec<String>, an
     info!("[CLUSTER FIX] Phase 3: Broadcasting authoritative state to all nodes...");
     for (slot, owner_id) in &resolved_owners {
         log.push(format!(
-            "-> Fixing slot {}: assigning ownership back to node {}",
-            slot, owner_id
+            "-> Fixing slot {slot}: assigning ownership back to node {owner_id}"
         ));
         let setslot_args = vec![
             "SETSLOT".into(),

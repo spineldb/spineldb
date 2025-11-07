@@ -97,14 +97,11 @@ async fn setup_cache_manifest(server_state: &Arc<ServerState>) -> Result<()> {
         if !new_cache_path.exists() {
             let parent = new_cache_path.parent().unwrap();
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                anyhow!(
-                    "Failed to create parent directory for cache migration: {}",
-                    e
-                )
+                anyhow!("Failed to create parent directory for cache migration: {e}")
             })?;
             tokio::fs::rename(old_cache_path, new_cache_path)
                 .await
-                .map_err(|e| anyhow!("Failed to migrate old cache directory: {}", e))?;
+                .map_err(|e| anyhow!("Failed to migrate old cache directory: {e}"))?;
             info!(
                 "Migrated old cache directory to {}",
                 new_cache_path.display()
@@ -153,23 +150,23 @@ async fn setup_tls(config: &Config) -> Result<Option<TlsAcceptor>> {
 
 /// Loads TLS certificates from a PEM file.
 fn load_certs(path: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
-    let cert_file = File::open(path)
-        .map_err(|e| anyhow!("Failed to open certificate file '{}': {}", path, e))?;
+    let cert_file =
+        File::open(path).map_err(|e| anyhow!("Failed to open certificate file '{path}': {e}"))?;
     let mut cert_reader = BufReader::new(cert_file);
     let certs = rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
-        return Err(anyhow!("No certificates found in '{}'", path));
+        return Err(anyhow!("No certificates found in '{path}'"));
     }
     Ok(certs)
 }
 
 /// Loads a private key from a PEM file.
 fn load_key(path: &str) -> Result<rustls::pki_types::PrivateKeyDer<'static>> {
-    let key_file = File::open(path)
-        .map_err(|e| anyhow!("Failed to open private key file '{}': {}", path, e))?;
+    let key_file =
+        File::open(path).map_err(|e| anyhow!("Failed to open private key file '{path}': {e}"))?;
     let mut key_reader = BufReader::new(key_file);
     rustls_pemfile::private_key(&mut key_reader)?
-        .ok_or_else(|| anyhow!("No private key found in key file '{}'", path))
+        .ok_or_else(|| anyhow!("No private key found in key file '{path}'"))
 }
 
 /// Logs key configuration parameters at startup.

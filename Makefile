@@ -51,16 +51,16 @@ fmt-check:
 
 # Test commands
 test:
-	cargo test
+	RUST_MIN_STACK=4194304 cargo test
 
 test-coverage:
 	@echo "Running tests with coverage (llvm-cov)..."
-	cargo llvm-cov --workspace --lcov --output-path coverage.lcov --ignore-filename-regex '(.*/tests/|.*/examples/)'
+	RUST_MIN_STACK=4194304 cargo llvm-cov --workspace --lcov --output-path coverage.lcov --ignore-filename-regex '(.*/tests/|.*/examples/)'
 	@echo "Coverage report generated at: coverage.lcov"
 
 test-coverage-html:
 	@echo "Running tests with coverage and generating HTML report..."
-	cargo llvm-cov --workspace --html --output-dir coverage_report --ignore-filename-regex '(.*/tests/|.*/examples/)'
+	RUST_MIN_STACK=4194304 cargo llvm-cov --workspace --html --output-dir coverage_report --ignore-filename-regex '(.*/tests/|.*/examples/)'
 	@echo "Coverage report generated at: coverage_report/index.html"
 
 # Install development tools

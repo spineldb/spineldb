@@ -73,7 +73,7 @@ async fn run_reshard_orchestrator(
     let source_node = cluster
         .nodes
         .get(&source_id)
-        .ok_or_else(|| anyhow!("Source node {} not found", source_id))?
+        .ok_or_else(|| anyhow!("Source node {source_id} not found"))?
         .value()
         .node_info
         .clone();
@@ -81,7 +81,7 @@ async fn run_reshard_orchestrator(
     let dest_node = cluster
         .nodes
         .get(&dest_id)
-        .ok_or_else(|| anyhow!("Destination node {} not found", dest_id))?
+        .ok_or_else(|| anyhow!("Destination node {dest_id} not found"))?
         .value()
         .node_info
         .clone();
@@ -146,7 +146,7 @@ async fn run_reshard_orchestrator(
         // --- Step 3a: Set IMPORTING/MIGRATING state ---
         let dest_client = broadcast_clients
             .get_mut(&dest_id)
-            .ok_or_else(|| anyhow!("Destination node {} client not found in pool", dest_id))?;
+            .ok_or_else(|| anyhow!("Destination node {dest_id} client not found in pool"))?;
 
         info!(
             "[RESHARD SLOT {}] Step 1/5: Setting slot to IMPORTING on destination {}.",
@@ -231,9 +231,7 @@ async fn run_reshard_orchestrator(
                     // Return the admin client to the pool before erroring out.
                     let _ = client_tx.send(source_admin_client).await;
                     return Err(anyhow!(
-                        "Failed to migrate a key in slot {}: {}. Aborting reshard.",
-                        slot,
-                        e
+                        "Failed to migrate a key in slot {slot}: {e}. Aborting reshard."
                     ));
                 }
             }
