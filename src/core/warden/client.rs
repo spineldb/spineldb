@@ -67,7 +67,7 @@ impl WardenClient {
         let reply = self.send_and_receive(frame).await?;
         match reply {
             RespFrame::SimpleString(s) => Ok(s),
-            _ => Err(anyhow!("Unexpected PING reply: {:?}", reply)),
+            _ => Err(anyhow!("Unexpected PING reply: {reply:?}")),
         }
     }
 
@@ -80,7 +80,7 @@ impl WardenClient {
         let reply = self.send_and_receive(frame).await?;
         match reply {
             RespFrame::BulkString(bs) => Ok(String::from_utf8_lossy(&bs).to_string()),
-            _ => Err(anyhow!("Unexpected INFO reply: {:?}", reply)),
+            _ => Err(anyhow!("Unexpected INFO reply: {reply:?}")),
         }
     }
 }

@@ -49,7 +49,7 @@ pub async fn run(config_path: &str) -> Result<()> {
     // This is used to identify this Warden when communicating with others.
     let mut runid_bytes = [0u8; 20];
     getrandom::fill(&mut runid_bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to generate random run ID: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to generate random run ID: {e}"))?;
     let my_run_id = hex::encode(runid_bytes);
     info!("Warden run ID: {}", my_run_id);
 
@@ -95,8 +95,7 @@ pub async fn run(config_path: &str) -> Result<()> {
             // This task should run forever, if it exits it's a critical issue.
             // Return an error to signal this.
             Err(anyhow!(
-                "MasterMonitor for {} exited unexpectedly.",
-                master_name_for_log
+                "MasterMonitor for {master_name_for_log} exited unexpectedly."
             ))
         });
     }
