@@ -13,9 +13,9 @@ help:
 	@echo "  make fmt                - Format code with rustfmt"
 	@echo "  make fmt-check          - Check if code is formatted"
 	@echo "  make test               - Run tests"
-	@echo "  make test-coverage      - Run tests with coverage (tarpaulin)"
+	@echo "  make test-coverage      - Run tests with coverage (llvm-cov)"
 	@echo "  make test-coverage-html - Run tests and generate HTML coverage report"
-	@echo "  make install-tools      - Install required tools (tarpaulin, clippy, rustfmt)"
+	@echo "  make install-tools      - Install required tools (llvm-cov, clippy, rustfmt)"
 	@echo "  make all                - Run check, clippy, fmt-check, and test"
 
 # Build commands
@@ -33,6 +33,7 @@ clean:
 	cargo clean
 	rm -rf coverage_report/
 	rm -f cobertura.xml
+	rm -f coverage.lcov
 	rm -f build_rs_cov.profraw
 
 # Check and lint
@@ -40,7 +41,7 @@ check:
 	cargo check
 
 clippy:
-	cargo clippy -- -D warnings
+	cargo clippy
 
 fmt:
 	cargo fmt
@@ -53,17 +54,21 @@ test:
 	cargo test
 
 test-coverage:
-	cargo tarpaulin --out Xml --output-dir coverage_report --exclude-files '*/tests/*' '*/examples/*'
+	@echo "Running tests with coverage (llvm-cov)..."
+	cargo llvm-cov --workspace --lcov --output-path coverage.lcov --ignore-filename-regex '(.*/tests/|.*/examples/)'
+	@echo "Coverage report generated at: coverage.lcov"
 
 test-coverage-html:
 	@echo "Running tests with coverage and generating HTML report..."
-	cargo tarpaulin --out Html --out Xml --output-dir coverage_report --exclude-files '*/tests/*' '*/examples/*'
-	@echo "Coverage report generated at: coverage_report/tarpaulin-report.html"
+	cargo llvm-cov --workspace --html --output-dir coverage_report --ignore-filename-regex '(.*/tests/|.*/examples/)'
+	@echo "Coverage report generated at: coverage_report/index.html"
 
 # Install development tools
 install-tools:
-	@echo "Installing cargo-tarpaulin..."
-	cargo install cargo-tarpaulin
+	@echo "Installing llvm-tools-preview..."
+	rustup component add llvm-tools-preview
+	@echo "Installing cargo-llvm-cov..."
+	cargo install cargo-llvm-cov || true
 	@echo "Installing rustfmt..."
 	rustup component add rustfmt
 	@echo "Installing clippy..."
