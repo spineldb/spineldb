@@ -229,8 +229,10 @@ Let's model a simple sensor data stream.
 
 ---
 
-### You're Ready to Build!
+## 7. HyperLogLogs
 
-You now have a solid foundation for using SpinelDB's core data types. With these building blocks, you can model a wide variety of application data and logic.
+For details on using HyperLogLogs, see [Chapter 17: HyperLogLogs](./17-hyperloglog.md).
+
+---
 
 ➡️ **Next Chapter: [3. Working with JSON Documents](./03-native-json.md)**

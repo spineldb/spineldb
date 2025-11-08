@@ -3,7 +3,9 @@
 //! Defines the core data structures for storing values in the database,
 //! such as `StoredValue` and the `DataValue` enum.
 
+use super::bloom::BloomFilter;
 pub use super::cache_types::{CacheBody, VariantMap};
+use super::hll::HyperLogLog;
 use crate::core::Command;
 use crate::core::commands::cache::cache_set::CacheSet as CacheSetCmd;
 use crate::core::commands::cache::command::CacheSubcommand;
@@ -249,6 +251,24 @@ impl StoredValue {
                     }),
                 })]
             }
+            DataValue::HyperLogLog(hll) => {
+                vec![Command::Set(string::Set {
+                    key: key.clone(),
+                    value: hll.serialize(),
+                    ttl: string::TtlOption::None, // TTL is handled by the generic EXPIRE command later
+                    condition: string::SetCondition::None,
+                    get: false,
+                })]
+            }
+            DataValue::BloomFilter(bf) => {
+                vec![Command::Set(string::Set {
+                    key: key.clone(),
+                    value: bf.serialize(),
+                    ttl: string::TtlOption::None, // TTL is handled by the generic EXPIRE command later
+                    condition: string::SetCondition::None,
+                    get: false,
+                })]
+            }
             DataValue::HttpCache {
                 variants, vary_on, ..
             } => {
@@ -364,6 +384,8 @@ pub enum DataValue {
     SortedSet(SortedSet),
     Stream(Stream),
     Json(serde_json::Value),
+    HyperLogLog(Box<HyperLogLog>),
+    BloomFilter(Box<BloomFilter>),
     HttpCache {
         variants: VariantMap,
         vary_on: Vec<Bytes>,
@@ -383,6 +405,8 @@ impl DataValue {
             DataValue::SortedSet(z) => z.memory_usage(),
             DataValue::Stream(s) => s.memory_usage(),
             DataValue::Json(v) => estimate_json_memory(v),
+            DataValue::HyperLogLog(hll) => hll.memory_usage(),
+            DataValue::BloomFilter(bf) => bf.memory_usage(),
             DataValue::HttpCache {
                 variants, vary_on, ..
             } => {

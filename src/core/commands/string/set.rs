@@ -8,6 +8,7 @@ use crate::core::commands::helpers::{ArgParser, extract_bytes};
 use crate::core::database::ExecutionContext;
 use crate::core::protocol::RespFrame;
 use crate::core::storage::data_types::{DataValue, StoredValue};
+use crate::core::storage::hll::HyperLogLog;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -131,17 +132,27 @@ impl ExecutableCommand for Set {
             RespValue::Null
         };
 
-        // Pre-check for WRONGTYPE.
+        // Determine the type of the value being set by checking for HLL magic header.
+        let new_data_value = if let Some(hll) = HyperLogLog::deserialize(&self.value) {
+            DataValue::HyperLogLog(Box::new(hll))
+        } else {
+            DataValue::String(self.value.clone())
+        };
+
+        // Perform WRONGTYPE check. The existing key's type must match the new value's type.
         let key_exists_and_is_valid = if let Some(entry) = shard_cache_guard.peek(&self.key) {
             if entry.is_expired() {
                 false
-            } else if matches!(entry.data, DataValue::String(_)) {
-                true
             } else {
-                return Err(SpinelDBError::WrongType);
+                match (&new_data_value, &entry.data) {
+                    (DataValue::String(_), DataValue::String(_)) => true,
+                    (DataValue::HyperLogLog(_), DataValue::HyperLogLog(_)) => true,
+                    // Any other combination is a WRONGTYPE error.
+                    _ => return Err(SpinelDBError::WrongType),
+                }
             }
         } else {
-            false
+            false // Key does not exist.
         };
 
         // Check conditions (NX/XX) and abort if they are not met.
@@ -205,7 +216,7 @@ impl ExecutableCommand for Set {
         }
 
         // Proceed with setting the key.
-        let mut new_stored_value = StoredValue::new(DataValue::String(self.value.clone()));
+        let mut new_stored_value = StoredValue::new(new_data_value);
         new_stored_value.expiry = new_expiry;
 
         // Preserve version for WATCH command correctness.

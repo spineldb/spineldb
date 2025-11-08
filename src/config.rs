@@ -664,11 +664,7 @@ impl Config {
     fn validate_persistence_path(&self, path_str: &str, name: &str) -> Result<()> {
         let path = std::path::Path::new(path_str);
         if path.is_dir() {
-            return Err(anyhow!(
-                "{} path '{}' cannot be a directory.",
-                name,
-                path_str
-            ));
+            return Err(anyhow!("{name} path '{path_str}' cannot be a directory."));
         }
         if let Some(parent) = path.parent()
             && parent.exists()

@@ -7,7 +7,9 @@ This document outlines a comprehensive testing strategy for SpinelDB to achieve 
 **Current State:**
 - ✅ 67 test files with 413 test cases
 - ✅ Comprehensive unit tests for command parsing
-- ❌ Missing integration tests for command execution
+- ✅ Integration test infrastructure (TestContext, fixtures, helpers)
+- ✅ Integration tests for string commands (SET, GET, DEL, APPEND, INCR, DECR, etc.)
+- ❌ Missing integration tests for other data types (lists, hashes, sets, sorted sets, streams)
 - ❌ Missing tests for complex workflows (transactions, replication, etc.)
 - ❌ Missing property-based tests
 
@@ -51,16 +53,16 @@ tests/
 
 **Coverage Areas:**
 - Command parsing: ~90% coverage
-- Command execution: ~10% coverage (minimal)
-- Integration flows: ~0% coverage
-- Error paths: ~30% coverage
+- Command execution: ~30% coverage (string commands covered)
+- Integration flows: ~15% coverage (string commands integration tests)
+- Error paths: ~40% coverage
 
 ### Gaps Identified
 
-1. **No Integration Tests**
-   - Commands are tested in isolation (parsing only)
-   - No end-to-end command execution tests
-   - No database state validation
+1. **Partial Integration Tests**
+   - ✅ String commands have comprehensive integration tests
+   - ❌ Other data types (lists, hashes, sets, sorted sets, streams) still need integration tests
+   - ❌ No end-to-end tests for complex workflows
 
 2. **Missing Test Categories**
    - Transaction workflows (MULTI/EXEC/WATCH)
@@ -459,11 +461,11 @@ Is the function/component being tested:
 **Goal:** Complete integration tests for all core data types
 
 **Tasks:**
-1. ✅ List commands integration tests
-2. ✅ Hash commands integration tests
-3. ✅ Set commands integration tests
-4. ✅ Sorted Set commands integration tests
-5. ✅ Stream commands integration tests
+1. ❌ List commands integration tests
+2. ❌ Hash commands integration tests
+3. ❌ Set commands integration tests
+4. ❌ Sorted Set commands integration tests
+5. ❌ Stream commands integration tests
 
 **Deliverables:**
 - Integration tests for all data type commands
@@ -480,11 +482,11 @@ Is the function/component being tested:
 **Goal:** Test complex features and workflows
 
 **Tasks:**
-1. ✅ Transaction tests (MULTI/EXEC/WATCH)
-2. ✅ Persistence tests (BGSAVE, AOF)
-3. ✅ PubSub tests
-4. ✅ Cache command tests
-5. ✅ ACL tests
+1. ❌ Transaction tests (MULTI/EXEC/WATCH)
+2. ❌ Persistence tests (BGSAVE, AOF)
+3. ❌ PubSub tests
+4. ❌ Cache command tests
+5. ❌ ACL tests
 
 **Deliverables:**
 - Integration tests for advanced features
@@ -501,11 +503,11 @@ Is the function/component being tested:
 **Goal:** Add property-based tests and benchmarks
 
 **Tasks:**
-1. ✅ Set up `proptest` infrastructure
-2. ✅ Write property-based tests for roundtrips
-3. ✅ Set up `criterion` benchmarks
-4. ✅ Create performance baseline
-5. ✅ Document performance characteristics
+1. ❌ Set up `proptest` infrastructure
+2. ❌ Write property-based tests for roundtrips
+3. ❌ Set up `criterion` benchmarks
+4. ❌ Create performance baseline
+5. ❌ Document performance characteristics
 
 **Deliverables:**
 - Property-based test suite
@@ -522,10 +524,10 @@ Is the function/component being tested:
 **Goal:** Test distributed features
 
 **Tasks:**
-1. ✅ Cluster integration tests
-2. ✅ Replication tests
-3. ✅ Failover scenarios
-4. ✅ Network partition tests
+1. ❌ Cluster integration tests
+2. ❌ Replication tests
+3. ❌ Failover scenarios
+4. ❌ Network partition tests
 
 **Deliverables:**
 - Cluster test suite
@@ -688,7 +690,7 @@ tokio-test = "0.4"
 ### Testing Tools
 
 **Coverage:**
-- `cargo tarpaulin` (already configured in Makefile)
+- `cargo llvm-cov` (already configured in Makefile)
 - Run: `make test-coverage-html`
 
 **Linting:**
@@ -965,6 +967,166 @@ async fn test_multi_exec_success() {
 
 ---
 
+## Using TestContext in Integration Tests
+
+### Quick Start
+
+The `TestContext` helper provides a simple way to write integration tests. Here's how to use it:
+
+```rust
+use super::test_helpers::TestContext;
+use spineldb::core::RespValue;
+use bytes::Bytes;
+
+#[tokio::test]
+async fn test_basic_operations() {
+    // Create a fresh test context (isolated database)
+    let ctx = TestContext::new().await;
+    
+    // Use helper methods for common operations
+    ctx.set("key1", "value1").await.unwrap();
+    let result = ctx.get("key1").await.unwrap();
+    assert_eq!(result, RespValue::BulkString(Bytes::from("value1")));
+}
+```
+
+### Available Helper Methods
+
+**String Operations:**
+- `ctx.set(key, value)` - Execute SET command
+- `ctx.get(key)` - Execute GET command
+- `ctx.del(keys)` - Execute DEL command (takes slice of keys)
+- `ctx.exists(keys)` - Execute EXISTS command
+
+**Generic Command Execution:**
+- `ctx.execute(command)` - Execute any Command directly
+- `ctx.execute_multiple(commands)` - Execute multiple commands sequentially
+
+### Using Fixtures
+
+Fixtures provide reusable test data:
+
+```rust
+use super::fixtures::*;
+
+#[tokio::test]
+async fn test_with_fixtures() {
+    let ctx = TestContext::new().await;
+    
+    // Use predefined test keys and values
+    ctx.set(TEST_KEY1, TEST_VALUE1).await.unwrap();
+    ctx.set(TEST_KEY2, TEST_VALUE2).await.unwrap();
+    
+    // Use test patterns
+    ctx.set("unicode_key", patterns::UNICODE_STR).await.unwrap();
+    ctx.set("empty_key", patterns::EMPTY_STR).await.unwrap();
+    
+    // Generate unique keys
+    for i in 0..10 {
+        let key = unique_key("test", i);
+        ctx.set(&key, "value").await.unwrap();
+    }
+}
+```
+
+### Executing Custom Commands
+
+For commands without helper methods, use `execute()` with `Command::try_from()`:
+
+```rust
+use spineldb::core::Command;
+use spineldb::core::protocol::RespFrame;
+use bytes::Bytes;
+
+#[tokio::test]
+async fn test_custom_command() {
+    let ctx = TestContext::new().await;
+    
+    // Create command from RESP frames
+    let command = Command::try_from(RespFrame::Array(vec![
+        RespFrame::BulkString(Bytes::from_static(b"APPEND")),
+        RespFrame::BulkString(Bytes::from("key")),
+        RespFrame::BulkString(Bytes::from("value")),
+    ])).unwrap();
+    
+    let result = ctx.execute(command).await.unwrap();
+    // Assert on result...
+}
+```
+
+### Test Isolation
+
+Each test gets a fresh database instance:
+
+```rust
+#[tokio::test]
+async fn test_isolation_1() {
+    let ctx = TestContext::new().await;
+    ctx.set("key", "value1").await.unwrap();
+    // This test's database is isolated from others
+}
+
+#[tokio::test]
+async fn test_isolation_2() {
+    let ctx = TestContext::new().await;
+    // This is a completely separate database instance
+    // No interference from test_isolation_1
+}
+```
+
+### Custom Configuration
+
+For tests that need specific configuration:
+
+```rust
+use spineldb::config::Config;
+
+#[tokio::test]
+async fn test_with_custom_config() {
+    let mut config = Config::default();
+    config.databases = 16; // Use more databases
+    // ... configure other settings
+    
+    let ctx = TestContext::with_config(config).await;
+    // Test with custom configuration...
+}
+```
+
+### Error Handling
+
+Always handle errors appropriately:
+
+```rust
+#[tokio::test]
+async fn test_error_handling() {
+    let ctx = TestContext::new().await;
+    
+    // Check for errors
+    match ctx.get("nonexistent").await {
+        Ok(RespValue::Null) => {
+            // Expected: key doesn't exist
+        }
+        Ok(_) => panic!("Expected Null for nonexistent key"),
+        Err(e) => panic!("Unexpected error: {:?}", e),
+    }
+    
+    // Or use unwrap/expect for tests where errors should not occur
+    let result = ctx.set("key", "value").await.expect("SET should succeed");
+    assert_eq!(result, RespValue::SimpleString("OK".into()));
+}
+```
+
+### Best Practices
+
+1. **Use helper methods when available** - They're simpler and more readable
+2. **Use fixtures for common data** - Promotes consistency across tests
+3. **Test isolation** - Each test should be independent
+4. **Clear test names** - Use descriptive names like `test_set_get_roundtrip`
+5. **Arrange-Act-Assert** - Structure tests clearly
+6. **Handle errors explicitly** - Don't just use `unwrap()` everywhere
+
+---
+
 ## Success Metrics
 
 ### Coverage Metrics
@@ -1024,10 +1186,10 @@ async fn test_multi_exec_success() {
 This testing plan provides a comprehensive strategy for achieving high test coverage in SpinelDB. By following the phased implementation approach, we can systematically build a robust test suite that ensures reliability and maintainability.
 
 **Next Steps:**
-1. Review and approve this plan
-2. Set up Phase 1 infrastructure
-3. Begin implementation of integration tests
-4. Track progress against coverage targets
+1. ✅ Phase 1 complete: Integration test infrastructure and string commands tests
+2. Begin Phase 2: Integration tests for other data types (lists, hashes, sets, sorted sets, streams)
+3. Continue tracking progress against coverage targets
+4. Add property-based tests (Phase 4)
 
 **Questions or Concerns:**
 Please discuss any questions or concerns about this plan before beginning implementation.

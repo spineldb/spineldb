@@ -76,10 +76,7 @@ impl ClusterClient {
 
         match self.send_and_receive(frame).await? {
             RespFrame::SimpleString(s) if s.eq_ignore_ascii_case("OK") => Ok(()),
-            other => Err(anyhow!(
-                "Unexpected response to CLUSTER SETSLOT: {:?}",
-                other
-            )),
+            other => Err(anyhow!("Unexpected response to CLUSTER SETSLOT: {other:?}")),
         }
     }
 
@@ -98,7 +95,7 @@ impl ClusterClient {
                     _ => Err(anyhow!("Expected bulk string in GETKEYSINSLOT reply")),
                 })
                 .collect(),
-            other => Err(anyhow!("Unexpected response to GETKEYSINSLOT: {:?}", other)),
+            other => Err(anyhow!("Unexpected response to GETKEYSINSLOT: {other:?}")),
         }
     }
 
@@ -131,7 +128,7 @@ impl ClusterClient {
             {
                 Ok(())
             }
-            other => Err(anyhow!("Unexpected response to MIGRATE: {:?}", other)),
+            other => Err(anyhow!("Unexpected response to MIGRATE: {other:?}")),
         }
     }
 }

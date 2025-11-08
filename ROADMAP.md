@@ -18,8 +18,8 @@ A `[x]` checkbox indicates a feature that is already implemented (at least for t
 ## 2. Data Types
 
 - [x] **Strings**
-- [x] **Bitmaps/Bitfields** (BITFIELD and BITOP tests needed)
-- [ ] **HyperLogLogs**
+- [x] **Bitmaps/Bitfields**
+- [x] **HyperLogLogs**
 - [x] **Lists**
 - [x] **Hashes**
 - [x] **Sets**
@@ -33,7 +33,8 @@ A `[x]` checkbox indicates a feature that is already implemented (at least for t
 - [ ] **SpinelSearch**: Full-text search engine capabilities.
 - [ ] **SpinelGraph**: Graph database functionality.
 - [ ] **SpinelTimeSeries**: Time-series data support.
-- [ ] **SpinelBloom**: Probabilistic data structures (Bloom and Cuckoo filters).
+- [x] **SpinelBloom**: Probabilistic data structures (Bloom and Cuckoo filters).
+- [ ] **SpinelVector**: Vector similarity search and embeddings.
 
 ## 4. Persistence
 

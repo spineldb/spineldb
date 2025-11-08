@@ -260,7 +260,7 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
             )
             .await?
             .await
-            .map_err(|e| anyhow!("Replication task panicked: {:?}", e))
+            .map_err(|e| anyhow!("Replication task panicked: {e:?}"))
         });
     }
 

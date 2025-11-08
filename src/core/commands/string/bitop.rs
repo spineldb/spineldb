@@ -1,6 +1,5 @@
 // src/core/commands/string/bitop.rs
 
-use crate::config::EvictionPolicy;
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
     CommandFlags, ExecutableCommand, ParseCommand, WriteOutcome,
@@ -13,8 +12,8 @@ use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 
-/// Defines the supported bitwise operations.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// Defines the supported bitwise operations for the BITOP command.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum BitOpOperation {
     #[default]
     And,
@@ -23,7 +22,7 @@ pub enum BitOpOperation {
     Not,
 }
 
-/// Represents the BITOP command and its arguments.
+/// Represents the BITOP command and its parsed arguments.
 #[derive(Debug, Clone, Default)]
 pub struct BitOp {
     pub operation: BitOpOperation,
@@ -32,6 +31,7 @@ pub struct BitOp {
 }
 
 impl ParseCommand for BitOp {
+    /// Parses the command arguments from the RESP frame.
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError> {
         if args.len() < 3 {
             return Err(SpinelDBError::WrongArgumentCount("BITOP".to_string()));
@@ -70,6 +70,7 @@ impl ParseCommand for BitOp {
 
 #[async_trait]
 impl ExecutableCommand for BitOp {
+    /// Executes the BITOP command.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -83,13 +84,13 @@ impl ExecutableCommand for BitOp {
             }
         };
 
-        // Fetch all source operands first to determine required allocation size.
+        // --- Phase 1: Pre-flight checks and operand fetching ---
         let mut string_operands: Vec<Bytes> = Vec::with_capacity(self.src_keys.len());
         for key in &self.src_keys {
             let shard_index = ctx.db.get_shard_index(key);
-            let guard = guards
-                .get(&shard_index)
-                .ok_or_else(|| SpinelDBError::Internal("Missing shard lock for BITOP".into()))?;
+            let guard = guards.get(&shard_index).ok_or_else(|| {
+                SpinelDBError::Internal("Missing shard lock for BITOP source".into())
+            })?;
 
             let s = if let Some(entry) = guard.peek(key).filter(|e| !e.is_expired()) {
                 if let DataValue::String(s_val) = &entry.data {
@@ -105,42 +106,18 @@ impl ExecutableCommand for BitOp {
 
         let max_len = string_operands.iter().map(|s| s.len()).max().unwrap_or(0);
 
-        // --- Pre-flight check against maxmemory ---
-        if let Some(maxmem) = ctx.state.config.lock().await.maxmemory {
-            let dest_shard_index = ctx.db.get_shard_index(&self.dest_key);
-            let old_dest_size = guards
-                .get(&dest_shard_index)
-                .and_then(|guard| guard.peek(&self.dest_key))
-                .filter(|entry| !entry.is_expired())
-                .map_or(0, |entry| entry.size);
-
-            let estimated_increase = max_len.saturating_sub(old_dest_size);
-            let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-
-            if total_memory.saturating_add(estimated_increase) > maxmem {
-                let policy = ctx.state.config.lock().await.maxmemory_policy;
-                if policy == EvictionPolicy::NoEviction {
-                    return Err(SpinelDBError::MaxMemoryReached);
-                }
-
-                // Attempt to evict a key to make space.
-                if !ctx.db.evict_one_key(&ctx.state).await {
-                    // Eviction failed, so we are still over the limit.
-                    return Err(SpinelDBError::MaxMemoryReached);
-                }
-
-                // Re-check memory after eviction.
-                let total_memory_after_evict: usize =
-                    ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-                if total_memory_after_evict.saturating_add(estimated_increase) > maxmem {
-                    return Err(SpinelDBError::MaxMemoryReached);
-                }
-            }
+        // Safety check: Abort if the resulting string would exceed the configured limit.
+        let max_alloc_size = ctx.state.config.lock().await.safety.max_bitop_alloc_size;
+        if max_alloc_size > 0 && max_len > max_alloc_size {
+            return Err(SpinelDBError::InvalidState(format!(
+                "BITOP result would exceed 'max_bitop_alloc_size' limit ({} > {})",
+                max_len, max_alloc_size
+            )));
         }
 
-        // Compute the result of the bitwise operation.
+        // --- Phase 2: Compute the result of the bitwise operation ---
         let result_bytes = if self.operation == BitOpOperation::Not {
-            // Logic for NOT operation.
+            // Logic for NOT operation (single operand).
             let src_string = &string_operands[0];
             let mut inverted = BytesMut::from(src_string.as_ref());
             for byte in inverted.iter_mut() {
@@ -148,9 +125,10 @@ impl ExecutableCommand for BitOp {
             }
             inverted.freeze()
         } else if max_len == 0 {
+            // If all operands are empty or non-existent, the result is an empty string.
             Bytes::new()
         } else {
-            // Logic for AND, OR, XOR operations.
+            // Logic for AND, OR, XOR operations on multiple operands.
             let initial_value = if self.operation == BitOpOperation::And {
                 0xFF
             } else {
@@ -160,13 +138,14 @@ impl ExecutableCommand for BitOp {
             result.resize(max_len, initial_value);
 
             for operand in string_operands.iter() {
-                for i in 0..max_len {
+                // Iterate up to the length of the current result buffer.
+                for (i, res_byte) in result.iter_mut().enumerate() {
                     let other_byte = operand.get(i).copied().unwrap_or(0);
                     match self.operation {
-                        BitOpOperation::And => result[i] &= other_byte,
-                        BitOpOperation::Or => result[i] |= other_byte,
-                        BitOpOperation::Xor => result[i] ^= other_byte,
-                        BitOpOperation::Not => unreachable!(),
+                        BitOpOperation::And => *res_byte &= other_byte,
+                        BitOpOperation::Or => *res_byte |= other_byte,
+                        BitOpOperation::Xor => *res_byte ^= other_byte,
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -175,11 +154,11 @@ impl ExecutableCommand for BitOp {
 
         let result_len = result_bytes.len();
         let dest_shard_index = ctx.db.get_shard_index(&self.dest_key);
-        let dest_guard = guards
-            .get_mut(&dest_shard_index)
-            .ok_or_else(|| SpinelDBError::Internal("Missing shard lock for BITOP dest".into()))?;
+        let dest_guard = guards.get_mut(&dest_shard_index).ok_or_else(|| {
+            SpinelDBError::Internal("Missing shard lock for BITOP destination".into())
+        })?;
 
-        // Store the result in the destination key.
+        // --- Phase 3: Store the result ---
         let new_value = StoredValue::new(DataValue::String(result_bytes));
         dest_guard.put(self.dest_key.clone(), new_value);
 

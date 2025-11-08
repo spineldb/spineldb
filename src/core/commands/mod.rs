@@ -22,6 +22,7 @@ pub use command_spec::CommandSpec;
 mod command_def;
 
 // Publicly declare all command category modules.
+pub mod bloom;
 pub mod cache;
 pub mod cluster;
 pub mod command_spec;
@@ -30,6 +31,7 @@ pub mod generic;
 pub mod geospatial;
 pub mod hash;
 pub mod helpers;
+pub mod hyperloglog;
 pub mod json;
 pub mod key_extractor;
 pub mod list;
@@ -46,7 +48,8 @@ define_commands! {
     dispatchers: {
         (Cache, Cache, cache),
         (Cluster, ClusterInfo, cluster),
-        (Json, Json, json)
+        (Json, Json, json),
+        (Bf, Bloom, bloom)
     },
     standard: {
         // --- Generic Commands ---
@@ -240,6 +243,11 @@ define_commands! {
         (Scan, Scan, scan),
         (HScan, HScan, scan),
         (SScan, SScan, scan),
-        (ZScan, ZScan, scan)
+        (ZScan, ZScan, scan),
+
+        // --- HyperLogLog Commands ---
+        (PfAdd, PfAdd, hyperloglog),
+        (PfCount, PfCount, hyperloglog),
+        (PfMerge, PfMerge, hyperloglog)
     }
 }
