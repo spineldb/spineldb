@@ -111,3 +111,40 @@ pub mod patterns {
         "x".repeat(1024 * 1024)
     }
 }
+
+/// Constants for numeric test values
+pub mod constants {
+    /// Near i64::MAX for testing large number operations
+    pub const NEAR_I64_MAX: &str = "9223372036854775806";
+
+    /// i64::MAX value as string
+    #[allow(dead_code)] // Available for future tests
+    pub const I64_MAX_STR: &str = "9223372036854775807";
+
+    /// i64::MAX value
+    pub const I64_MAX: i64 = i64::MAX;
+
+    /// i64::MIN value as string
+    #[allow(dead_code)] // Available for future tests
+    pub const I64_MIN_STR: &str = "-9223372036854775808";
+
+    /// i64::MIN value
+    #[allow(dead_code)] // Available for future tests
+    pub const I64_MIN: i64 = i64::MIN;
+
+    /// Default TTL in seconds for tests
+    pub const DEFAULT_TTL_SECONDS: u64 = 60;
+
+    /// Default TTL in milliseconds for tests
+    pub const DEFAULT_TTL_MILLIS: u64 = 60000;
+
+    /// Character 'A' in ASCII (0x41 = 01000001) - used for bit operation tests
+    pub const CHAR_A: &str = "A";
+
+    /// Character 'A' byte value
+    #[allow(dead_code)] // Available for future tests that need the byte value
+    pub const CHAR_A_BYTE: u8 = 0x41;
+
+    /// Expected bit count for character 'A' (01000001 has 2 bits set)
+    pub const CHAR_A_BIT_COUNT: i64 = 2;
+}
