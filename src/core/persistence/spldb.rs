@@ -715,7 +715,7 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
             cursor.copy_to_slice(&mut registers);
 
             Ok(DataValue::HyperLogLog(Box::new(
-                crate::core::storage::data_types::HyperLogLog { registers, alpha },
+                crate::core::storage::hll::HyperLogLog { registers, alpha },
             )))
         }
         SPLDB_TYPE_BLOOMFILTER => {
@@ -730,7 +730,7 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
             let seed2 = cursor.get_u64_le();
             let bits = read_string(cursor)?.to_vec();
             Ok(DataValue::BloomFilter(Box::new(
-                crate::core::storage::data_types::BloomFilter {
+                crate::core::storage::bloom::BloomFilter {
                     bits,
                     num_hashes,
                     seeds: [seed1, seed2],

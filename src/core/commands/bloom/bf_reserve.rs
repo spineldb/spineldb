@@ -7,7 +7,8 @@ use crate::core::commands::command_trait::{
 use crate::core::commands::helpers::{extract_bytes, extract_string};
 use crate::core::database::ExecutionContext;
 use crate::core::protocol::RespFrame;
-use crate::core::storage::data_types::{BloomFilter, DataValue, StoredValue};
+use crate::core::storage::bloom::BloomFilter;
+use crate::core::storage::data_types::{DataValue, StoredValue};
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
