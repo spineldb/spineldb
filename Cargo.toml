@@ -67,6 +67,7 @@ broadcast = "0.1.0"
 jsonpath_lib = "0.3.0"
 serde_bytes = "0.11.17"
 zstd = "0.13.3"
+murmur3 = "0.5.2"
 
 [dev-dependencies]
 # Property-based testing

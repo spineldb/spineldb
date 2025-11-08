@@ -44,6 +44,7 @@ const SPLDB_TYPE_HASH: u8 = 4;
 const SPLDB_TYPE_STREAM: u8 = 5;
 const SPLDB_TYPE_JSON: u8 = 6;
 const SPLDB_TYPE_HTTPCACHE: u8 = 7;
+const SPLDB_TYPE_HYPERLOGLOG: u8 = 8;
 
 const CHECKSUM_ALGO: Crc<u64> = Crc::<u64>::new(&CRC_64_REDIS);
 
@@ -516,6 +517,12 @@ fn serialize_single_value_data(buf: &mut BytesMut, data: &DataValue) -> io::Resu
             let json_str = serde_json::to_string(val)?;
             write_string(buf, json_str.as_bytes());
         }
+        DataValue::HyperLogLog(hll) => {
+            buf.put_u8(SPLDB_TYPE_HYPERLOGLOG);
+            buf.put_f64(hll.alpha);
+            // Serialize all 16384 registers as a sequence of bytes
+            buf.extend_from_slice(&hll.registers);
+        }
         DataValue::HttpCache {
             variants, vary_on, ..
         } => {
@@ -687,6 +694,21 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
             let value: serde_json::Value = serde_json::from_slice(&json_bytes)
                 .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
             Ok(DataValue::Json(value))
+        }
+        SPLDB_TYPE_HYPERLOGLOG => {
+            if cursor.remaining() < 8 + 16384 {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Not enough bytes for HyperLogLog",
+                ));
+            }
+            let alpha = cursor.get_f64();
+            let mut registers = [0u8; 16384];
+            cursor.copy_to_slice(&mut registers);
+
+            Ok(DataValue::HyperLogLog(Box::new(
+                crate::core::storage::data_types::HyperLogLog { registers, alpha },
+            )))
         }
         SPLDB_TYPE_HTTPCACHE => {
             let vary_len = read_length_encoding(cursor)? as usize;

@@ -79,6 +79,12 @@ impl TestContext {
         Ok(resp)
     }
 
+    /// Executes a command from a RespFrame
+    pub async fn execute_frame(&self, frame: RespFrame) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(frame)?;
+        self.execute(command).await
+    }
+
     /// Executes multiple commands sequentially
     #[allow(dead_code)]
     pub async fn execute_multiple(

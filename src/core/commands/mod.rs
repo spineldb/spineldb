@@ -30,6 +30,7 @@ pub mod generic;
 pub mod geospatial;
 pub mod hash;
 pub mod helpers;
+pub mod hyperloglog;
 pub mod json;
 pub mod key_extractor;
 pub mod list;
@@ -240,6 +241,11 @@ define_commands! {
         (Scan, Scan, scan),
         (HScan, HScan, scan),
         (SScan, SScan, scan),
-        (ZScan, ZScan, scan)
+        (ZScan, ZScan, scan),
+
+        // --- HyperLogLog Commands ---
+        (PfAdd, PfAdd, hyperloglog),
+        (PfCount, PfCount, hyperloglog),
+        (PfMerge, PfMerge, hyperloglog)
     }
 }

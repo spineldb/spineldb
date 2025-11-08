@@ -229,6 +229,34 @@ Let's model a simple sensor data stream.
 
 ---
 
+## 7. HyperLogLogs
+
+HyperLogLog (HLL) is a probabilistic data structure used to estimate the number of unique elements (cardinality) in a dataset. Its magic lies in its ability to approximate the cardinality of millions of items using only a very small, constant amount of memory (around 16KB). This makes it ideal for counting unique visitors on a website, unique items searched, or other large-scale statistical data.
+
+**Common Commands:** `PFADD`, `PFCOUNT`, `PFMERGE`
+
+### Example Session
+
+Let's count the number of unique users viewing a product page.
+
+```shell
+# Add some user IDs to the HLL for today.
+# Note that "user:3" is added twice.
+# The command returns 1 if an internal register was changed, 0 otherwise.
+127.0.0.1:7878> PFADD page:views:2025-11-08 "user:1" "user:2" "user:3"
+(integer) 1
+127.0.0.1:7878> PFADD page:views:2025-11-08 "user:3" "user:4"
+(integer) 1
+
+# Get the estimated count of unique users
+127.0.0.1:7878> PFCOUNT page:views:2025-11-08
+(integer) 4
+```
+
+> **Compatibility Note:** SpinelDB's HyperLogLog implementation uses the `murmur3_x64_128` hash function for optimal performance and distribution. This differs from Redis, which uses `MurmurHash2`. As a result, the binary representation of HLL keys in SpinelDB is not compatible with Redis. You cannot merge HLLs between a SpinelDB and a Redis instance.
+
+---
+
 ### You're Ready to Build!
 
 You now have a solid foundation for using SpinelDB's core data types. With these building blocks, you can model a wide variety of application data and logic.

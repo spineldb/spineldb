@@ -40,6 +40,7 @@ pub async fn check_safety_limits(
                         DataValue::Set(s) => s.len(),
                         DataValue::Hash(h) => h.len(),
                         DataValue::SortedSet(z) => z.len(),
+                        DataValue::HyperLogLog(hll) => hll.count() as usize,
                         _ => 0,
                     };
 

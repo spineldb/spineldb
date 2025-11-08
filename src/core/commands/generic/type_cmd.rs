@@ -62,6 +62,7 @@ impl ExecutableCommand for TypeInfo {
                 DataValue::Hash(_) => "hash",
                 DataValue::Stream(_) => "stream",
                 DataValue::Json(_) => "json",
+                DataValue::HyperLogLog(_) => "hyperloglog",
                 // For compatibility, an HttpCache is exposed as a "string" type
                 // to clients, as they primarily interact with its body.
                 DataValue::HttpCache { .. } => "string",
