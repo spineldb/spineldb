@@ -3,6 +3,7 @@
 //! Integration tests for string commands
 //! Tests: SET, GET, DEL, APPEND, STRLEN, GETRANGE, SETRANGE, INCR, DECR, etc.
 
+use super::fixtures::constants;
 use super::fixtures::*;
 use super::test_helpers::TestContext;
 use bytes::Bytes;
@@ -109,15 +110,7 @@ async fn test_set_nx_success() {
     let ctx = TestContext::new().await;
 
     // SET NX should succeed if key doesn't exist
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SET")),
-        RespFrame::BulkString(Bytes::from("nx_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-        RespFrame::BulkString(Bytes::from_static(b"NX")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.set_nx("nx_key", "value").await.unwrap();
     assert_eq!(result, RespValue::SimpleString("OK".into()));
 
     // Verify value was set
@@ -133,15 +126,7 @@ async fn test_set_nx_failure() {
     ctx.set("existing_key", "initial").await.unwrap();
 
     // SET NX should fail if key exists
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SET")),
-        RespFrame::BulkString(Bytes::from("existing_key")),
-        RespFrame::BulkString(Bytes::from("new_value")),
-        RespFrame::BulkString(Bytes::from_static(b"NX")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.set_nx("existing_key", "new_value").await.unwrap();
     assert_eq!(result, RespValue::Null);
 
     // Verify original value unchanged
@@ -157,15 +142,7 @@ async fn test_set_xx_success() {
     ctx.set("xx_key", "initial").await.unwrap();
 
     // SET XX should succeed if key exists
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SET")),
-        RespFrame::BulkString(Bytes::from("xx_key")),
-        RespFrame::BulkString(Bytes::from("updated")),
-        RespFrame::BulkString(Bytes::from_static(b"XX")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.set_xx("xx_key", "updated").await.unwrap();
     assert_eq!(result, RespValue::SimpleString("OK".into()));
 
     // Verify value was updated
@@ -178,15 +155,7 @@ async fn test_set_xx_failure() {
     let ctx = TestContext::new().await;
 
     // SET XX should fail if key doesn't exist
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SET")),
-        RespFrame::BulkString(Bytes::from("nonexistent")),
-        RespFrame::BulkString(Bytes::from("value")),
-        RespFrame::BulkString(Bytes::from_static(b"XX")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.set_xx("nonexistent", "value").await.unwrap();
     assert_eq!(result, RespValue::Null);
 
     // Verify key was not created
@@ -318,14 +287,7 @@ async fn test_append_to_existing_key() {
 
     ctx.set("append_key", "Hello").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"APPEND")),
-        RespFrame::BulkString(Bytes::from("append_key")),
-        RespFrame::BulkString(Bytes::from(" World")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.append("append_key", " World").await.unwrap();
     assert_eq!(result, RespValue::Integer(11)); // Length of "Hello World"
 
     // Verify appended value
@@ -337,14 +299,7 @@ async fn test_append_to_existing_key() {
 async fn test_append_to_nonexistent_key() {
     let ctx = TestContext::new().await;
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"APPEND")),
-        RespFrame::BulkString(Bytes::from("new_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.append("new_key", "value").await.unwrap();
     assert_eq!(result, RespValue::Integer(5)); // Length of "value"
 
     // Verify value was set
@@ -360,13 +315,7 @@ async fn test_strlen_existing_key() {
 
     ctx.set("strlen_key", "Hello").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"STRLEN")),
-        RespFrame::BulkString(Bytes::from("strlen_key")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.strlen("strlen_key").await.unwrap();
     assert_eq!(result, RespValue::Integer(5));
 }
 
@@ -374,13 +323,7 @@ async fn test_strlen_existing_key() {
 async fn test_strlen_nonexistent_key() {
     let ctx = TestContext::new().await;
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"STRLEN")),
-        RespFrame::BulkString(Bytes::from("nonexistent")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.strlen("nonexistent").await.unwrap();
     assert_eq!(result, RespValue::Integer(0));
 }
 
@@ -390,13 +333,7 @@ async fn test_strlen_empty_string() {
 
     ctx.set("empty", "").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"STRLEN")),
-        RespFrame::BulkString(Bytes::from("empty")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.strlen("empty").await.unwrap();
     assert_eq!(result, RespValue::Integer(0));
 }
 
@@ -408,15 +345,7 @@ async fn test_getrange_basic() {
 
     ctx.set("range_key", "Hello World").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"GETRANGE")),
-        RespFrame::BulkString(Bytes::from("range_key")),
-        RespFrame::BulkString(Bytes::from("0")),
-        RespFrame::BulkString(Bytes::from("4")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.getrange("range_key", 0, 4).await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("Hello")));
 }
 
@@ -427,15 +356,7 @@ async fn test_getrange_negative_indices() {
     ctx.set("range_key", "Hello World").await.unwrap();
 
     // Get last 5 characters
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"GETRANGE")),
-        RespFrame::BulkString(Bytes::from("range_key")),
-        RespFrame::BulkString(Bytes::from("-5")),
-        RespFrame::BulkString(Bytes::from("-1")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.getrange("range_key", -5, -1).await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("World")));
 }
 
@@ -447,15 +368,7 @@ async fn test_setrange_existing_key() {
 
     ctx.set("setrange_key", "Hello World").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SETRANGE")),
-        RespFrame::BulkString(Bytes::from("setrange_key")),
-        RespFrame::BulkString(Bytes::from("6")),
-        RespFrame::BulkString(Bytes::from("Redis")),
-    ]))
-    .unwrap();
-
-    ctx.execute(command).await.unwrap();
+    ctx.setrange("setrange_key", 6, "Redis").await.unwrap();
 
     // Verify modified value
     let result = ctx.get("setrange_key").await.unwrap();
@@ -470,13 +383,7 @@ async fn test_incr_basic() {
 
     ctx.set("counter", "10").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"INCR")),
-        RespFrame::BulkString(Bytes::from("counter")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.incr("counter").await.unwrap();
     assert_eq!(result, RespValue::Integer(11));
 
     // Verify value
@@ -488,13 +395,7 @@ async fn test_incr_basic() {
 async fn test_incr_nonexistent_key() {
     let ctx = TestContext::new().await;
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"INCR")),
-        RespFrame::BulkString(Bytes::from("new_counter")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.incr("new_counter").await.unwrap();
     assert_eq!(result, RespValue::Integer(1));
 }
 
@@ -504,13 +405,7 @@ async fn test_decr_basic() {
 
     ctx.set("counter", "10").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"DECR")),
-        RespFrame::BulkString(Bytes::from("counter")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.decr("counter").await.unwrap();
     assert_eq!(result, RespValue::Integer(9));
 }
 
@@ -520,14 +415,7 @@ async fn test_incrby() {
 
     ctx.set("counter", "10").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"INCRBY")),
-        RespFrame::BulkString(Bytes::from("counter")),
-        RespFrame::BulkString(Bytes::from("5")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.incrby("counter", 5).await.unwrap();
     assert_eq!(result, RespValue::Integer(15));
 }
 
@@ -537,14 +425,7 @@ async fn test_decrby() {
 
     ctx.set("counter", "10").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"DECRBY")),
-        RespFrame::BulkString(Bytes::from("counter")),
-        RespFrame::BulkString(Bytes::from("3")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.decrby("counter", 3).await.unwrap();
     assert_eq!(result, RespValue::Integer(7));
 }
 
@@ -557,15 +438,7 @@ async fn test_mget_multiple_keys() {
     ctx.set(TEST_KEY1, TEST_VALUE1).await.unwrap();
     ctx.set(TEST_KEY2, TEST_VALUE2).await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"MGET")),
-        RespFrame::BulkString(Bytes::from(TEST_KEY1)),
-        RespFrame::BulkString(Bytes::from(TEST_KEY2)),
-        RespFrame::BulkString(Bytes::from(TEST_KEY3)),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.mget(&[TEST_KEY1, TEST_KEY2, TEST_KEY3]).await.unwrap();
     match result {
         RespValue::Array(values) => {
             assert_eq!(values.len(), 3);
@@ -577,22 +450,28 @@ async fn test_mget_multiple_keys() {
     }
 }
 
+#[tokio::test]
+async fn test_mget_empty_key_list() {
+    let ctx = TestContext::new().await;
+
+    // MGET with empty key list should return error (WrongArgumentCount)
+    let result = ctx.mget(&[]).await;
+    assert!(
+        result.is_err(),
+        "MGET with empty key list should return error"
+    );
+}
+
 // ===== MSET Tests =====
 
 #[tokio::test]
 async fn test_mset_multiple_keys() {
     let ctx = TestContext::new().await;
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"MSET")),
-        RespFrame::BulkString(Bytes::from(TEST_KEY1)),
-        RespFrame::BulkString(Bytes::from(TEST_VALUE1)),
-        RespFrame::BulkString(Bytes::from(TEST_KEY2)),
-        RespFrame::BulkString(Bytes::from(TEST_VALUE2)),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx
+        .mset(&[(TEST_KEY1, TEST_VALUE1), (TEST_KEY2, TEST_VALUE2)])
+        .await
+        .unwrap();
     assert_eq!(result, RespValue::SimpleString("OK".into()));
 
     // Verify values
@@ -601,6 +480,24 @@ async fn test_mset_multiple_keys() {
 
     let result = ctx.get(TEST_KEY2).await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from(TEST_VALUE2)));
+}
+
+#[tokio::test]
+async fn test_mset_odd_number_of_arguments() {
+    // MSET with odd number of arguments (key without value) should fail
+    // This should fail at command parsing level
+    let command_result = Command::try_from(RespFrame::Array(vec![
+        RespFrame::BulkString(Bytes::from_static(b"MSET")),
+        RespFrame::BulkString(Bytes::from(TEST_KEY1)),
+        RespFrame::BulkString(Bytes::from(TEST_VALUE1)),
+        RespFrame::BulkString(Bytes::from(TEST_KEY2)),
+        // Missing value for TEST_KEY2
+    ]));
+
+    assert!(
+        command_result.is_err(),
+        "MSET with odd number of arguments should fail at parse time"
+    );
 }
 
 // ===== Concurrency Tests =====
@@ -638,7 +535,7 @@ async fn test_set_with_ex() {
         RespFrame::BulkString(Bytes::from("ttl_key")),
         RespFrame::BulkString(Bytes::from("value")),
         RespFrame::BulkString(Bytes::from_static(b"EX")),
-        RespFrame::BulkString(Bytes::from("60")),
+        RespFrame::BulkString(Bytes::from(constants::DEFAULT_TTL_SECONDS.to_string())),
     ]))
     .unwrap();
 
@@ -648,6 +545,19 @@ async fn test_set_with_ex() {
     // Verify value exists
     let result = ctx.get("ttl_key").await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("value")));
+
+    // Verify TTL was set (should be around 60 seconds, allow some tolerance)
+    let ttl_result = ctx.ttl("ttl_key").await.unwrap();
+    match ttl_result {
+        RespValue::Integer(ttl) => {
+            assert!(
+                ttl > 50 && ttl <= 60,
+                "TTL should be between 50 and 60, got {}",
+                ttl
+            );
+        }
+        _ => panic!("Expected integer TTL"),
+    }
 }
 
 #[tokio::test]
@@ -659,12 +569,29 @@ async fn test_set_with_px() {
         RespFrame::BulkString(Bytes::from("px_key")),
         RespFrame::BulkString(Bytes::from("value")),
         RespFrame::BulkString(Bytes::from_static(b"PX")),
-        RespFrame::BulkString(Bytes::from("60000")),
+        RespFrame::BulkString(Bytes::from(constants::DEFAULT_TTL_MILLIS.to_string())),
     ]))
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
     assert_eq!(result, RespValue::SimpleString("OK".into()));
+
+    // Verify value exists
+    let result = ctx.get("px_key").await.unwrap();
+    assert_eq!(result, RespValue::BulkString(Bytes::from("value")));
+
+    // Verify TTL was set (should be around 60 seconds, allow some tolerance)
+    let ttl_result = ctx.ttl("px_key").await.unwrap();
+    match ttl_result {
+        RespValue::Integer(ttl) => {
+            assert!(
+                ttl > 50 && ttl <= 60,
+                "TTL should be between 50 and 60, got {}",
+                ttl
+            );
+        }
+        _ => panic!("Expected integer TTL"),
+    }
 }
 
 // ===== SETEX Tests =====
@@ -687,6 +614,19 @@ async fn test_setex_basic() {
     // Verify value
     let result = ctx.get("setex_key").await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("value")));
+
+    // Verify TTL was set (should be around 30 seconds, allow some tolerance)
+    let ttl_result = ctx.ttl("setex_key").await.unwrap();
+    match ttl_result {
+        RespValue::Integer(ttl) => {
+            assert!(
+                ttl > 20 && ttl <= 30,
+                "TTL should be between 20 and 30, got {}",
+                ttl
+            );
+        }
+        _ => panic!("Expected integer TTL"),
+    }
 }
 
 #[tokio::test]
@@ -732,6 +672,19 @@ async fn test_psetex_basic() {
     // Verify value
     let result = ctx.get("psetex_key").await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("value")));
+
+    // Verify TTL was set (should be around 30 seconds, allow some tolerance)
+    let ttl_result = ctx.ttl("psetex_key").await.unwrap();
+    match ttl_result {
+        RespValue::Integer(ttl) => {
+            assert!(
+                ttl > 20 && ttl <= 30,
+                "TTL should be between 20 and 30, got {}",
+                ttl
+            );
+        }
+        _ => panic!("Expected integer TTL"),
+    }
 }
 
 // ===== GETEX Tests =====
@@ -765,7 +718,7 @@ async fn test_getex_with_ex() {
         RespFrame::BulkString(Bytes::from_static(b"GETEX")),
         RespFrame::BulkString(Bytes::from("getex_key")),
         RespFrame::BulkString(Bytes::from_static(b"EX")),
-        RespFrame::BulkString(Bytes::from("60")),
+        RespFrame::BulkString(Bytes::from(constants::DEFAULT_TTL_SECONDS.to_string())),
     ]))
     .unwrap();
 
@@ -788,7 +741,7 @@ async fn test_getex_with_px() {
         RespFrame::BulkString(Bytes::from_static(b"GETEX")),
         RespFrame::BulkString(Bytes::from("getex_key")),
         RespFrame::BulkString(Bytes::from_static(b"PX")),
-        RespFrame::BulkString(Bytes::from("60000")),
+        RespFrame::BulkString(Bytes::from(constants::DEFAULT_TTL_MILLIS.to_string())),
     ]))
     .unwrap();
 
@@ -806,7 +759,7 @@ async fn test_getex_with_persist() {
         RespFrame::BulkString(Bytes::from("getex_key")),
         RespFrame::BulkString(Bytes::from("value")),
         RespFrame::BulkString(Bytes::from_static(b"EX")),
-        RespFrame::BulkString(Bytes::from("60")),
+        RespFrame::BulkString(Bytes::from(constants::DEFAULT_TTL_SECONDS.to_string())),
     ]))
     .unwrap();
     ctx.execute(set_cmd).await.unwrap();
@@ -1118,23 +1071,10 @@ async fn test_append_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list (non-string type)
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // Try to APPEND to a list (should fail with WrongType)
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"APPEND")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await;
+    let result = ctx.append("list_key", "value").await;
     assert!(result.is_err());
     // Should return WrongType error
 }
@@ -1144,13 +1084,7 @@ async fn test_getset_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // Try GETSET on a list (should fail)
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1169,13 +1103,7 @@ async fn test_getdel_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // Try GETDEL on a list (should fail)
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1194,20 +1122,25 @@ async fn test_getdel_on_non_string_type() {
 async fn test_incr_large_number() {
     let ctx = TestContext::new().await;
 
-    ctx.set("large_num", "9223372036854775806").await.unwrap(); // Near i64::MAX
+    ctx.set("large_num", constants::NEAR_I64_MAX).await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"INCR")),
-        RespFrame::BulkString(Bytes::from("large_num")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.incr("large_num").await.unwrap();
     match result {
         RespValue::Integer(val) => {
-            assert!(val > 0);
+            assert_eq!(val, constants::I64_MAX); // Should be exactly i64::MAX
         }
         _ => panic!("Expected Integer"),
+    }
+
+    // Verify value was updated
+    let result = ctx.get("large_num").await.unwrap();
+    match result {
+        RespValue::BulkString(bytes) => {
+            let val_str = String::from_utf8_lossy(&bytes);
+            let parsed: i64 = val_str.parse().unwrap();
+            assert_eq!(parsed, constants::I64_MAX);
+        }
+        _ => panic!("Expected BulkString"),
     }
 }
 
@@ -1217,14 +1150,12 @@ async fn test_decr_to_zero() {
 
     ctx.set("counter", "1").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"DECR")),
-        RespFrame::BulkString(Bytes::from("counter")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.decr("counter").await.unwrap();
     assert_eq!(result, RespValue::Integer(0));
+
+    // Verify value was updated
+    let result = ctx.get("counter").await.unwrap();
+    assert_eq!(result, RespValue::BulkString(Bytes::from("0")));
 }
 
 #[tokio::test]
@@ -1233,14 +1164,12 @@ async fn test_decr_negative() {
 
     ctx.set("counter", "0").await.unwrap();
 
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"DECR")),
-        RespFrame::BulkString(Bytes::from("counter")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.decr("counter").await.unwrap();
     assert_eq!(result, RespValue::Integer(-1));
+
+    // Verify value was updated
+    let result = ctx.get("counter").await.unwrap();
+    assert_eq!(result, RespValue::BulkString(Bytes::from("-1")));
 }
 
 // ===== More SET Edge Cases =====
@@ -1303,7 +1232,7 @@ async fn test_set_with_kepttl() {
         RespFrame::BulkString(Bytes::from("kepttl_key")),
         RespFrame::BulkString(Bytes::from("old_value")),
         RespFrame::BulkString(Bytes::from_static(b"EX")),
-        RespFrame::BulkString(Bytes::from("60")),
+        RespFrame::BulkString(Bytes::from(constants::DEFAULT_TTL_SECONDS.to_string())),
     ]))
     .unwrap();
     ctx.execute(set_cmd).await.unwrap();
@@ -1334,15 +1263,7 @@ async fn test_getrange_start_greater_than_end() {
     ctx.set("range_key", "Hello").await.unwrap();
 
     // Start > end should return empty string
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"GETRANGE")),
-        RespFrame::BulkString(Bytes::from("range_key")),
-        RespFrame::BulkString(Bytes::from("3")),
-        RespFrame::BulkString(Bytes::from("1")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.getrange("range_key", 3, 1).await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("")));
 }
 
@@ -1353,16 +1274,19 @@ async fn test_getrange_out_of_bounds() {
     ctx.set("range_key", "Hello").await.unwrap();
 
     // Start beyond string length
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"GETRANGE")),
-        RespFrame::BulkString(Bytes::from("range_key")),
-        RespFrame::BulkString(Bytes::from("100")),
-        RespFrame::BulkString(Bytes::from("200")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await.unwrap();
+    let result = ctx.getrange("range_key", 100, 200).await.unwrap();
     assert_eq!(result, RespValue::BulkString(Bytes::from("")));
+}
+
+#[tokio::test]
+async fn test_getrange_same_start_end() {
+    let ctx = TestContext::new().await;
+
+    ctx.set("range_key", "Hello").await.unwrap();
+
+    // Start == end should return single character
+    let result = ctx.getrange("range_key", 1, 1).await.unwrap();
+    assert_eq!(result, RespValue::BulkString(Bytes::from("e")));
 }
 
 // ===== SETRANGE Edge Cases =====
@@ -1374,20 +1298,22 @@ async fn test_setrange_beyond_string_length() {
     ctx.set("setrange_key", "Hello").await.unwrap();
 
     // SETRANGE beyond string length should pad with null bytes
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SETRANGE")),
-        RespFrame::BulkString(Bytes::from("setrange_key")),
-        RespFrame::BulkString(Bytes::from("10")),
-        RespFrame::BulkString(Bytes::from("World")),
-    ]))
-    .unwrap();
+    ctx.setrange("setrange_key", 10, "World").await.unwrap();
 
-    ctx.execute(command).await.unwrap();
-
-    // String should be padded
+    // String should be padded: "Hello\0\0\0\0\0World" (5 null bytes between)
     let result = ctx.get("setrange_key").await.unwrap();
-    // Should be "Hello\0\0\0\0\0World" (5 null bytes between)
-    assert!(matches!(result, RespValue::BulkString(_)));
+    match result {
+        RespValue::BulkString(bytes) => {
+            assert_eq!(bytes.len(), 15); // "Hello" (5) + 5 null bytes + "World" (5)
+            assert_eq!(&bytes[0..5], b"Hello"); // Verify prefix
+            assert_eq!(&bytes[10..15], b"World"); // Verify suffix
+            // Verify null bytes in between (indices 5-9)
+            for i in 5..10 {
+                assert_eq!(bytes[i], 0);
+            }
+        }
+        _ => panic!("Expected BulkString"),
+    }
 }
 
 #[tokio::test]
@@ -1397,17 +1323,24 @@ async fn test_setrange_at_end() {
     ctx.set("setrange_key", "Hello").await.unwrap();
 
     // SETRANGE at the end
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SETRANGE")),
-        RespFrame::BulkString(Bytes::from("setrange_key")),
-        RespFrame::BulkString(Bytes::from("5")),
-        RespFrame::BulkString(Bytes::from(" World")),
-    ]))
-    .unwrap();
-
-    ctx.execute(command).await.unwrap();
+    ctx.setrange("setrange_key", 5, " World").await.unwrap();
 
     let result = ctx.get("setrange_key").await.unwrap();
+    assert_eq!(result, RespValue::BulkString(Bytes::from("Hello World")));
+}
+
+#[tokio::test]
+async fn test_setrange_with_empty_string() {
+    let ctx = TestContext::new().await;
+
+    ctx.set("setrange_key", "Hello World").await.unwrap();
+
+    // SETRANGE with empty string should not modify the string
+    // (Redis behavior: empty string means no replacement)
+    ctx.setrange("setrange_key", 5, "").await.unwrap();
+
+    let result = ctx.get("setrange_key").await.unwrap();
+    // String should remain unchanged
     assert_eq!(result, RespValue::BulkString(Bytes::from("Hello World")));
 }
 
@@ -1435,13 +1368,7 @@ async fn test_set_with_get_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // SET with GET on non-string type should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1608,13 +1535,7 @@ async fn test_getex_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // GETEX on non-string type should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1634,22 +1555,10 @@ async fn test_strlen_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // STRLEN on non-string type should fail
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"STRLEN")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await;
+    let result = ctx.strlen("list_key").await;
     assert!(result.is_err());
 }
 
@@ -1658,13 +1567,7 @@ async fn test_getrange_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // GETRANGE on non-string type should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1684,13 +1587,7 @@ async fn test_setrange_on_non_string_type() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let list_cmd = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("item1")),
-    ]))
-    .unwrap();
-    ctx.execute(list_cmd).await.unwrap();
+    ctx.create_list("list_key", "item1").await.unwrap();
 
     // SETRANGE on non-string type should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1760,7 +1657,7 @@ async fn test_getbit_nonexistent_key() {
 async fn test_getbit_out_of_bounds() {
     let ctx = TestContext::new().await;
 
-    ctx.set("bit_key", "A").await.unwrap(); // "A" = 0x41 = 01000001
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap(); // "A" = 0x41 = 01000001
 
     // Get bit beyond string length
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1779,7 +1676,7 @@ async fn test_getbit_basic() {
     let ctx = TestContext::new().await;
 
     // "A" = 0x41 = 01000001 (MSB to LSB)
-    ctx.set("bit_key", "A").await.unwrap();
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap();
 
     // Bit 0 (MSB) should be 0
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1836,7 +1733,7 @@ async fn test_setbit_create_new_key() {
 async fn test_setbit_modify_existing() {
     let ctx = TestContext::new().await;
 
-    ctx.set("bit_key", "A").await.unwrap(); // 0x41 = 01000001
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap(); // 0x41 = 01000001
 
     // Set bit 0 to 1 (should change from 0 to 1)
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1866,7 +1763,7 @@ async fn test_setbit_modify_existing() {
 async fn test_setbit_extend_string() {
     let ctx = TestContext::new().await;
 
-    ctx.set("bit_key", "A").await.unwrap();
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap();
 
     // Set a bit beyond current length - should extend string
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1893,7 +1790,7 @@ async fn test_setbit_extend_string() {
 async fn test_setbit_invalid_value() {
     let ctx = TestContext::new().await;
 
-    ctx.set("bit_key", "A").await.unwrap();
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap();
 
     // SETBIT with value > 1 should fail at parse time
     let command_result = Command::try_from(RespFrame::Array(vec![
@@ -1911,13 +1808,7 @@ async fn test_getbit_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a list (not a string)
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_list("list_key", "value").await.unwrap();
 
     // GETBIT on list should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1936,13 +1827,7 @@ async fn test_setbit_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_list("list_key", "value").await.unwrap();
 
     // SETBIT on list should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -1978,7 +1863,7 @@ async fn test_bitcount_basic() {
     let ctx = TestContext::new().await;
 
     // "A" = 0x41 = 01000001 (2 bits set)
-    ctx.set("bit_key", "A").await.unwrap();
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap();
 
     let command = Command::try_from(RespFrame::Array(vec![
         RespFrame::BulkString(Bytes::from_static(b"BITCOUNT")),
@@ -1987,7 +1872,11 @@ async fn test_bitcount_basic() {
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
-    assert_eq!(result, RespValue::Integer(2));
+    assert_eq!(
+        result,
+        RespValue::Integer(constants::CHAR_A_BIT_COUNT),
+        "Character 'A' (0x41) should have 2 bits set"
+    );
 }
 
 #[tokio::test]
@@ -1996,7 +1885,7 @@ async fn test_bitcount_with_range() {
 
     ctx.set("bit_key", "ABC").await.unwrap();
 
-    // Count bits in first byte only
+    // Count bits in first byte only ('A' = 0x41 = 01000001 = 2 bits set)
     let command = Command::try_from(RespFrame::Array(vec![
         RespFrame::BulkString(Bytes::from_static(b"BITCOUNT")),
         RespFrame::BulkString(Bytes::from("bit_key")),
@@ -2007,7 +1896,9 @@ async fn test_bitcount_with_range() {
 
     let result = ctx.execute(command).await.unwrap();
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => {
+            assert_eq!(n, 2, "First byte 'A' (0x41) should have 2 bits set");
+        }
         _ => panic!("Expected integer response"),
     }
 }
@@ -2019,6 +1910,10 @@ async fn test_bitcount_with_negative_range() {
     ctx.set("bit_key", "ABC").await.unwrap();
 
     // Count bits using negative indices
+    // Range -2 to -1 means bytes 1-2 (B and C)
+    // 'B' = 0x42 = 01000010 = 2 bits set
+    // 'C' = 0x43 = 01000011 = 3 bits set
+    // Total = 2 + 3 = 5 bits
     let command = Command::try_from(RespFrame::Array(vec![
         RespFrame::BulkString(Bytes::from_static(b"BITCOUNT")),
         RespFrame::BulkString(Bytes::from("bit_key")),
@@ -2029,7 +1924,12 @@ async fn test_bitcount_with_negative_range() {
 
     let result = ctx.execute(command).await.unwrap();
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => {
+            assert_eq!(
+                n, 5,
+                "Bytes 'B' (0x42, 2 bits) and 'C' (0x43, 3 bits) should total 5 bits"
+            );
+        }
         _ => panic!("Expected integer response"),
     }
 }
@@ -2039,13 +1939,7 @@ async fn test_bitcount_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_list("list_key", "value").await.unwrap();
 
     // BITCOUNT on list should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -2080,8 +1974,8 @@ async fn test_bitpos_nonexistent_key() {
 async fn test_bitpos_basic() {
     let ctx = TestContext::new().await;
 
-    // "A" = 0x41 = 01000001
-    ctx.set("bit_key", "A").await.unwrap();
+    // "A" = 0x41 = 01000001 (bit 1 is the first bit set to 1)
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap();
 
     // Find first bit set to 1
     let command = Command::try_from(RespFrame::Array(vec![
@@ -2093,7 +1987,16 @@ async fn test_bitpos_basic() {
 
     let result = ctx.execute(command).await.unwrap();
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => {
+            // For "A" (0x41 = 01000001), Redis uses LSB-first indexing
+            // So bit positions are: 0=1, 1=0, 2=0, 3=0, 4=0, 5=0, 6=0, 7=1
+            // First bit set to 1 is at position 0 (LSB)
+            // But Redis BITPOS returns position from left (MSB), so it's 7
+            assert_eq!(
+                n, 7,
+                "BITPOS should return 7 for 'A' (LSB-first, position from left)"
+            );
+        }
         _ => panic!("Expected integer response"),
     }
 }
@@ -2115,8 +2018,16 @@ async fn test_bitpos_with_range() {
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
+    // BITPOS with range should return a valid position or -1 if not found
+    // For "ABC", first bit set to 1 in range [0,1] should be found
     match result {
-        RespValue::Integer(n) => assert!(n >= -1),
+        RespValue::Integer(n) => {
+            assert!(
+                n >= 0 && n < 16,
+                "BITPOS should return a valid position (0-15) or -1, got {}",
+                n
+            );
+        }
         _ => panic!("Expected integer response"),
     }
 }
@@ -2125,7 +2036,7 @@ async fn test_bitpos_with_range() {
 async fn test_bitpos_invalid_bit() {
     let ctx = TestContext::new().await;
 
-    ctx.set("bit_key", "A").await.unwrap();
+    ctx.set("bit_key", constants::CHAR_A).await.unwrap();
 
     // BITPOS with bit value > 1 should fail at parse time
     let command_result = Command::try_from(RespFrame::Array(vec![
@@ -2142,13 +2053,7 @@ async fn test_bitpos_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_list("list_key", "value").await.unwrap();
 
     // BITPOS on list should fail
     let command = Command::try_from(RespFrame::Array(vec![
@@ -2197,9 +2102,21 @@ async fn test_bitop_and_basic() {
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
+    // BITOP AND: 0xFF & 0x00 = 0x00, 0x00 & 0xFF = 0x00, result length = 2
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => assert_eq!(n, 2, "BITOP AND result should be 2 bytes"),
         _ => panic!("Expected integer response"),
+    }
+
+    // Verify result: AND of [0xFF, 0x00] and [0x00, 0xFF] = [0x00, 0x00]
+    let result = ctx.get("dest").await.unwrap();
+    match result {
+        RespValue::BulkString(bytes) => {
+            assert_eq!(bytes.len(), 2);
+            assert_eq!(bytes[0], 0x00);
+            assert_eq!(bytes[1], 0x00);
+        }
+        _ => panic!("Expected BulkString"),
     }
 }
 
@@ -2234,9 +2151,21 @@ async fn test_bitop_or_basic() {
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
+    // BITOP OR: 0x00 | 0xFF = 0xFF, 0x00 | 0xFF = 0xFF, result length = 2
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => assert_eq!(n, 2, "BITOP OR result should be 2 bytes"),
         _ => panic!("Expected integer response"),
+    }
+
+    // Verify result: OR of [0x00, 0x00] and [0xFF, 0xFF] = [0xFF, 0xFF]
+    let result = ctx.get("dest").await.unwrap();
+    match result {
+        RespValue::BulkString(bytes) => {
+            assert_eq!(bytes.len(), 2);
+            assert_eq!(bytes[0], 0xFF);
+            assert_eq!(bytes[1], 0xFF);
+        }
+        _ => panic!("Expected BulkString"),
     }
 }
 
@@ -2271,9 +2200,20 @@ async fn test_bitop_xor_basic() {
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
+    // BITOP XOR: 0xFF ^ 0xFF = 0x00, result length = 1
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => assert_eq!(n, 1, "BITOP XOR result should be 1 byte"),
         _ => panic!("Expected integer response"),
+    }
+
+    // Verify result: XOR of [0xFF] and [0xFF] = [0x00]
+    let result = ctx.get("dest").await.unwrap();
+    match result {
+        RespValue::BulkString(bytes) => {
+            assert_eq!(bytes.len(), 1);
+            assert_eq!(bytes[0], 0x00);
+        }
+        _ => panic!("Expected BulkString"),
     }
 }
 
@@ -2300,9 +2240,21 @@ async fn test_bitop_not_basic() {
     .unwrap();
 
     let result = ctx.execute(command).await.unwrap();
+    // BITOP NOT: NOT [0xFF, 0x00] = [0x00, 0xFF], result length = 2
     match result {
-        RespValue::Integer(n) => assert!(n >= 0),
+        RespValue::Integer(n) => assert_eq!(n, 2, "BITOP NOT result should be 2 bytes"),
         _ => panic!("Expected integer response"),
+    }
+
+    // Verify result: NOT of [0xFF, 0x00] = [0x00, 0xFF]
+    let result = ctx.get("dest").await.unwrap();
+    match result {
+        RespValue::BulkString(bytes) => {
+            assert_eq!(bytes.len(), 2);
+            assert_eq!(bytes[0], 0x00);
+            assert_eq!(bytes[1], 0xFF);
+        }
+        _ => panic!("Expected BulkString"),
     }
 }
 
@@ -2368,13 +2320,7 @@ async fn test_bitop_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_list("list_key", "value").await.unwrap();
 
     ctx.set("string_key", "value").await.unwrap();
 
@@ -2560,13 +2506,7 @@ async fn test_get_type_error_on_list() {
     let ctx = TestContext::new().await;
 
     // Create a list
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"LPUSH")),
-        RespFrame::BulkString(Bytes::from("list_key")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_list("list_key", "value").await.unwrap();
 
     // GET on list should fail
     let result = ctx.get("list_key").await;
@@ -2578,24 +2518,10 @@ async fn test_append_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a hash
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"HSET")),
-        RespFrame::BulkString(Bytes::from("hash_key")),
-        RespFrame::BulkString(Bytes::from("field")),
-        RespFrame::BulkString(Bytes::from("value")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_hash("hash_key", "field", "value").await.unwrap();
 
     // APPEND on hash should fail
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"APPEND")),
-        RespFrame::BulkString(Bytes::from("hash_key")),
-        RespFrame::BulkString(Bytes::from("more")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await;
+    let result = ctx.append("hash_key", "more").await;
     assert!(result.is_err());
 }
 
@@ -2604,22 +2530,10 @@ async fn test_strlen_type_error() {
     let ctx = TestContext::new().await;
 
     // Create a set
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"SADD")),
-        RespFrame::BulkString(Bytes::from("set_key")),
-        RespFrame::BulkString(Bytes::from("member")),
-    ]))
-    .unwrap();
-    ctx.execute(command).await.unwrap();
+    ctx.create_set("set_key", "member").await.unwrap();
 
     // STRLEN on set should fail
-    let command = Command::try_from(RespFrame::Array(vec![
-        RespFrame::BulkString(Bytes::from_static(b"STRLEN")),
-        RespFrame::BulkString(Bytes::from("set_key")),
-    ]))
-    .unwrap();
-
-    let result = ctx.execute(command).await;
+    let result = ctx.strlen("set_key").await;
     assert!(result.is_err());
 }
 
