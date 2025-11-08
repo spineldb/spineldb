@@ -45,6 +45,7 @@ const SPLDB_TYPE_STREAM: u8 = 5;
 const SPLDB_TYPE_JSON: u8 = 6;
 const SPLDB_TYPE_HTTPCACHE: u8 = 7;
 const SPLDB_TYPE_HYPERLOGLOG: u8 = 8;
+const SPLDB_TYPE_BLOOMFILTER: u8 = 9;
 
 const CHECKSUM_ALGO: Crc<u64> = Crc::<u64>::new(&CRC_64_REDIS);
 
@@ -523,6 +524,13 @@ fn serialize_single_value_data(buf: &mut BytesMut, data: &DataValue) -> io::Resu
             // Serialize all 16384 registers as a sequence of bytes
             buf.extend_from_slice(&hll.registers);
         }
+        DataValue::BloomFilter(bf) => {
+            buf.put_u8(SPLDB_TYPE_BLOOMFILTER);
+            buf.put_u32_le(bf.num_hashes);
+            buf.put_u64_le(bf.seeds[0]);
+            buf.put_u64_le(bf.seeds[1]);
+            write_string(buf, &bf.bits);
+        }
         DataValue::HttpCache {
             variants, vary_on, ..
         } => {
@@ -708,6 +716,25 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
 
             Ok(DataValue::HyperLogLog(Box::new(
                 crate::core::storage::data_types::HyperLogLog { registers, alpha },
+            )))
+        }
+        SPLDB_TYPE_BLOOMFILTER => {
+            if cursor.remaining() < 4 + 8 + 8 {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Not enough bytes for BloomFilter metadata",
+                ));
+            }
+            let num_hashes = cursor.get_u32_le();
+            let seed1 = cursor.get_u64_le();
+            let seed2 = cursor.get_u64_le();
+            let bits = read_string(cursor)?.to_vec();
+            Ok(DataValue::BloomFilter(Box::new(
+                crate::core::storage::data_types::BloomFilter {
+                    bits,
+                    num_hashes,
+                    seeds: [seed1, seed2],
+                },
             )))
         }
         SPLDB_TYPE_HTTPCACHE => {

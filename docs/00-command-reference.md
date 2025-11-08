@@ -66,6 +66,14 @@ The `JSON` command provides native support for JSON data types.
 *   `JSON.TOGGLE key path`
 *   `JSON.TYPE key [path]`
 
+### `BF.*` Commands (Bloom Filter)
+
+The `BF` command provides access to SpinelDB's Bloom filter functionality.
+
+*   `BF.RESERVE key error_rate capacity`
+*   `BF.ADD key item`
+*   `BF.EXISTS key item`
+
 ## Standard Commands
 
 These are the top-level commands, often compatible with Redis's standard commands.

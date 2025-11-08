@@ -47,6 +47,9 @@ pub enum SpinelDBError {
     #[error("Key not found")]
     KeyNotFound,
 
+    #[error("Key already exists")]
+    KeyExists,
+
     #[error("NOAUTH Authentication required")]
     AuthRequired,
 
@@ -133,6 +136,7 @@ impl Clone for SpinelDBError {
             SpinelDBError::NotAFloat => SpinelDBError::NotAFloat,
             SpinelDBError::Overflow => SpinelDBError::Overflow,
             SpinelDBError::KeyNotFound => SpinelDBError::KeyNotFound,
+            SpinelDBError::KeyExists => SpinelDBError::KeyExists,
             SpinelDBError::AuthRequired => SpinelDBError::AuthRequired,
             SpinelDBError::NoPermission => SpinelDBError::NoPermission,
             SpinelDBError::InvalidRequest(s) => SpinelDBError::InvalidRequest(s.clone()),
@@ -198,6 +202,7 @@ impl PartialEq for SpinelDBError {
             (SpinelDBError::ReplicationLoopDetected, SpinelDBError::ReplicationLoopDetected) => {
                 true
             }
+            (SpinelDBError::KeyExists, SpinelDBError::KeyExists) => true,
             (SpinelDBError::TransactionAborted, SpinelDBError::TransactionAborted) => true,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }

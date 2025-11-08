@@ -22,6 +22,7 @@ pub use command_spec::CommandSpec;
 mod command_def;
 
 // Publicly declare all command category modules.
+pub mod bloom;
 pub mod cache;
 pub mod cluster;
 pub mod command_spec;
@@ -47,7 +48,8 @@ define_commands! {
     dispatchers: {
         (Cache, Cache, cache),
         (Cluster, ClusterInfo, cluster),
-        (Json, Json, json)
+        (Json, Json, json),
+        (Bf, Bloom, bloom)
     },
     standard: {
         // --- Generic Commands ---

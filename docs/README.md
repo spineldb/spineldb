@@ -57,6 +57,10 @@ Explore SpinelDB's powerful, built-in support for modern data formats, enabling 
     *   Adding locations to a geo index with `GEOADD`.
     *   Querying for items within a radius using `GEORADIUS` and `GEORADIUSBYMEMBER`.
     *   Calculating distances with `GEODIST` and retrieving coordinates with `GEOPOS`.
+*   ➡️ **[15. Bloom Filter Commands](./15-bloom-filter.md)**
+    *   Creating Bloom filters with `BF.RESERVE`.
+    *   Adding items with `BF.ADD`.
+    *   Checking for item existence with `BF.EXISTS`.
 
 ## 🧠 Chapter 4: The Intelligent Caching Engine
 

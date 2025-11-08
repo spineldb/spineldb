@@ -59,7 +59,7 @@ _"Stop building boilerplate caching and data consistency logic in your applicati
     *   **`Vary` Header Support:** Serve different versions of the same resource based on request headers (e.g., `Accept-Language`).
     *   **On-Disk Streaming:** Automatically streams large cache objects to disk to protect memory, with zero performance impact for the client.
 
-*   **Rich Data Structures:** Strings, Lists, Hashes, Sets, Sorted Sets, **Native JSON**, and Streams.
+*   **Rich Data Structures:** Strings, Lists, Hashes, Sets, Sorted Sets, **Native JSON**, Streams, **Bloom Filters**, and **HyperLogLogs**.
 
 *   **Server-Side Lua Scripting:**
     *   **`EVAL` & `EVALSHA`:** Full compatibility with Redis scripting commands.
