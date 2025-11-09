@@ -80,6 +80,7 @@ impl TestContext {
     }
 
     /// Executes a command from a RespFrame
+    #[allow(dead_code)]
     pub async fn execute_frame(&self, frame: RespFrame) -> Result<RespValue, SpinelDBError> {
         let command = Command::try_from(frame)?;
         self.execute(command).await
