@@ -155,27 +155,21 @@ mod linux_memory {
     use super::*;
 
     pub fn get_cgroup_memory_limit() -> Option<u64> {
-        // Cgroup v2
-        if let Ok(limit_str) = fs::read_to_string("/sys/fs/cgroup/memory.max") {
-            if let Ok(limit) = limit_str.trim().parse::<u64>() {
-                if limit < u64::MAX / 2 {
-                    info!("Detected cgroup v2 memory limit: {} bytes", limit);
-                    return Some(limit);
-                }
-            }
-        }
+        let check = |path: &str, ver: &str| {
+            fs::read_to_string(path).ok().and_then(|s| {
+                s.trim().parse::<u64>().ok().and_then(|limit| {
+                    if limit < u64::MAX / 2 {
+                        info!("Detected cgroup {} memory limit: {} bytes", ver, limit);
+                        Some(limit)
+                    } else {
+                        None
+                    }
+                })
+            })
+        };
 
-        // Cgroup v1
-        if let Ok(limit_str) = fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes") {
-            if let Ok(limit) = limit_str.trim().parse::<u64>() {
-                if limit < u64::MAX / 2 {
-                    info!("Detected cgroup v1 memory limit: {} bytes", limit);
-                    return Some(limit);
-                }
-            }
-        }
-
-        None
+        check("/sys/fs/cgroup/memory.max", "v2")
+            .or_else(|| check("/sys/fs/cgroup/memory/memory.limit_in_bytes", "v1"))
     }
 }
 
