@@ -184,7 +184,12 @@ impl GeoRadius {
         if let Some(key) = &self.options.store {
             let mut new_zset = SortedSet::new();
             for point in &results {
-                new_zset.add(point.score.unwrap(), point.member.clone());
+                new_zset.add(
+                    point
+                        .score
+                        .expect("GeoPoint score should always be present"),
+                    point.member.clone(),
+                );
             }
             let new_val = StoredValue::new(DataValue::SortedSet(new_zset));
             let shard_index = db.get_shard_index(key);
@@ -196,7 +201,12 @@ impl GeoRadius {
         if let Some(key) = &self.options.store_dist {
             let mut new_zset = SortedSet::new();
             for point in &results {
-                new_zset.add(point.dist.unwrap(), point.member.clone());
+                new_zset.add(
+                    point
+                        .dist
+                        .expect("GeoPoint distance should always be present"),
+                    point.member.clone(),
+                );
             }
             let new_val = StoredValue::new(DataValue::SortedSet(new_zset));
             let shard_index = db.get_shard_index(key);
@@ -224,14 +234,25 @@ impl GeoRadius {
                 let mut item_array = vec![RespValue::BulkString(point.member)];
                 if self.options.with_dist {
                     item_array.push(RespValue::BulkString(
-                        point.dist.unwrap().to_string().into(),
+                        point
+                            .dist
+                            .expect("GeoPoint distance should always be present")
+                            .to_string()
+                            .into(),
                     ));
                 }
                 if self.options.with_hash {
-                    item_array.push(RespValue::Integer(point.score.unwrap() as i64));
+                    item_array.push(RespValue::Integer(
+                        point
+                            .score
+                            .expect("GeoPoint score should always be present")
+                            as i64,
+                    ));
                 }
                 if self.options.with_coord {
-                    let (lon, lat) = point.coords.unwrap();
+                    let (lon, lat) = point
+                        .coords
+                        .expect("GeoPoint coordinates should always be present");
                     item_array.push(RespValue::Array(vec![
                         RespValue::BulkString(lon.to_string().into()),
                         RespValue::BulkString(lat.to_string().into()),
@@ -342,7 +363,12 @@ impl GeoRadius {
             }
         }
 
-        final_results.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
+        final_results.sort_by(|a, b| {
+            a.dist
+                .expect("GeoPoint distance should always be present")
+                .partial_cmp(&b.dist.expect("GeoPoint distance should always be present"))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         if !self.options.sort_asc {
             final_results.reverse();
         }
