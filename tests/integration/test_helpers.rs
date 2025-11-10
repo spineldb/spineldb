@@ -699,6 +699,193 @@ impl TestContext {
         let command = Command::try_from(RespFrame::Array(frames))?;
         self.execute(command).await
     }
+
+    // ===== Hash Command Helpers =====
+
+    /// Helper to execute HSET command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hset(
+        &self,
+        key: &str,
+        field_values: &[(&str, &str)],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"HSET"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for (field, value) in field_values {
+            frames.push(RespFrame::BulkString(Bytes::from(field.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(value.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HGET command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hget(&self, key: &str, field: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HGET")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(field.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HDEL command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hdel(&self, key: &str, fields: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"HDEL"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for field in fields {
+            frames.push(RespFrame::BulkString(Bytes::from(field.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HGETALL command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hgetall(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HGETALL")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HMGET command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hmget(&self, key: &str, fields: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"HMGET"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for field in fields {
+            frames.push(RespFrame::BulkString(Bytes::from(field.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HEXISTS command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hexists(&self, key: &str, field: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HEXISTS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(field.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HSETNX command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hsetnx(
+        &self,
+        key: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HSETNX")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(field.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HLEN command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hlen(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HLEN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HKEYS command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hkeys(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HKEYS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HVALS command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hvals(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HVALS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HINCRBY command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hincrby(
+        &self,
+        key: &str,
+        field: &str,
+        increment: i64,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HINCRBY")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(field.to_string())),
+            RespFrame::BulkString(Bytes::from(increment.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HINCRBYFLOAT command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hincrbyfloat(
+        &self,
+        key: &str,
+        field: &str,
+        increment: f64,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HINCRBYFLOAT")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(field.to_string())),
+            RespFrame::BulkString(Bytes::from(increment.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HSTRLEN command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hstrlen(&self, key: &str, field: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"HSTRLEN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(field.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute HRANDFIELD command
+    #[allow(dead_code)] // Used in hash_commands_test.rs
+    pub async fn hrandfield(
+        &self,
+        key: &str,
+        count: Option<i64>,
+        with_values: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"HRANDFIELD"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        if with_values {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WITHVALUES")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
 }
 
 // ===== Test Assertion Helpers =====
