@@ -7,6 +7,7 @@
 
 mod integration {
     pub mod fixtures;
+    pub mod hash_commands_test;
     pub mod list_commands_test;
     pub mod string_commands_test;
     pub mod test_helpers;
