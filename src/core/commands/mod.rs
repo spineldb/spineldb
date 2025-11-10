@@ -222,6 +222,7 @@ define_commands! {
         (GeoDist, GeoDist, geospatial),
         (GeoRadius, GeoRadiusCmd, geospatial),
         (GeoRadiusByMember, GeoRadiusByMemberCmd, geospatial),
+        (GeoHash, GeoHash, geospatial),
 
         // --- Stream Commands ---
         (XAdd, XAdd, streams),

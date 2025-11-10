@@ -46,7 +46,7 @@ Let's find the coordinates of the Eiffel Tower.
 ```shell
 # Request the position of one or more members
 127.0.0.1:7878> GEOPOS paris:landmarks "Eiffel Tower" "Imaginary Place"
-1) 1) "2.2944999516010284"
+1) "2.2944999516010284"
    2) "48.85819912101994"
 2) (nil)
 ```
@@ -54,7 +54,27 @@ The command returns an array of positions. If a member does not exist in the ind
 
 ---
 
-## 3. Calculating Distance (`GEODIST`)
+## 3. Retrieving Geohash Strings (`GEOHASH`)
+
+You can retrieve the 11-character Geohash string representation for one or more members of a geospatial index. This can be useful for debugging, integration with other geohash-based systems, or for displaying a compact location identifier.
+
+**Command:** `GEOHASH`
+
+### Example Session
+
+Let's get the Geohash strings for the Eiffel Tower and Notre Dame.
+
+```shell
+127.0.0.1:7878> GEOHASH paris:landmarks "Eiffel Tower" "Notre Dame" "NonExistent"
+1) "u0000000000" # Example Geohash, actual value will vary
+2) "u0000000000" # Example Geohash, actual value will vary
+3) (nil)
+```
+The command returns an array of Geohash strings. If a member does not exist, `(nil)` is returned for that member.
+
+---
+
+## 4. Calculating Distance (`GEODIST`)
 
 SpinelDB can calculate the direct ("as the crow flies") distance between any two members in a geospatial index.
 
@@ -76,7 +96,7 @@ Let's find the distance between the Louvre Museum and Notre Dame.
 
 ---
 
-## 4. Querying by Radius (`GEORADIUS` and `GEORADIUSBYMEMBER`)
+## 5. Querying by Radius (`GEORADIUS` and `GEORADIUSBYMEMBER`)
 
 This is the most powerful feature of the geospatial toolset. You can query for all members within a given radius from a central point. This point can be specified either by coordinates (`GEORADIUS`) or by another member in the set (`GEORADIUSBYMEMBER`).
 
