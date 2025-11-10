@@ -83,14 +83,16 @@ impl ExecutableCommand for JsonArrAppend {
                 if target.is_null() {
                     *target = Value::Array(vec![]);
                 }
-                if !target.is_array() {
-                    return Err(SpinelDBError::InvalidState("Target is not an array".into()));
+
+                match target.as_array_mut() {
+                    Some(arr) => {
+                        for val in new_values.iter() {
+                            arr.push(val.clone());
+                        }
+                        Ok(Value::from(arr.len()))
+                    }
+                    None => Err(SpinelDBError::WrongType),
                 }
-                let arr = target.as_array_mut().unwrap();
-                for val in new_values.iter() {
-                    arr.push(val.clone());
-                }
-                Ok(Value::from(arr.len()))
             };
 
             let res = helpers::find_and_modify(root, &path, append_op, true)?;

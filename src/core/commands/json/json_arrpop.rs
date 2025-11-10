@@ -65,30 +65,31 @@ impl ExecutableCommand for JsonArrPop {
             let old_size = helpers::estimate_json_memory(root);
 
             let pop_op = |target: &mut Value| {
-                if !target.is_array() {
-                    return Err(SpinelDBError::InvalidState("Target is not an array".into()));
+                match target.as_array_mut() {
+                    Some(arr) => {
+                        if arr.is_empty() {
+                            return Ok(Value::Null); // Nothing to pop
+                        }
+
+                        let len = arr.len();
+                        let index_to_pop = self.index.unwrap_or(-1); // Default is to pop from the end
+
+                        let final_index = if index_to_pop >= 0 {
+                            index_to_pop as usize
+                        } else {
+                            (len as i64 + index_to_pop) as usize
+                        };
+
+                        // Explicitly check for out-of-bounds access.
+                        if final_index >= len {
+                            return Ok(Value::Null); // Index out of bounds, nothing to pop.
+                        }
+
+                        popped_value = arr.remove(final_index);
+                        Ok(popped_value.clone())
+                    }
+                    None => Err(SpinelDBError::WrongType),
                 }
-                let arr = target.as_array_mut().unwrap();
-                if arr.is_empty() {
-                    return Ok(Value::Null); // Nothing to pop
-                }
-
-                let len = arr.len();
-                let index_to_pop = self.index.unwrap_or(-1); // Default is to pop from the end
-
-                let final_index = if index_to_pop >= 0 {
-                    index_to_pop as usize
-                } else {
-                    (len as i64 + index_to_pop) as usize
-                };
-
-                // Explicitly check for out-of-bounds access.
-                if final_index >= len {
-                    return Ok(Value::Null); // Index out of bounds, nothing to pop.
-                }
-
-                popped_value = arr.remove(final_index);
-                Ok(popped_value.clone())
             };
 
             // find_and_modify returns an error if the path does not exist.

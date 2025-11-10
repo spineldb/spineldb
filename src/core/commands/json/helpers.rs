@@ -200,10 +200,19 @@ pub fn find_values_by_jsonpath<'a>(
     root: &'a Value,
     path_str: &str,
 ) -> Result<Vec<&'a Value>, SpinelDBError> {
-    let final_path = if path_str == "." { "$" } else { path_str };
+    let final_path = if path_str == "." {
+        "$".to_string()
+    } else if path_str.starts_with('.') {
+        format!("${}", path_str)
+    } else {
+        path_str.to_string()
+    };
 
-    find_values_with_jsonpath(root, final_path)
-        .map_err(|e| SpinelDBError::InvalidState(format!("Invalid JSONPath: {e}")))
+    find_values_with_jsonpath(root, &final_path).map_err(|e| {
+        // Sanitize the error message to prevent protocol errors
+        let sanitized_error = e.to_string().replace('\n', " ");
+        SpinelDBError::InvalidState(format!("Invalid JSONPath: {}", sanitized_error))
+    })
 }
 
 /// Formats a serde_json::Number to a string, omitting trailing `.0` for whole numbers.
