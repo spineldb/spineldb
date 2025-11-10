@@ -13,6 +13,10 @@ When you execute `CACHE.PROXY`, SpinelDB will:
 
 This significantly simplifies your application logic, offloading complex caching decisions and network interactions to SpinelDB.
 
+### CACHE.PROXY Flow
+
+![CACHE.PROXY Flow](../diagram/cache-proxy-flow.png)
+
 ---
 
 ## Command Syntax

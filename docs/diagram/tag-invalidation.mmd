@@ -1,0 +1,32 @@
+sequenceDiagram
+    participant Admin
+    participant Node1 as Node 1
+    participant Node2 as Node 2
+    participant Node3 as Node 3
+    participant Cache1 as Cache 1
+    participant Cache2 as Cache 2
+    participant Cache3 as Cache 3
+    
+    Note over Admin,Cache3: Tag-Based Invalidation Flow
+    Admin->>Node1: CACHE.PURGETAG user:123
+    Node1->>Node1: Update tag epoch<br/>(cluster-wide logical clock)
+    Node1->>Node2: Gossip: new epoch for user:123
+    Node1->>Node3: Gossip: new epoch for user:123
+    
+    Note over Node1,Cache3: Lazy Invalidation
+    Node2->>Node2: Update latest_purge_epoch
+    Node3->>Node3: Update latest_purge_epoch
+    
+    Note over Cache1,Cache3: On Access Validation
+    Client->>Cache1: CACHE.GET user:123:profile
+    Cache1->>Cache1: Compare tags_epoch<br/>vs latest_purge_epoch
+    alt tags_epoch < latest_purge_epoch
+        Cache1->>Cache1: Treat as cache miss
+        Cache1-->>Client: (nil) - trigger revalidation
+    else tags_epoch >= latest_purge_epoch
+        Cache1-->>Client: Return cached content
+    end
+    
+    Note over Cache1,Cache3: Background Cleanup
+    Note right of Cache1: Background task periodically<br/>scans and deletes stale entries<br/>with old tags_epoch
+

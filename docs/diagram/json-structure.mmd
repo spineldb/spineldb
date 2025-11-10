@@ -1,0 +1,39 @@
+graph TB
+    subgraph "JSON Document Structure"
+        Root["$<br/>(Root)"]
+        User["user:1"]
+        
+        Root --> User
+        User --> Name["name: 'Alice'"]
+        User --> Email["email: 'alice@example.com'"]
+        User --> Active["active: true"]
+        User --> Tags["tags: []"]
+        User --> Contact["contact: {}"]
+        
+        Tags --> Tag0["[0]: 'admin'"]
+        Tags --> Tag1["[1]: 'dev'"]
+        
+        Contact --> Phone["phone: '123-456-7890'"]
+        Contact --> Address["address: {}"]
+        
+        Address --> Street["street: '123 Main St'"]
+        Address --> City["city: 'Paris'"]
+    end
+    
+    Path1["Path: $<br/>JSON.GET user:1 $"]
+    Path2["Path: $.email<br/>JSON.GET user:1 $.email"]
+    Path3["Path: $.tags[0]<br/>JSON.GET user:1 $.tags[0]"]
+    Path4["Path: $.contact.phone<br/>JSON.GET user:1 $.contact.phone"]
+    
+    Path1 --> User
+    Path2 --> Email
+    Path3 --> Tag0
+    Path4 --> Phone
+    
+    style Root fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    style User fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Path1 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Path2 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Path3 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Path4 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+

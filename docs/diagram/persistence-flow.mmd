@@ -1,0 +1,42 @@
+graph TB
+    subgraph "SPLDB Snapshotting"
+        Server1[SpinelDB Server]
+        Memory1[In-Memory Data]
+        Snapshot[Snapshot Process]
+        SPDFile[dump.spldb<br/>Binary File]
+        
+        Memory1 -->|Trigger Save| Snapshot
+        Snapshot -->|Write| SPDFile
+        SPDFile -->|On Restart| Memory1
+    end
+    
+    subgraph "AOF Persistence"
+        Server2[SpinelDB Server]
+        Memory2[In-Memory Data]
+        AOFLog[Append-Only File<br/>spineldb.aof]
+        WriteOps[Write Commands]
+        
+        WriteOps -->|Append| AOFLog
+        AOFLog -->|Replay on Restart| Memory2
+    end
+    
+    subgraph "AOF Rewriting"
+        AOFOld[Old AOF File<br/>Large Size]
+        Rewrite[AOF Rewrite Process]
+        SnapshotPhase[Create Snapshot]
+        Buffer[Buffer New Writes]
+        AOFNew[New AOF File<br/>Compact]
+        
+        AOFOld --> Rewrite
+        Rewrite --> SnapshotPhase
+        Rewrite --> Buffer
+        SnapshotPhase --> AOFNew
+        Buffer --> AOFNew
+        AOFNew -->|Replace| AOFOld
+    end
+    
+    style Server1 fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Server2 fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style SPDFile fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style AOFLog fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+

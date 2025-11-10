@@ -10,6 +10,10 @@ You can send a Lua script to the server, which will execute it in a sandboxed en
 *   **Performance:** Reduces network latency by combining multiple operations into a single round-trip.
 *   **Data Locality:** Logic is executed where the data lives, avoiding the need to transfer intermediate data back and forth to the client.
 
+### Lua Scripting Flow
+
+![Lua Scripting Flow](./diagram/lua-scripting.png)
+
 ---
 
 ## 1. Executing Scripts with `EVAL`

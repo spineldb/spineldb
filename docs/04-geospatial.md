@@ -7,6 +7,10 @@ This allows you to perform complex radius queries and distance calculations with
 *   Tracking real-time locations of vehicles or users.
 *   Geofencing and location-based alerts.
 
+### Geospatial Query Flow
+
+![Geospatial Query Flow](./diagram/geospatial-query.png)
+
 ---
 
 ## 1. Adding Geospatial Items (`GEOADD`)

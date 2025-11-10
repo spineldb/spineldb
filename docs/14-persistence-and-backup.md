@@ -4,6 +4,10 @@ While SpinelDB is an in-memory database, a key feature for any production system
 
 SpinelDB offers two primary modes of persistence, which can be used individually or together depending on your durability requirements.
 
+### Persistence Flow
+
+![Persistence Flow](./diagram/persistence-flow.png)
+
 ---
 
 ## 1. Snapshotting with SPLDB

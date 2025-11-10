@@ -1,0 +1,33 @@
+sequenceDiagram
+    participant Client
+    participant Server
+    
+    Note over Client,Server: Basic Transaction Flow
+    Client->>Server: MULTI
+    Server-->>Client: OK
+    Client->>Server: INCR counter:a
+    Server-->>Client: QUEUED
+    Client->>Server: DECRBY counter:b 5
+    Server-->>Client: QUEUED
+    Client->>Server: EXEC
+    Server->>Server: Execute all queued commands
+    Server-->>Client: [11, 15]
+    
+    Note over Client,Server: Transaction with WATCH
+    Client->>Server: WATCH account:balance
+    Server->>Server: Record version number
+    Server-->>Client: OK
+    Client->>Server: GET account:balance
+    Server-->>Client: "100"
+    
+    Note over Client,Server: Another client modifies key
+    Note right of Server: Another client: INCRBY account:balance 50
+    
+    Client->>Server: MULTI
+    Server-->>Client: OK
+    Client->>Server: SET account:balance 80
+    Server-->>Client: QUEUED
+    Client->>Server: EXEC
+    Server->>Server: Check version changed?
+    Server-->>Client: (nil) - Transaction aborted
+

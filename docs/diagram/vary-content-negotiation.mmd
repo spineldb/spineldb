@@ -1,0 +1,35 @@
+graph TB
+    subgraph "Variant Management"
+        Key[Cache Key<br/>assets:main.css]
+        VariantMap[Variant Map]
+        Variant1[Variant 1<br/>Hash: gzip<br/>Accept-Encoding: gzip]
+        Variant2[Variant 2<br/>Hash: none<br/>Accept-Encoding: <empty>]
+        Variant3[Variant 3<br/>Hash: br<br/>Accept-Encoding: br]
+    end
+    
+    Key --> VariantMap
+    VariantMap --> Variant1
+    VariantMap --> Variant2
+    VariantMap --> Variant3
+    
+    Client1[Client 1<br/>Accept-Encoding: gzip] -->|CACHE.GET<br/>HEADERS Accept-Encoding gzip| Hash1[Calculate Hash<br/>from Headers]
+    Client2[Client 2<br/>No Accept-Encoding] -->|CACHE.GET| Hash2[Calculate Hash<br/>empty headers]
+    Client3[Client 3<br/>Accept-Encoding: br] -->|CACHE.GET<br/>HEADERS Accept-Encoding br| Hash3[Calculate Hash<br/>from Headers]
+    
+    Hash1 -->|Match| Variant1
+    Hash2 -->|Match| Variant2
+    Hash3 -->|Match| Variant3
+    
+    Variant1 -->|Return| Response1[Gzipped CSS]
+    Variant2 -->|Return| Response2[Uncompressed CSS]
+    Variant3 -->|Cache Miss| Response3[(nil)]
+    
+    LRU[LRU Eviction<br/>if max_variants exceeded]
+    VariantMap --> LRU
+    
+    style Key fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    style VariantMap fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Variant1 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Variant2 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Variant3 fill:#9E9E9E,stroke:#424242,stroke-width:2px,color:#fff
+

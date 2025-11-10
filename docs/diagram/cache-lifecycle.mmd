@@ -1,0 +1,24 @@
+graph LR
+    subgraph "Cache Item Lifecycle"
+        Fresh[Fresh Period<br/>TTL: 60s<br/>Serve from cache]
+        Stale[Stale Period<br/>SWR: 300s<br/>Serve stale +<br/>Background revalidate]
+        Grace[Grace Period<br/>GRACE: 3600s<br/>Serve stale if<br/>origin down]
+        Expired[Expired<br/>Cache miss]
+    end
+    
+    Fresh -->|TTL expires| Stale
+    Stale -->|SWR expires| Grace
+    Grace -->|GRACE expires| Expired
+    Stale -->|Revalidation succeeds| Fresh
+    Grace -->|Origin recovers| Fresh
+    
+    Request1[Client Request<br/>0-60s] -->|Cache Hit| Fresh
+    Request2[Client Request<br/>60-360s] -->|Stale Hit| Stale
+    Request3[Client Request<br/>360-3960s] -->|Grace Hit| Grace
+    Request4[Client Request<br/>>3960s] -->|Cache Miss| Expired
+    
+    style Fresh fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    style Stale fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Grace fill:#F44336,stroke:#B71C1C,stroke-width:2px,color:#fff
+    style Expired fill:#9E9E9E,stroke:#424242,stroke-width:2px,color:#fff
+

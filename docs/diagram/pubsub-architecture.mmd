@@ -1,0 +1,24 @@
+graph TB
+    Publisher[Publisher Client]
+    Server[SpinelDB Server]
+    Subscriber1[Subscriber 1<br/>news:sports]
+    Subscriber2[Subscriber 2<br/>news:sports<br/>notifications]
+    Subscriber3[Subscriber 3<br/>news:* pattern]
+    
+    Publisher -->|PUBLISH news:sports| Server
+    Server -->|Message| Subscriber1
+    Server -->|Message| Subscriber2
+    Server -->|Message| Subscriber3
+    
+    Publisher -->|PUBLISH notifications| Server
+    Server -->|Message| Subscriber2
+    
+    Publisher -->|PUBLISH news:finance| Server
+    Server -->|Message| Subscriber3
+    
+    style Publisher fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Server fill:#2196F3,stroke:#1565C0,stroke-width:3px,color:#fff
+    style Subscriber1 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Subscriber2 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Subscriber3 fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+

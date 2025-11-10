@@ -1,0 +1,24 @@
+graph TB
+    subgraph "Cluster with 3 Nodes"
+        Node1[Node 1<br/>Slots: 0-5460<br/>Port: 7001]
+        Node2[Node 2<br/>Slots: 5461-10922<br/>Port: 7002]
+        Node3[Node 3<br/>Slots: 10923-16383<br/>Port: 7003]
+    end
+    
+    Client[Client<br/>redis-cli -c]
+    
+    Client -->|SET mykey| Node1
+    Node1 -->|Calculate Slot: 6257| Node1
+    Node1 -->|MOVED 6257 127.0.0.1:7002| Client
+    Client -->|SET mykey| Node2
+    Node2 -->|OK| Client
+    
+    Node1 <-->|Gossip Protocol| Node2
+    Node2 <-->|Gossip Protocol| Node3
+    Node3 <-->|Gossip Protocol| Node1
+    
+    style Node1 fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Node2 fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Node3 fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Client fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+

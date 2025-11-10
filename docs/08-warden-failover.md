@@ -90,6 +90,10 @@ Here’s a step-by-step look at what happens when a primary fails:
 
 The entire process is automated and typically completes within seconds.
 
+### Failover Process Flow
+
+![Warden Failover Process](./diagram/warden-failover.png)
+
 ---
 
 ## 4. Client Integration

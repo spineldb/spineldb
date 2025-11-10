@@ -11,6 +11,10 @@ SpinelDB Cluster allows you to automatically **shard** your data across multiple
 *   **Gossip Protocol:** Cluster nodes don't rely on a central configuration server. Instead, they communicate with each other directly using a **gossip protocol**. They constantly exchange information about which nodes are online and which slots each node is responsible for. This makes the cluster resilient and self-organizing.
 *   **Client Redirection:** When a client connects to a node and issues a command for a key that belongs to a different node, the server doesn't execute it. Instead, it replies with a `MOVED` or `ASK` redirection error, telling the client the correct address of the node that owns that key's slot. Smart clients cache this slot map and will send subsequent commands for that slot directly to the correct node.
 
+### Cluster Architecture
+
+![Cluster Architecture](./diagram/clustering-architecture.png)
+
 ---
 
 ## 1. Configuring a Cluster Node
