@@ -1,0 +1,29 @@
+sequenceDiagram
+    participant Client
+    participant Server
+    
+    Note over Client,Server: EVAL - Direct Execution
+    Client->>Server: EVAL "script" numkeys key arg
+    Server->>Server: Execute Lua script
+    Server->>Server: Call spineldb.call() commands
+    Server-->>Client: Result
+    
+    Note over Client,Server: EVALSHA - Cached Execution
+    Client->>Server: SCRIPT LOAD "script"
+    Server->>Server: Cache script & generate SHA1
+    Server-->>Client: SHA1 hash
+    
+    Client->>Server: EVALSHA <hash> numkeys key arg
+    alt Script in cache
+        Server->>Server: Execute cached script
+        Server-->>Client: Result
+    else Script not in cache
+        Server-->>Client: NOSCRIPT error
+        Client->>Server: EVAL "script" (fallback)
+        Server-->>Client: Result
+    end
+    
+    Note over Client,Server: AOF Persistence
+    Server->>Server: Transform EVALSHA to EVAL
+    Server->>Server: Write full script to AOF
+

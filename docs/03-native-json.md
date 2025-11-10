@@ -12,6 +12,10 @@ SpinelDB uses a simple JSONPath-like syntax for targeting specific parts of a do
 
 These can be combined, for example: `$.products[1].price`
 
+### JSON Document Structure
+
+![JSON Document Structure](./diagram/json-structure.png)
+
 ---
 
 ## 1. Storing and Retrieving JSON (`JSON.SET`, `JSON.GET`)

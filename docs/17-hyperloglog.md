@@ -10,6 +10,10 @@ HyperLogLog (HLL) is a probabilistic data structure used to estimate the number 
 
 A HyperLogLog works by hashing the elements you add to it and using the binary representation of the hash to set registers. The number of leading zeros in the binary representation of the hash is used to estimate the cardinality. By combining the estimates from many registers, the HLL can provide a surprisingly accurate estimate of the true cardinality, with a standard error of about 0.81%.
 
+### HyperLogLog Structure
+
+![HyperLogLog Structure](./diagram/hyperloglog.png)
+
 ## 1. `PFADD`
 
 Adds one or more elements to a HyperLogLog.

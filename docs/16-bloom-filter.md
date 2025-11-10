@@ -2,6 +2,10 @@
 
 SpinelDB provides a set of commands to interact with probabilistic Bloom filters. A Bloom filter is a space-efficient probabilistic data structure that is used to test whether an element is a member of a set. False positive matches are possible, but false negatives are not.
 
+### Bloom Filter Structure
+
+![Bloom Filter Structure](./diagram/bloom-filter.png)
+
 ## BF.RESERVE key error_rate capacity
 
 Creates a new Bloom filter with a specified error rate and initial capacity.

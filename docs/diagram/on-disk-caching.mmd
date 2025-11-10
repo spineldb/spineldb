@@ -1,0 +1,37 @@
+graph TB
+    subgraph "Hybrid Caching System"
+        Request[Client Request<br/>CACHE.PROXY images:poster-xyz]
+        CacheCheck{Check<br/>In-Memory Cache}
+        Policy[Cache Policy<br/>URL Template]
+        Origin[Origin Server<br/>5MB Image]
+        SizeCheck{Content-Length<br/>> threshold?}
+        Memory[In-Memory Storage<br/>Small Objects]
+        Disk[On-Disk Storage<br/>Large Objects]
+        Metadata[Metadata in Memory<br/>Pointer to Disk File]
+    end
+    
+    Request --> CacheCheck
+    CacheCheck -->|Cache Hit| Memory
+    CacheCheck -->|Cache Hit| Disk
+    CacheCheck -->|Cache Miss| Policy
+    Policy --> Origin
+    Origin -->|Response| SizeCheck
+    SizeCheck -->|Small| Memory
+    SizeCheck -->|Large| Disk
+    Disk --> Metadata
+    Memory -->|Serve| Client[Client Response]
+    Disk -->|Stream from Disk| Client
+    
+    subgraph "Background Tasks"
+        GC[Garbage Collection Task<br/>Remove deleted files]
+        Eviction[Eviction Task<br/>Enforce max_disk_size]
+    end
+    
+    Disk --> GC
+    Disk --> Eviction
+    
+    style Memory fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Disk fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Metadata fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Origin fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+

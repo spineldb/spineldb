@@ -1,0 +1,35 @@
+sequenceDiagram
+    participant Client
+    participant Server
+    participant ACL as ACL System
+    participant Rules as Rule Engine
+    participant Users as users.json
+    
+    Note over Client,Users: Authentication Flow
+    Client->>Server: AUTH username password
+    Server->>ACL: Validate credentials
+    ACL->>Users: Lookup user
+    Users-->>ACL: User found with rules
+    ACL->>ACL: Verify password hash
+    alt Valid credentials
+        ACL-->>Server: Authentication success
+        Server-->>Client: OK
+    else Invalid credentials
+        ACL-->>Server: Authentication failed
+        Server-->>Client: (error) WRONGPASS
+    end
+    
+    Note over Client,Users: Command Execution
+    Client->>Server: SET billing:invoice:123 "paid"
+    Server->>Rules: Check permissions
+    Rules->>Rules: Evaluate command category
+    Rules->>Rules: Check key pattern
+    alt Permission granted
+        Rules-->>Server: Allow
+        Server->>Server: Execute command
+        Server-->>Client: OK
+    else Permission denied
+        Rules-->>Server: Deny
+        Server-->>Client: (error) NOPERMISSION
+    end
+

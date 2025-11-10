@@ -84,6 +84,10 @@ If user `123` updates their profile, you can invalidate all related cache entrie
 
 This lazy, cluster-aware invalidation mechanism ensures that your cache remains consistent across all nodes without requiring expensive, blocking operations.
 
+### Tag-Based Invalidation Flow
+
+![Tag-Based Invalidation Flow](../diagram/tag-invalidation.png)
+
 ---
 
 ➡️ **Next Chapter: [4d. On-Disk Caching](./04d-on-disk-caching.md)**

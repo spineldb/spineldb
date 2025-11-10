@@ -1,0 +1,38 @@
+sequenceDiagram
+    participant W1 as Warden 1
+    participant W2 as Warden 2
+    participant W3 as Warden 3
+    participant Primary as Primary
+    participant Replica as Replica
+    
+    Note over W1,Replica: Normal Operation
+    W1->>Primary: PING
+    W2->>Primary: PING
+    W3->>Primary: PING
+    Primary-->>W1: PONG
+    Primary-->>W2: PONG
+    Primary-->>W3: PONG
+    
+    Note over W1,Replica: Primary Failure Detected
+    W1->>Primary: PING
+    Primary-->>W1: (timeout)
+    W1->>W1: Mark as SDOWN
+    
+    Note over W1,Replica: Leader Election
+    W1->>W2: VOTE-REQUEST
+    W1->>W3: VOTE-REQUEST
+    W2->>W1: VOTE (if also sees down)
+    W3->>W1: VOTE (if also sees down)
+    
+    Note over W1,Replica: Quorum Reached - Failover
+    W1->>W1: Become Failover Leader
+    W1->>Replica: REPLICAOF NO ONE
+    Replica->>Replica: Promote to Primary
+    W1->>W2: Update state
+    W1->>W3: Update state
+    
+    Note over W1,Replica: Reconfiguration Complete
+    W1->>W1: New primary: Replica
+    W2->>W2: New primary: Replica
+    W3->>W3: New primary: Replica
+

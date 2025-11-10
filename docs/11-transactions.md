@@ -4,6 +4,10 @@ While Lua scripts are excellent for creating new atomic operations, sometimes yo
 
 A transaction guarantees that either **all** of the commands in the sequence are executed, or **none** of them are. The commands are executed sequentially without interruption from other clients.
 
+### Transaction Flow
+
+![Transaction Flow](./diagram/transactions-flow.png)
+
 ---
 
 ## 1. Basic Transactions with `MULTI` and `EXEC`

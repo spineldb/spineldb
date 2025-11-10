@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant Client
+    participant SpinelDB
+    participant Cache as In-Memory Cache
+    participant Policy as Cache Policy
+    participant Origin as Origin Server
+    
+    Note over Client,Origin: CACHE.PROXY Flow
+    Client->>SpinelDB: CACHE.PROXY product:123:details
+    SpinelDB->>Cache: Check cache for key
+    alt Cache Hit (Fresh/Stale/Grace)
+        Cache-->>SpinelDB: Return cached content
+        SpinelDB-->>Client: Return cached response
+        Note over SpinelDB: If stale, trigger<br/>background revalidation
+    else Cache Miss
+        SpinelDB->>Policy: Match key pattern
+        Policy-->>SpinelDB: Policy found:<br/>URL template, TTL, SWR, Tags
+        SpinelDB->>SpinelDB: Construct URL from template
+        SpinelDB->>Origin: HTTP GET request
+        Origin-->>SpinelDB: Response (200 OK)
+        SpinelDB->>Cache: Store with TTL/SWR/GRACE
+        SpinelDB-->>Client: Return fetched content
+    end
+    
+    Note over Client,Origin: Cache Stampede Protection
+    Note right of SpinelDB: Multiple simultaneous requests<br/>for same key = only one<br/>origin fetch
+

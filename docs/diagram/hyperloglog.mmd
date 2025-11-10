@@ -1,0 +1,29 @@
+graph TB
+    subgraph "HyperLogLog Structure"
+        Input[Input Elements<br/>user:1, user:2, user:3]
+        Hash[Hash Function<br/>murmur3_x64_128]
+        Registers[Registers Array<br/>16384 registers]
+        LeadingZeros[Count Leading Zeros<br/>in binary hash]
+        Estimate[Cardinality Estimate]
+    end
+    
+    Input --> Hash
+    Hash -->|Binary representation| LeadingZeros
+    LeadingZeros -->|Update register| Registers
+    
+    Query[PFCOUNT Query] --> Registers
+    Registers -->|Harmonic mean| Estimate
+    Estimate --> Result[Estimated Unique Count<br/>~4 users<br/>Error: ~0.81%]
+    
+    Merge[PFMERGE] --> Registers1[Register Set 1]
+    Merge --> Registers2[Register Set 2]
+    Registers1 -->|Union| MergedRegisters[Merged Registers]
+    Registers2 --> MergedRegisters
+    MergedRegisters --> Estimate
+    
+    style Input fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Registers fill:#2196F3,stroke:#1565C0,stroke-width:3px,color:#fff
+    style Estimate fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Result fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+    style MergedRegisters fill:#00BCD4,stroke:#006064,stroke-width:2px,color:#fff
+

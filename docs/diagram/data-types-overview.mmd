@@ -1,0 +1,30 @@
+graph TB
+    subgraph "SpinelDB Data Types"
+        String[String<br/>Text, Binary, up to 512MB]
+        List[List<br/>Ordered Collection]
+        Hash[Hash<br/>Field-Value Map]
+        Set[Set<br/>Unique Unordered]
+        ZSet[Sorted Set<br/>Score-based Ordered]
+        Stream[Stream<br/>Append-only Log]
+        JSON[JSON<br/>Native JSON Document]
+        HLL[HyperLogLog<br/>Cardinality Estimation]
+        BF[Bloom Filter<br/>Probabilistic Membership]
+    end
+    
+    String -->|SET, GET, INCR| UseCase1[Counters, Cache]
+    List -->|LPUSH, RPOP, LRANGE| UseCase2[Queues, Stacks]
+    Hash -->|HSET, HGET, HGETALL| UseCase3[Objects, Profiles]
+    Set -->|SADD, SINTER, SUNION| UseCase4[Tags, Groups]
+    ZSet -->|ZADD, ZRANGE| UseCase5[Leaderboards, Rankings]
+    Stream -->|XADD, XREAD| UseCase6[Event Logging, Messaging]
+    
+    style String fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style List fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Hash fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Set fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+    style ZSet fill:#F44336,stroke:#B71C1C,stroke-width:2px,color:#fff
+    style Stream fill:#00BCD4,stroke:#006064,stroke-width:2px,color:#fff
+    style JSON fill:#795548,stroke:#3E2723,stroke-width:2px,color:#fff
+    style HLL fill:#607D8B,stroke:#263238,stroke-width:2px,color:#fff
+    style BF fill:#E91E63,stroke:#880E4F,stroke-width:2px,color:#fff
+

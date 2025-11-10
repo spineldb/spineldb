@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant Replica
+    participant Primary
+    participant Disk as Primary Disk
+    
+    Note over Replica,Primary: Full Resynchronization
+    Replica->>Primary: PSYNC ? -1
+    Primary->>Disk: Create Snapshot (.spldb)
+    Primary->>Replica: +FULLRESYNC <replid> <offset>
+    Primary->>Replica: Send .spldb file
+    Replica->>Replica: Clear existing data
+    Replica->>Replica: Load snapshot
+    Primary->>Replica: Stream new commands
+    
+    Note over Replica,Primary: Partial Resynchronization
+    Replica->>Primary: PSYNC <old_replid> <offset>
+    Primary->>Primary: Check backlog for offset
+    alt Offset in backlog
+        Primary->>Replica: +CONTINUE <replid>
+        Primary->>Replica: Stream missed commands
+    else Offset not in backlog
+        Primary->>Replica: +FULLRESYNC (fallback)
+    end
+
