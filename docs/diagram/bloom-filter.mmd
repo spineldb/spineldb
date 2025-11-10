@@ -1,0 +1,39 @@
+graph TB
+    subgraph "Bloom Filter Structure"
+        Input[Input Item<br/>user:123]
+        Hash1[Hash Function 1]
+        Hash2[Hash Function 2]
+        Hash3[Hash Function 3]
+        BitArray[Bit Array<br/>0 1 0 1 1 0 1 0 ...]
+        Output{Item Exists?}
+    end
+    
+    Input --> Hash1
+    Input --> Hash2
+    Input --> Hash3
+    
+    Hash1 -->|Set bit 2| BitArray
+    Hash2 -->|Set bit 4| BitArray
+    Hash3 -->|Set bit 5| BitArray
+    
+    Query[Query: user:123] --> Hash1
+    Query --> Hash2
+    Query --> Hash3
+    
+    Hash1 -->|Check bit 2| Check1{bit 2 = 1?}
+    Hash2 -->|Check bit 4| Check2{bit 4 = 1?}
+    Hash3 -->|Check bit 5| Check3{bit 5 = 1?}
+    
+    Check1 -->|All bits set| Output
+    Check2 --> Output
+    Check3 --> Output
+    
+    Output -->|All 1s| MaybeExists[Maybe Exists<br/>Could be false positive]
+    Output -->|Any 0| DefinitelyNot[Definitely Not Exists<br/>No false negatives]
+    
+    style Input fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style BitArray fill:#2196F3,stroke:#1565C0,stroke-width:3px,color:#fff
+    style Output fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style MaybeExists fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+    style DefinitelyNot fill:#F44336,stroke:#B71C1C,stroke-width:2px,color:#fff
+

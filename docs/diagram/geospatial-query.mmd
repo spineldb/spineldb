@@ -1,0 +1,29 @@
+graph TB
+    subgraph "Geospatial Index"
+        GeoSet[Sorted Set<br/>with Geohash Score]
+        Point1[Eiffel Tower<br/>2.2945, 48.8582]
+        Point2[Louvre Museum<br/>2.3372, 48.8606]
+        Point3[Notre Dame<br/>2.3522, 48.8566]
+    end
+    
+    Query[GEORADIUS Query<br/>Center: Louvre<br/>Radius: 1.5 km]
+    
+    GeoSet -->|GEOADD| Point1
+    GeoSet -->|GEOADD| Point2
+    GeoSet -->|GEOADD| Point3
+    
+    Query -->|Calculate Distance| Point2
+    Query -->|Calculate Distance| Point3
+    Query -->|Filter by Radius| Results[Results:<br/>- Notre Dame: 1.2 km<br/>- Louvre: 0.0 km]
+    
+    Point1 -.->|Too far| Query
+    Point2 -->|Within radius| Results
+    Point3 -->|Within radius| Results
+    
+    style GeoSet fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    style Query fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Results fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Point1 fill:#9E9E9E,stroke:#424242,stroke-width:1px,color:#fff
+    style Point2 fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    style Point3 fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+

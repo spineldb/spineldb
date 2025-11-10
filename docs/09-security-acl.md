@@ -10,6 +10,10 @@ With ACLs, you can define specific **rules** that grant or deny permissions for:
 
 These rules are then assigned to different **users**, each with their own password.
 
+### ACL Authentication and Authorization Flow
+
+![ACL Authentication Flow](./diagram/acl-authentication.png)
+
 ---
 
 ## 1. Enabling and Configuring ACLs

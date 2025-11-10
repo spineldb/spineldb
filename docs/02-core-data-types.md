@@ -4,6 +4,10 @@ Welcome to the core of SpinelDB's functionality. If you're familiar with Redis, 
 
 This chapter provides a hands-on introduction to each data type, demonstrating the most common commands you'll use in your day-to-day work.
 
+### Data Types Overview
+
+![Data Types Overview](./diagram/data-types-overview.png)
+
 ---
 
 ## 1. Strings

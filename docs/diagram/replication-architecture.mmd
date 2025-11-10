@@ -1,0 +1,22 @@
+graph TB
+    Primary[Primary Server<br/>Accepts Writes]
+    Replica1[Replica 1<br/>Read-Only]
+    Replica2[Replica 2<br/>Read-Only]
+    Client1[Client 1<br/>Write Operations]
+    Client2[Client 2<br/>Read Operations]
+    Client3[Client 3<br/>Read Operations]
+    
+    Client1 -->|Write Commands| Primary
+    Client2 -->|Read Commands| Replica1
+    Client3 -->|Read Commands| Replica2
+    
+    Primary -->|Replication Stream| Replica1
+    Primary -->|Replication Stream| Replica2
+    
+    style Primary fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    style Replica1 fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Replica2 fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    style Client1 fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    style Client2 fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+    style Client3 fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+

@@ -8,6 +8,10 @@ This decouples message producers (publishers) from message consumers (subscriber
 *   Live data feeds for dashboards and user interfaces.
 *   Triggering background jobs.
 
+### Pub/Sub Architecture
+
+![Pub/Sub Architecture](./diagram/pubsub-architecture.png)
+
 ---
 
 ## 1. Subscribing to Channels (`SUBSCRIBE`)

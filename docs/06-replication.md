@@ -13,6 +13,10 @@ In this model, you have one **primary** instance and one or more **replica** ins
 1.  **High Availability & Data Redundancy:** If the primary instance fails, a replica can be manually or automatically promoted to become the new primary, minimizing downtime and preventing data loss.
 2.  **Read Scaling:** Read-heavy workloads can be distributed across multiple replicas. This offloads traffic from the primary, allowing it to focus on handling writes.
 
+### Primary-Replica Architecture
+
+![Primary-Replica Architecture](./diagram/replication-architecture.png)
+
 ---
 
 ## 1. Configuring a Primary
@@ -84,6 +88,10 @@ To avoid the cost of a full resync for brief disconnections (like a network hicc
 5.  The replica applies these commands and is quickly back in sync.
 
 This process is extremely fast and efficient, making the replication system resilient to transient network issues. If the replica is disconnected for too long and the required offset is no longer in the backlog, the primary will force a full resynchronization.
+
+### Synchronization Process Flow
+
+![Synchronization Process](./diagram/replication-sync.png)
 
 ---
 

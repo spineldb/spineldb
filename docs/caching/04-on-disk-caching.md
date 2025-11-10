@@ -10,6 +10,10 @@ This gives you the best of both worlds:
 
 The entire process is transparent to the client. A `CACHE.GET` or `CACHE.PROXY` request works identically whether the item is in memory or on disk.
 
+### Hybrid On-Disk Caching Flow
+
+![Hybrid On-Disk Caching Flow](../diagram/on-disk-caching.png)
+
 ---
 
 ## 1. Configuring On-Disk Caching

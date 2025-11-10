@@ -17,6 +17,10 @@ SpinelDB solves this by natively supporting the `Vary` HTTP header. The `Vary` h
 
 When you store a cache item with a `Vary` directive, SpinelDB creates a **variant map** for that key. Instead of storing a single body, it stores multiple bodies, each corresponding to a unique combination of the specified header values.
 
+### Variant Management and Content Negotiation
+
+![Variant Management and Content Negotiation](../diagram/vary-content-negotiation.png)
+
 ### Variant Management
 
 To prevent unbounded growth of variants for a single key, SpinelDB allows you to configure a `max_variants_per_key` limit in your `config.toml` (under the `[cache]` section). If this limit is reached when a new variant is being added, the **least recently accessed (LRU)** variant for that key will be automatically evicted to make space.
