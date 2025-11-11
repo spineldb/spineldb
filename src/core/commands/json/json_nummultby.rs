@@ -58,11 +58,36 @@ impl ExecutableCommand for JsonNumMultBy {
             let old_size = helpers::estimate_json_memory(root);
 
             let mult_op = |target: &mut Value| {
-                let current_val = target.as_f64().ok_or(SpinelDBError::NotAFloat)?;
+                let current_val = match target {
+                    Value::Number(n) => n.as_f64().ok_or(SpinelDBError::NotAFloat)?,
+                    _ => return Err(SpinelDBError::WrongType),
+                };
+
                 let new_val_float = current_val * self.value;
-                *target =
-                    Value::Number(Number::from_f64(new_val_float).ok_or(SpinelDBError::NotAFloat)?);
-                final_value_str = helpers::format_json_number(target.as_number().unwrap());
+
+                // Try to create a Number from the new float value. This can fail for NaN/Infinity.
+                let new_number = Number::from_f64(new_val_float).ok_or(SpinelDBError::NotAFloat)?;
+
+                // Check if the result is a whole number and can be represented as i64.
+                // If so, store it as an i64 to preserve its integer type.
+                if new_number.is_f64() && new_val_float.fract() == 0.0 {
+                    if let Some(new_val_int) = new_number.as_i64() {
+                        *target = Value::Number(Number::from(new_val_int));
+                    } else {
+                        *target = Value::Number(new_number);
+                    }
+                } else {
+                    *target = Value::Number(new_number);
+                }
+
+                // Now that target is updated, format it for the response.
+                if let Value::Number(num) = target {
+                    final_value_str = helpers::format_json_number(num);
+                } else {
+                    // This branch is logically unreachable because we just set it.
+                    unreachable!();
+                }
+
                 Ok(Value::Null)
             };
 

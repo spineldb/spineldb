@@ -80,27 +80,26 @@ impl ExecutableCommand for JsonArrInsert {
             let mut final_len: i64 = -1;
             let old_size = helpers::estimate_json_memory(root);
 
-            let insert_op = |target: &mut Value| {
-                if !target.is_array() {
-                    return Err(SpinelDBError::InvalidState("Target is not an array".into()));
+            let insert_op = |target: &mut Value| match target.as_array_mut() {
+                Some(arr) => {
+                    let len = arr.len();
+
+                    let mut insert_pos = if self.index >= 0 {
+                        self.index as usize
+                    } else {
+                        (len as i64 + self.index) as usize
+                    };
+
+                    insert_pos = insert_pos.min(len);
+
+                    for (i, val) in new_values.iter().enumerate() {
+                        arr.insert(insert_pos + i, val.clone());
+                    }
+
+                    final_len = arr.len() as i64;
+                    Ok(Value::Null)
                 }
-                let arr = target.as_array_mut().unwrap();
-                let len = arr.len();
-
-                let mut insert_pos = if self.index >= 0 {
-                    self.index as usize
-                } else {
-                    (len as i64 + self.index) as usize
-                };
-
-                insert_pos = insert_pos.min(len);
-
-                for (i, val) in new_values.iter().enumerate() {
-                    arr.insert(insert_pos + i, val.clone());
-                }
-
-                final_len = arr.len() as i64;
-                Ok(Value::Null)
+                None => Err(SpinelDBError::WrongType),
             };
 
             helpers::find_and_modify(root, &path, insert_op, false)?;

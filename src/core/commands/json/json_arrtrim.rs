@@ -53,39 +53,38 @@ impl ExecutableCommand for JsonArrTrim {
             let mut final_len: Option<i64> = None;
             let old_size = helpers::estimate_json_memory(root);
 
-            let trim_op = |target: &mut Value| {
-                if !target.is_array() {
-                    return Err(SpinelDBError::InvalidState("Target is not an array".into()));
-                }
-                let arr = target.as_array_mut().unwrap();
-                let len = arr.len() as i64;
+            let trim_op = |target: &mut Value| match target.as_array_mut() {
+                Some(arr) => {
+                    let len = arr.len() as i64;
 
-                let start = if self.start >= 0 {
-                    self.start
-                } else {
-                    len + self.start
-                }
-                .max(0) as usize;
-                let stop = if self.stop >= 0 {
-                    self.stop
-                } else {
-                    len + self.stop
-                }
-                .min(len - 1);
+                    let start = if self.start >= 0 {
+                        self.start
+                    } else {
+                        len + self.start
+                    }
+                    .max(0) as usize;
+                    let stop = if self.stop >= 0 {
+                        self.stop
+                    } else {
+                        len + self.stop
+                    }
+                    .min(len - 1);
 
-                if start as i64 > stop || start >= arr.len() {
-                    arr.clear();
-                } else {
-                    let end_inclusive = (stop + 1) as usize;
-                    if end_inclusive < arr.len() {
-                        arr.drain(end_inclusive..);
+                    if start as i64 > stop || start >= arr.len() {
+                        arr.clear();
+                    } else {
+                        let end_inclusive = (stop + 1) as usize;
+                        if end_inclusive < arr.len() {
+                            arr.drain(end_inclusive..);
+                        }
+                        if start > 0 {
+                            arr.drain(0..start);
+                        }
                     }
-                    if start > 0 {
-                        arr.drain(0..start);
-                    }
+                    final_len = Some(arr.len() as i64);
+                    Ok(Value::Null)
                 }
-                final_len = Some(arr.len() as i64);
-                Ok(Value::Null)
+                None => Err(SpinelDBError::WrongType),
             };
 
             helpers::find_and_modify(root, &path, trim_op, false)?;

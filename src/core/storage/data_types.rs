@@ -399,9 +399,21 @@ impl DataValue {
     pub fn memory_usage(&self) -> usize {
         match self {
             DataValue::String(b) => b.len(),
-            DataValue::List(l) => l.iter().map(|b| b.len()).sum(),
-            DataValue::Hash(h) => h.iter().map(|(k, v)| k.len() + v.len()).sum(),
-            DataValue::Set(s) => s.iter().map(|b| b.len()).sum(),
+            DataValue::List(l) => {
+                // Account for the collection's own allocation + the data within
+                (l.capacity() * std::mem::size_of::<Bytes>())
+                    + l.iter().map(|b| b.len()).sum::<usize>()
+            }
+            DataValue::Hash(h) => {
+                // Account for the collection's own allocation + the data within
+                (h.capacity() * (std::mem::size_of::<Bytes>() + std::mem::size_of::<Bytes>()))
+                    + h.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>()
+            }
+            DataValue::Set(s) => {
+                // Account for the collection's own allocation + the data within
+                (s.capacity() * std::mem::size_of::<Bytes>())
+                    + s.iter().map(|b| b.len()).sum::<usize>()
+            }
             DataValue::SortedSet(z) => z.memory_usage(),
             DataValue::Stream(s) => s.memory_usage(),
             DataValue::Json(v) => estimate_json_memory(v),
