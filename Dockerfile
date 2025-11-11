@@ -37,6 +37,8 @@ COPY examples/config.toml.example /etc/spineldb/config.toml
 
 # Modify the config.toml to listen on all interfaces
 RUN sed -i 's/host = "127.0.0.1"/host = "0.0.0.0"/' /etc/spineldb/config.toml
+# Modify the config.toml to set log_level to info
+RUN sed -i 's/log_level = "debug"/log_level = "info"/' /etc/spineldb/config.toml
 
 # Set the user to run the application
 USER spineldb

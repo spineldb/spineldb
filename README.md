@@ -151,8 +151,8 @@ docker run -d -p 7878:7878 --name spineldb_instance spineldb/spineldb:latest
 For a more declarative approach, you can use the provided `docker-compose.yml` file.
 
 ```bash
-# Build and start the service in the background
-docker-compose up --build -d
+# Start the service in the background
+docker-compose up -d
 
 # Stop and remove the container
 docker-compose down
