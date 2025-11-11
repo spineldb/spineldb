@@ -1074,6 +1074,401 @@ impl TestContext {
         let command = Command::try_from(RespFrame::Array(frames))?;
         self.execute(command).await
     }
+
+    // ===== Sorted Set (ZSET) Commands =====
+
+    /// Helper to execute ZADD command
+    /// members: Vec of (score, member) tuples
+    /// options: Vec of option strings like "NX", "XX", "CH", "INCR", "GT", "LT"
+    pub async fn zadd(
+        &self,
+        key: &str,
+        members: &[(&str, &str)], // (score, member)
+        options: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"ZADD"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for option in options {
+            frames.push(RespFrame::BulkString(Bytes::from(option.to_string())));
+        }
+        for (score, member) in members {
+            frames.push(RespFrame::BulkString(Bytes::from(score.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZCARD command
+    pub async fn zcard(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZCARD")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZSCORE command
+    pub async fn zscore(&self, key: &str, member: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZSCORE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZRANK command
+    pub async fn zrank(&self, key: &str, member: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZRANK")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZREVRANK command
+    pub async fn zrevrank(&self, key: &str, member: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZREVRANK")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZCOUNT command
+    pub async fn zcount(
+        &self,
+        key: &str,
+        min: &str,
+        max: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZCOUNT")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(min.to_string())),
+            RespFrame::BulkString(Bytes::from(max.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZRANGE command
+    /// with_scores: if true, includes WITHSCORES option
+    pub async fn zrange(
+        &self,
+        key: &str,
+        start: i64,
+        stop: i64,
+        with_scores: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZRANGE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(stop.to_string())),
+        ];
+        if with_scores {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WITHSCORES")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZREVRANGE command
+    pub async fn zrevrange(
+        &self,
+        key: &str,
+        start: i64,
+        stop: i64,
+        with_scores: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZREVRANGE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(stop.to_string())),
+        ];
+        if with_scores {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WITHSCORES")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZREM command
+    pub async fn zrem(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"ZREM"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZINCRBY command
+    pub async fn zincrby(
+        &self,
+        key: &str,
+        increment: &str,
+        member: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZINCRBY")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(increment.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZPOPMAX command
+    pub async fn zpopmax(
+        &self,
+        key: &str,
+        count: Option<usize>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZPOPMAX")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZPOPMIN command
+    pub async fn zpopmin(
+        &self,
+        key: &str,
+        count: Option<usize>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZPOPMIN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZMSCORE command
+    pub async fn zmscore(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"ZMSCORE"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZRANGEBYSCORE command
+    pub async fn zrangebyscore(
+        &self,
+        key: &str,
+        min: &str,
+        max: &str,
+        with_scores: bool,
+        limit: Option<(usize, usize)>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZRANGEBYSCORE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(min.to_string())),
+            RespFrame::BulkString(Bytes::from(max.to_string())),
+        ];
+        if with_scores {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WITHSCORES")));
+        }
+        if let Some((offset, count)) = limit {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"LIMIT")));
+            frames.push(RespFrame::BulkString(Bytes::from(offset.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(count.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZREMRANGEBYRANK command
+    pub async fn zremrangebyrank(
+        &self,
+        key: &str,
+        start: i64,
+        stop: i64,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZREMRANGEBYRANK")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(stop.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZREMRANGEBYSCORE command
+    pub async fn zremrangebyscore(
+        &self,
+        key: &str,
+        min: &str,
+        max: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZREMRANGEBYSCORE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(min.to_string())),
+            RespFrame::BulkString(Bytes::from(max.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZUNIONSTORE command
+    pub async fn zunionstore(
+        &self,
+        destination: &str,
+        keys: &[&str],
+        weights: Option<&[&str]>,
+        aggregate: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZUNIONSTORE")),
+            RespFrame::BulkString(Bytes::from(destination.to_string())),
+            RespFrame::BulkString(Bytes::from(keys.len().to_string())),
+        ];
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        if let Some(w) = weights {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WEIGHTS")));
+            for weight in w {
+                frames.push(RespFrame::BulkString(Bytes::from(weight.to_string())));
+            }
+        }
+        if let Some(agg) = aggregate {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"AGGREGATE")));
+            frames.push(RespFrame::BulkString(Bytes::from(agg.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZINTERSTORE command
+    pub async fn zinterstore(
+        &self,
+        destination: &str,
+        keys: &[&str],
+        weights: Option<&[&str]>,
+        aggregate: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZINTERSTORE")),
+            RespFrame::BulkString(Bytes::from(destination.to_string())),
+            RespFrame::BulkString(Bytes::from(keys.len().to_string())),
+        ];
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        if let Some(w) = weights {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WEIGHTS")));
+            for weight in w {
+                frames.push(RespFrame::BulkString(Bytes::from(weight.to_string())));
+            }
+        }
+        if let Some(agg) = aggregate {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"AGGREGATE")));
+            frames.push(RespFrame::BulkString(Bytes::from(agg.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZLEXCOUNT command
+    pub async fn zlexcount(
+        &self,
+        key: &str,
+        min: &str,
+        max: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZLEXCOUNT")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(min.to_string())),
+            RespFrame::BulkString(Bytes::from(max.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZRANGEBYLEX command
+    pub async fn zrangebylex(
+        &self,
+        key: &str,
+        min: &str,
+        max: &str,
+        limit: Option<(usize, usize)>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZRANGEBYLEX")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(min.to_string())),
+            RespFrame::BulkString(Bytes::from(max.to_string())),
+        ];
+        if let Some((offset, count)) = limit {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"LIMIT")));
+            frames.push(RespFrame::BulkString(Bytes::from(offset.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(count.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZREMRANGEBYLEX command
+    pub async fn zremrangebylex(
+        &self,
+        key: &str,
+        min: &str,
+        max: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZREMRANGEBYLEX")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(min.to_string())),
+            RespFrame::BulkString(Bytes::from(max.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute ZRANGESTORE command
+    pub async fn zrangestore(
+        &self,
+        destination: &str,
+        source: &str,
+        start: i64,
+        stop: i64,
+        with_scores: bool,
+        rev: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"ZRANGESTORE")),
+            RespFrame::BulkString(Bytes::from(destination.to_string())),
+            RespFrame::BulkString(Bytes::from(source.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(stop.to_string())),
+        ];
+        if with_scores {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"WITHSCORES")));
+        }
+        if rev {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"REV")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
 }
 
 // ===== Test Assertion Helpers =====

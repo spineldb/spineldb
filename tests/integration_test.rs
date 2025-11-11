@@ -12,4 +12,5 @@ mod integration {
     pub mod set_commands_test;
     pub mod string_commands_test;
     pub mod test_helpers;
+    pub mod zset_commands_test;
 }
