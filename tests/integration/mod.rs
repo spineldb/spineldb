@@ -10,4 +10,5 @@ pub mod fixtures;
 pub mod string_commands_test;
 pub mod list_commands_test;
 pub mod hash_commands_test;
+pub mod set_commands_test;
 

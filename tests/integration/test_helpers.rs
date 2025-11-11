@@ -269,6 +269,194 @@ impl TestContext {
         self.execute(command).await
     }
 
+    // ===== Set Command Helpers =====
+
+    /// Helper to execute SADD command
+    pub async fn sadd(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SADD"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SMEMBERS command
+    pub async fn smembers(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"SMEMBERS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SCARD command
+    pub async fn scard(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"SCARD")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SISMEMBER command
+    pub async fn sismember(&self, key: &str, member: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"SISMEMBER")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SREM command
+    pub async fn srem(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SREM"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SPOP command
+    pub async fn spop(&self, key: &str, count: Option<usize>) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"SPOP")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SRANDMEMBER command
+    pub async fn srandmember(
+        &self,
+        key: &str,
+        count: Option<i64>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"SRANDMEMBER")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SMOVE command
+    pub async fn smove(
+        &self,
+        source: &str,
+        destination: &str,
+        member: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"SMOVE")),
+            RespFrame::BulkString(Bytes::from(source.to_string())),
+            RespFrame::BulkString(Bytes::from(destination.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SMISMEMBER command
+    pub async fn smismember(
+        &self,
+        key: &str,
+        members: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SMISMEMBER"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SINTER command
+    pub async fn sinter(&self, keys: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SINTER"))];
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SUNION command
+    pub async fn sunion(&self, keys: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SUNION"))];
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SDIFF command
+    pub async fn sdiff(&self, keys: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SDIFF"))];
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SINTERSTORE command
+    pub async fn sinterstore(
+        &self,
+        destination: &str,
+        keys: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SINTERSTORE"))];
+        frames.push(RespFrame::BulkString(Bytes::from(destination.to_string())));
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SUNIONSTORE command
+    pub async fn sunionstore(
+        &self,
+        destination: &str,
+        keys: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SUNIONSTORE"))];
+        frames.push(RespFrame::BulkString(Bytes::from(destination.to_string())));
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute SDIFFSTORE command
+    pub async fn sdiffstore(
+        &self,
+        destination: &str,
+        keys: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"SDIFFSTORE"))];
+        frames.push(RespFrame::BulkString(Bytes::from(destination.to_string())));
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
     /// Helper to execute TTL command
     pub async fn ttl(&self, key: &str) -> Result<RespValue, SpinelDBError> {
         let command = Command::try_from(RespFrame::Array(vec![
