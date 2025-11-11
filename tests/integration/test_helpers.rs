@@ -1469,6 +1469,397 @@ impl TestContext {
         let command = Command::try_from(RespFrame::Array(frames))?;
         self.execute(command).await
     }
+
+    // ===== JSON Command Helpers =====
+
+    /// Helper to execute JSON.SET command
+    pub async fn json_set(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"SET")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.SET with NX condition
+    pub async fn json_set_nx(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"SET")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+            RespFrame::BulkString(Bytes::from_static(b"NX")),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.SET with XX condition
+    pub async fn json_set_xx(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"SET")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+            RespFrame::BulkString(Bytes::from_static(b"XX")),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.GET command
+    pub async fn json_get(&self, key: &str, paths: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"GET")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        for path in paths {
+            frames.push(RespFrame::BulkString(Bytes::from(path.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.TYPE command
+    pub async fn json_type(
+        &self,
+        key: &str,
+        path: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"TYPE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(p) = path {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.ARRLEN command
+    pub async fn json_arrlen(
+        &self,
+        key: &str,
+        path: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"ARRLEN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(p) = path {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.ARRAPPEND command
+    pub async fn json_arrappend(
+        &self,
+        key: &str,
+        path: &str,
+        values: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"ARRAPPEND")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+        ];
+        for value in values {
+            frames.push(RespFrame::BulkString(Bytes::from(value.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.ARRINSERT command
+    pub async fn json_arrinsert(
+        &self,
+        key: &str,
+        path: &str,
+        index: i64,
+        values: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"ARRINSERT")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(index.to_string())),
+        ];
+        for value in values {
+            frames.push(RespFrame::BulkString(Bytes::from(value.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.ARRPOP command
+    pub async fn json_arrpop(
+        &self,
+        key: &str,
+        path: Option<&str>,
+        index: Option<i64>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"ARRPOP")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(p) = path {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+            if let Some(idx) = index {
+                frames.push(RespFrame::BulkString(Bytes::from(idx.to_string())));
+            }
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.ARRINDEX command
+    pub async fn json_arrindex(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+        start: Option<i64>,
+        end: Option<i64>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"ARRINDEX")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ];
+        if let Some(s) = start {
+            frames.push(RespFrame::BulkString(Bytes::from(s.to_string())));
+            if let Some(e) = end {
+                frames.push(RespFrame::BulkString(Bytes::from(e.to_string())));
+            }
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.ARRTRIM command
+    pub async fn json_arrtrim(
+        &self,
+        key: &str,
+        path: &str,
+        start: i64,
+        stop: i64,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"ARRTRIM")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(stop.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.DEL command
+    pub async fn json_del(&self, key: &str, paths: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"DEL")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        for path in paths {
+            frames.push(RespFrame::BulkString(Bytes::from(path.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.CLEAR command
+    pub async fn json_clear(
+        &self,
+        key: &str,
+        path: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let path_str = path.unwrap_or("$");
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"CLEAR")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path_str.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.OBJKEYS command
+    pub async fn json_objkeys(
+        &self,
+        key: &str,
+        path: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"OBJKEYS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(p) = path {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.OBJLEN command
+    pub async fn json_objlen(
+        &self,
+        key: &str,
+        path: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"OBJLEN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(p) = path {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.STRLEN command
+    pub async fn json_strlen(
+        &self,
+        key: &str,
+        path: Option<&str>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"STRLEN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(p) = path {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.STRAPPEND command
+    pub async fn json_strappend(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"STRAPPEND")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.NUMINCRBY command
+    pub async fn json_numincrby(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"NUMINCRBY")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.NUMMULTBY command
+    pub async fn json_nummultby(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"NUMMULTBY")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.TOGGLE command
+    pub async fn json_toggle(&self, key: &str, path: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"TOGGLE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.MGET command
+    pub async fn json_mget(&self, keys: &[&str], path: &str) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"MGET")),
+        ];
+        for key in keys {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        frames.push(RespFrame::BulkString(Bytes::from(path.to_string())));
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute JSON.MERGE command
+    pub async fn json_merge(
+        &self,
+        key: &str,
+        path: &str,
+        value: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"JSON")),
+            RespFrame::BulkString(Bytes::from_static(b"MERGE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(path.to_string())),
+            RespFrame::BulkString(Bytes::from(value.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
 }
 
 // ===== Test Assertion Helpers =====
