@@ -1,5 +1,5 @@
 # Stage 1: Build the application in a full Rust environment
-FROM rust:1.90.0 AS builder
+FROM rust:1.91.1-bookworm AS builder
 WORKDIR /usr/src/spineldb
 
 # Copy dependency manifests and build script
@@ -34,6 +34,9 @@ COPY --from=builder /usr/src/spineldb/target/release/spineldb /usr/local/bin/spi
 
 # Copy the example configuration file
 COPY examples/config.toml.example /etc/spineldb/config.toml
+
+# Modify the config.toml to listen on all interfaces
+RUN sed -i 's/host = "127.0.0.1"/host = "0.0.0.0"/' /etc/spineldb/config.toml
 
 # Set the user to run the application
 USER spineldb

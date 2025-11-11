@@ -120,14 +120,42 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/spineldb/spineldb/main/inst
 
 ### Docker
 
-You can also run SpinelDB using our official Docker image:
+You can run SpinelDB using our official Docker image or by building it from source.
+
+#### Running the Official Image
 
 ```bash
-# Pull the latest image
+# Pull the latest image from Docker Hub
 docker pull spineldb/spineldb:latest
 
 # Run the container
 docker run -d -p 7878:7878 --name spineldb_instance spineldb/spineldb:latest
+```
+
+#### Building from Source
+
+If you prefer to build the image yourself, you can use the provided `Dockerfile`.
+
+```bash
+# Build the Docker image from the repository root
+docker build -t spineldb/spineldb:latest .
+
+# Run the container using the locally built image
+docker run -d -p 7878:7878 --name spineldb_instance spineldb/spineldb:latest
+```
+
+> **Note on Docker Networking:** For the server to be accessible from outside the container, the `host` in your `config.toml` must be set to `0.0.0.0`. The provided `Dockerfile` handles this automatically. If you are using a custom configuration, ensure this setting is correct.
+
+#### Using Docker Compose
+
+For a more declarative approach, you can use the provided `docker-compose.yml` file.
+
+```bash
+# Build and start the service in the background
+docker-compose up --build -d
+
+# Stop and remove the container
+docker-compose down
 ```
 
 ### Running the Server
@@ -149,12 +177,10 @@ docker run -d -p 7878:7878 --name spineldb_instance spineldb/spineldb:latest
     127.0.0.1:7878> JSON.GET user:1
     "{\"age\":30,\"name\":\"Alice\",\"projects\":[\"SpinelDB\",\"Rust\"]}"
     
-    # <!-- NEW -->
     127.0.0.1:7878> CACHE.SET mypage:home "<html>Home Page</html>" TTL 60 SWR 300 REVALIDATE-URL "https://example.com/home"
     OK
     127.0.0.1:7878> CACHE.GET mypage:home
     "<html>Home Page</html>"
-    # <!-- END NEW -->
     ```
 
 ### Running in Warden Mode

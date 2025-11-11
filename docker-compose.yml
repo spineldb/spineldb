@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  spineldb:
+    build: .
+    image: spineldb/spineldb:latest
+    container_name: spineldb-container
+    ports:
+      - "7878:7878"
+    volumes:
+      - spineldb_data:/var/lib/spineldb # Persistent data volume
+    restart: always
+
+volumes:
+  spineldb_data:
