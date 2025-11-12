@@ -1860,6 +1860,117 @@ impl TestContext {
         ]))?;
         self.execute(command).await
     }
+
+    // ===== Geospatial Command Helpers =====
+
+    /// Helper to execute GEOADD command
+    /// locations: Vec of (longitude, latitude, member) tuples
+    pub async fn geoadd(
+        &self,
+        key: &str,
+        locations: &[(&str, &str, &str)], // (lon, lat, member)
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"GEOADD"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for (lon, lat, member) in locations {
+            frames.push(RespFrame::BulkString(Bytes::from(lon.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(lat.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEOPOS command
+    pub async fn geopos(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"GEOPOS"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEODIST command
+    pub async fn geodist(
+        &self,
+        key: &str,
+        member1: &str,
+        member2: &str,
+        unit: Option<&str>, // "m", "km", "ft", "mi"
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"GEODIST")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member1.to_string())),
+            RespFrame::BulkString(Bytes::from(member2.to_string())),
+        ];
+        if let Some(u) = unit {
+            frames.push(RespFrame::BulkString(Bytes::from(u.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEOHASH command
+    pub async fn geohash(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"GEOHASH"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEORADIUS command
+    pub async fn georadius(
+        &self,
+        key: &str,
+        longitude: &str,
+        latitude: &str,
+        radius: &str,
+        unit: &str,       // "m", "km", "ft", "mi"
+        options: &[&str], // "WITHCOORD", "WITHDIST", "WITHHASH", "COUNT", "ASC", "DESC", "STORE", "STOREDIST"
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"GEORADIUS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(longitude.to_string())),
+            RespFrame::BulkString(Bytes::from(latitude.to_string())),
+            RespFrame::BulkString(Bytes::from(radius.to_string())),
+            RespFrame::BulkString(Bytes::from(unit.to_string())),
+        ];
+        for option in options {
+            frames.push(RespFrame::BulkString(Bytes::from(option.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEORADIUSBYMEMBER command
+    pub async fn georadiusbymember(
+        &self,
+        key: &str,
+        member: &str,
+        radius: &str,
+        unit: &str,       // "m", "km", "ft", "mi"
+        options: &[&str], // "WITHCOORD", "WITHDIST", "WITHHASH", "COUNT", "ASC", "DESC", "STORE", "STOREDIST"
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"GEORADIUSBYMEMBER")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+            RespFrame::BulkString(Bytes::from(radius.to_string())),
+            RespFrame::BulkString(Bytes::from(unit.to_string())),
+        ];
+        for option in options {
+            frames.push(RespFrame::BulkString(Bytes::from(option.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
 }
 
 // ===== Test Assertion Helpers =====

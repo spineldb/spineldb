@@ -7,6 +7,7 @@
 
 mod integration {
     pub mod fixtures;
+    pub mod geospatial_test;
     pub mod hash_commands_test;
     pub mod json_commands_test;
     pub mod list_commands_test;
