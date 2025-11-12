@@ -63,7 +63,61 @@ impl TestContext {
     }
 
     /// Executes a command and returns the response value
+    /// Handles transaction queuing when in a transaction
     pub async fn execute(&self, command: Command) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1; // Use a fixed session ID for tests
+
+        // Handle transaction control commands first
+        match command {
+            Command::Multi => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_multi();
+            }
+            Command::Exec => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let mut handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_exec().await;
+            }
+            Command::Discard => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_discard();
+            }
+            Command::Watch(cmd) => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_watch(cmd.keys).await;
+            }
+            Command::Unwatch(_) => {
+                if let Some(mut tx_state) = self.db.tx_states.get_mut(&session_id) {
+                    tx_state.watched_keys.clear();
+                }
+                return Ok(RespValue::SimpleString("OK".into()));
+            }
+            _ => {}
+        }
+
+        // Check if we're in a transaction and queue commands if so
+        let in_transaction = self
+            .db
+            .tx_states
+            .get(&session_id)
+            .map(|tx_state| tx_state.in_transaction)
+            .unwrap_or(false);
+
+        if in_transaction {
+            // Queue the command
+            use spineldb::core::handler::transaction_handler::TransactionHandler;
+            let handler = TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+            return handler.handle_queueing(command).await;
+        }
+
+        // Normal command execution
         let locks = self.db.determine_locks_for_command(&command).await;
 
         let mut ctx = ExecutionContext {
@@ -71,7 +125,7 @@ impl TestContext {
             locks,
             db: &self.db,
             command: Some(command.clone()),
-            session_id: 1, // Use a fixed session ID for tests
+            session_id,
             authenticated_user: None,
         };
 
@@ -1970,6 +2024,52 @@ impl TestContext {
         }
         let command = Command::try_from(RespFrame::Array(frames))?;
         self.execute(command).await
+    }
+
+    // ===== Transaction Command Helpers =====
+
+    /// Helper to execute MULTI command
+    pub async fn multi(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        TransactionHandler::new(self.state.clone(), &self.db, session_id, None)
+            .handle_multi()
+            .map_err(|e| e.into())
+    }
+
+    /// Helper to execute EXEC command
+    pub async fn exec(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        let mut handler = TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+        handler.handle_exec().await
+    }
+
+    /// Helper to execute DISCARD command
+    pub async fn discard(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        TransactionHandler::new(self.state.clone(), &self.db, session_id, None)
+            .handle_discard()
+            .map_err(|e| e.into())
+    }
+
+    /// Helper to execute WATCH command
+    pub async fn watch(&self, keys: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        let keys_bytes: Vec<Bytes> = keys.iter().map(|k| Bytes::from(k.to_string())).collect();
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        let handler = TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+        handler.handle_watch(keys_bytes).await
+    }
+
+    /// Helper to execute UNWATCH command
+    pub async fn unwatch(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        if let Some(mut tx_state) = self.db.tx_states.get_mut(&session_id) {
+            tx_state.watched_keys.clear();
+        }
+        Ok(RespValue::SimpleString("OK".into()))
     }
 }
 
