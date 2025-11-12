@@ -172,7 +172,7 @@ async fn test_geoadd_invalid_coordinates() {
 
 #[tokio::test]
 async fn test_geoadd_wrong_argument_count() {
-    let ctx = TestContext::new().await;
+    let _ctx = TestContext::new().await;
 
     // Test with insufficient arguments - parsing should fail
     let command =

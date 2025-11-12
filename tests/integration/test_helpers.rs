@@ -2071,6 +2071,75 @@ impl TestContext {
         }
         Ok(RespValue::SimpleString("OK".into()))
     }
+
+    // ===== Persistence Command Helpers =====
+
+    /// Helper to execute SAVE command
+    pub async fn save(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"SAVE"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute BGSAVE command
+    pub async fn bgsave(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"BGSAVE"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute LASTSAVE command
+    pub async fn lastsave(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"LASTSAVE"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute BGREWRITEAOF command
+    pub async fn bgrewriteaof(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"BGREWRITEAOF"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Wait for a background save to complete
+    pub async fn wait_for_bgsave(&self) {
+        use std::sync::atomic::Ordering;
+        use tokio::time::{Duration, sleep};
+        loop {
+            if !self
+                .state
+                .persistence
+                .is_saving_spldb
+                .load(Ordering::SeqCst)
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Wait for AOF rewrite to complete
+    pub async fn wait_for_aof_rewrite(&self) {
+        use tokio::time::{Duration, sleep};
+        loop {
+            let is_in_progress = self
+                .state
+                .persistence
+                .aof_rewrite_state
+                .lock()
+                .await
+                .is_in_progress;
+            if !is_in_progress {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 // ===== Test Assertion Helpers =====
