@@ -63,7 +63,61 @@ impl TestContext {
     }
 
     /// Executes a command and returns the response value
+    /// Handles transaction queuing when in a transaction
     pub async fn execute(&self, command: Command) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1; // Use a fixed session ID for tests
+
+        // Handle transaction control commands first
+        match command {
+            Command::Multi => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_multi();
+            }
+            Command::Exec => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let mut handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_exec().await;
+            }
+            Command::Discard => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_discard();
+            }
+            Command::Watch(cmd) => {
+                use spineldb::core::handler::transaction_handler::TransactionHandler;
+                let handler =
+                    TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+                return handler.handle_watch(cmd.keys).await;
+            }
+            Command::Unwatch(_) => {
+                if let Some(mut tx_state) = self.db.tx_states.get_mut(&session_id) {
+                    tx_state.watched_keys.clear();
+                }
+                return Ok(RespValue::SimpleString("OK".into()));
+            }
+            _ => {}
+        }
+
+        // Check if we're in a transaction and queue commands if so
+        let in_transaction = self
+            .db
+            .tx_states
+            .get(&session_id)
+            .map(|tx_state| tx_state.in_transaction)
+            .unwrap_or(false);
+
+        if in_transaction {
+            // Queue the command
+            use spineldb::core::handler::transaction_handler::TransactionHandler;
+            let handler = TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+            return handler.handle_queueing(command).await;
+        }
+
+        // Normal command execution
         let locks = self.db.determine_locks_for_command(&command).await;
 
         let mut ctx = ExecutionContext {
@@ -71,7 +125,7 @@ impl TestContext {
             locks,
             db: &self.db,
             command: Some(command.clone()),
-            session_id: 1, // Use a fixed session ID for tests
+            session_id,
             authenticated_user: None,
         };
 
@@ -1859,6 +1913,232 @@ impl TestContext {
             RespFrame::BulkString(Bytes::from(value.to_string())),
         ]))?;
         self.execute(command).await
+    }
+
+    // ===== Geospatial Command Helpers =====
+
+    /// Helper to execute GEOADD command
+    /// locations: Vec of (longitude, latitude, member) tuples
+    pub async fn geoadd(
+        &self,
+        key: &str,
+        locations: &[(&str, &str, &str)], // (lon, lat, member)
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"GEOADD"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for (lon, lat, member) in locations {
+            frames.push(RespFrame::BulkString(Bytes::from(lon.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(lat.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEOPOS command
+    pub async fn geopos(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"GEOPOS"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEODIST command
+    pub async fn geodist(
+        &self,
+        key: &str,
+        member1: &str,
+        member2: &str,
+        unit: Option<&str>, // "m", "km", "ft", "mi"
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"GEODIST")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member1.to_string())),
+            RespFrame::BulkString(Bytes::from(member2.to_string())),
+        ];
+        if let Some(u) = unit {
+            frames.push(RespFrame::BulkString(Bytes::from(u.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEOHASH command
+    pub async fn geohash(&self, key: &str, members: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"GEOHASH"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        for member in members {
+            frames.push(RespFrame::BulkString(Bytes::from(member.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEORADIUS command
+    pub async fn georadius(
+        &self,
+        key: &str,
+        longitude: &str,
+        latitude: &str,
+        radius: &str,
+        unit: &str,       // "m", "km", "ft", "mi"
+        options: &[&str], // "WITHCOORD", "WITHDIST", "WITHHASH", "COUNT", "ASC", "DESC", "STORE", "STOREDIST"
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"GEORADIUS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(longitude.to_string())),
+            RespFrame::BulkString(Bytes::from(latitude.to_string())),
+            RespFrame::BulkString(Bytes::from(radius.to_string())),
+            RespFrame::BulkString(Bytes::from(unit.to_string())),
+        ];
+        for option in options {
+            frames.push(RespFrame::BulkString(Bytes::from(option.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute GEORADIUSBYMEMBER command
+    pub async fn georadiusbymember(
+        &self,
+        key: &str,
+        member: &str,
+        radius: &str,
+        unit: &str,       // "m", "km", "ft", "mi"
+        options: &[&str], // "WITHCOORD", "WITHDIST", "WITHHASH", "COUNT", "ASC", "DESC", "STORE", "STOREDIST"
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"GEORADIUSBYMEMBER")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(member.to_string())),
+            RespFrame::BulkString(Bytes::from(radius.to_string())),
+            RespFrame::BulkString(Bytes::from(unit.to_string())),
+        ];
+        for option in options {
+            frames.push(RespFrame::BulkString(Bytes::from(option.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    // ===== Transaction Command Helpers =====
+
+    /// Helper to execute MULTI command
+    pub async fn multi(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        TransactionHandler::new(self.state.clone(), &self.db, session_id, None)
+            .handle_multi()
+            .map_err(|e| e.into())
+    }
+
+    /// Helper to execute EXEC command
+    pub async fn exec(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        let mut handler = TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+        handler.handle_exec().await
+    }
+
+    /// Helper to execute DISCARD command
+    pub async fn discard(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        TransactionHandler::new(self.state.clone(), &self.db, session_id, None)
+            .handle_discard()
+            .map_err(|e| e.into())
+    }
+
+    /// Helper to execute WATCH command
+    pub async fn watch(&self, keys: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        let keys_bytes: Vec<Bytes> = keys.iter().map(|k| Bytes::from(k.to_string())).collect();
+        use spineldb::core::handler::transaction_handler::TransactionHandler;
+        let handler = TransactionHandler::new(self.state.clone(), &self.db, session_id, None);
+        handler.handle_watch(keys_bytes).await
+    }
+
+    /// Helper to execute UNWATCH command
+    pub async fn unwatch(&self) -> Result<RespValue, SpinelDBError> {
+        let session_id = 1;
+        if let Some(mut tx_state) = self.db.tx_states.get_mut(&session_id) {
+            tx_state.watched_keys.clear();
+        }
+        Ok(RespValue::SimpleString("OK".into()))
+    }
+
+    // ===== Persistence Command Helpers =====
+
+    /// Helper to execute SAVE command
+    pub async fn save(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"SAVE"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute BGSAVE command
+    pub async fn bgsave(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"BGSAVE"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute LASTSAVE command
+    pub async fn lastsave(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"LASTSAVE"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute BGREWRITEAOF command
+    pub async fn bgrewriteaof(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![RespFrame::BulkString(
+            Bytes::from_static(b"BGREWRITEAOF"),
+        )]))?;
+        self.execute(command).await
+    }
+
+    /// Wait for a background save to complete
+    pub async fn wait_for_bgsave(&self) {
+        use std::sync::atomic::Ordering;
+        use tokio::time::{Duration, sleep};
+        loop {
+            if !self
+                .state
+                .persistence
+                .is_saving_spldb
+                .load(Ordering::SeqCst)
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Wait for AOF rewrite to complete
+    pub async fn wait_for_aof_rewrite(&self) {
+        use tokio::time::{Duration, sleep};
+        loop {
+            let is_in_progress = self
+                .state
+                .persistence
+                .aof_rewrite_state
+                .lock()
+                .await
+                .is_in_progress;
+            if !is_in_progress {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 

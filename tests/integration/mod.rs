@@ -13,4 +13,6 @@ pub mod hash_commands_test;
 pub mod set_commands_test;
 pub mod zset_commands_test;
 pub mod json_commands_test;
-
+pub mod geospatial_test;
+pub mod transaction_test;
+pub mod persistence_test;
