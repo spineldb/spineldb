@@ -7,11 +7,14 @@
 
 mod integration {
     pub mod fixtures;
+    pub mod geospatial_test;
     pub mod hash_commands_test;
     pub mod json_commands_test;
     pub mod list_commands_test;
+    pub mod persistence_test;
     pub mod set_commands_test;
     pub mod string_commands_test;
     pub mod test_helpers;
+    pub mod transaction_test;
     pub mod zset_commands_test;
 }

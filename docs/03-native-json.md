@@ -39,11 +39,11 @@ OK
 
 # Retrieve a specific field using a path
 127.0.0.1:7878> JSON.GET user:1 $.email
-"\"alice@example.com\""
+"alice@example.com"
 
 # Retrieve an element from an array within the document
 127.0.0.1:7878> JSON.GET user:1 $.tags[0]
-"\"admin\""
+"admin"
 ```
 **Note:** When `JSON.GET` returns a JSON string, it is properly escaped within a RESP Bulk String. Client libraries will typically handle unescaping this for you.
 
@@ -80,6 +80,15 @@ OK
 
 # JSON.FORGET is an alias for JSON.DEL
 127.0.0.1:7878> JSON.FORGET user:1 $.department
+(integer) 1
+
+# Deleting the root of the document will set the value to null.
+# Note that the key itself still exists.
+127.0.0.1:7878> JSON.DEL user:1 $
+(integer) 1
+127.0.0.1:7878> JSON.GET user:1
+"null"
+127.0.0.1:7878> EXISTS user:1
 (integer) 1
 ```
 
@@ -207,7 +216,7 @@ OK
 127.0.0.1:7878> JSON.NUMMULTBY user:1 $.score 2
 "192"
 ```
-**Note:** `JSON.NUMINCRBY` and `JSON.NUMMULTBY` will return an integer string if the result is a whole number, and a float string otherwise, maintaining numeric precision where possible.
+**Note:** `JSON.NUMINCRBY` and `JSON.NUMMULTBY` will always return a float string (e.g., "50.0"), even if the result is a whole number.
 
 ---
 

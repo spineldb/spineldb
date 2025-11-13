@@ -77,9 +77,14 @@ impl ExecutableCommand for JsonGet {
                 let response = match found_values.len() {
                     0 => RespValue::Null,
                     1 => {
-                        // The JSON value is serialized to a string for the client.
-                        let json_str = serde_json::to_string(found_values[0])?;
-                        RespValue::BulkString(json_str.into())
+                        // If the found value is a JSON string, return its raw content.
+                        // Otherwise, serialize the JSON value to a string for the client.
+                        if let Value::String(s) = found_values[0] {
+                            RespValue::BulkString(s.clone().into())
+                        } else {
+                            let json_str = serde_json::to_string(found_values[0])?;
+                            RespValue::BulkString(json_str.into())
+                        }
                     }
                     _ => {
                         let json_array: Vec<&Value> = found_values.into_iter().collect();
