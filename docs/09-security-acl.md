@@ -1,4 +1,4 @@
-# Chapter 8: Security with Access Control Lists (ACL)
+# Chapter 9: Security with Access Control Lists (ACL)
 
 While a simple password (`requirepass`) offers a basic layer of security, modern, multi-tenant environments often require more granular control over what different clients can do. SpinelDB provides a powerful and flexible **Access Control List (ACL)** system, compatible with Redis 6+, to solve this problem.
 
