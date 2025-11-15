@@ -1,4 +1,4 @@
-# Chapter 12: Introspection and Monitoring
+# Chapter 13: Introspection and Monitoring
 
 Running a database in production requires visibility. You need to understand how it's performing, how much memory it's using, identify slow operations, and integrate it into your existing monitoring infrastructure. SpinelDB provides a powerful suite of tools for introspection and monitoring, compatible with the standard Redis commands and modern observability platforms like Prometheus.
 
