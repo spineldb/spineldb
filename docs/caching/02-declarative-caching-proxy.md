@@ -164,4 +164,7 @@ Now, let's use `CACHE.PROXY` for a product details key:
 
 ---
 
-➡️ **Next Chapter: [4c. Tag-Based Invalidation](./04c-tag-based-invalidation.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./01-manual-caching-swr.md">4a. Manual Caching with SWR & Grace Period</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./03-tag-based-invalidation.md">4c. Tag-Based Invalidation</a></strong></span>
+</div>
