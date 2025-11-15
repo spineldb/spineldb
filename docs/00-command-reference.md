@@ -72,7 +72,20 @@ The `BF` command provides access to SpinelDB's Bloom filter functionality.
 
 *   `BF.RESERVE key error_rate capacity`
 *   `BF.ADD key item`
+*   `BF.MADD key item [item ...]`
 *   `BF.EXISTS key item`
+*   `BF.MEXISTS key item [item ...]`
+*   `BF.INSERT key [CAPACITY capacity] [ERROR error_rate] ITEMS item [item ...]`
+*   `BF.INFO key`
+*   `BF.CARD key`
+
+### `PF.*` Commands (HyperLogLog)
+
+The `PF` command provides access to SpinelDB's HyperLogLog functionality.
+
+*   `PFADD key element [element ...]`
+*   `PFCOUNT key [key ...]`
+*   `PFMERGE destkey sourcekey [sourcekey ...]`
 
 ## Standard Commands
 
@@ -232,7 +245,7 @@ These are the top-level commands, often compatible with Redis's standard command
 *   `ZSCORE key member`
 *   `ZCOUNT key min max`
 *   `ZLEXCOUNT key min max`
-*   `ZREM key member1 [member2 ...]`
+   `ZREM key member1 [member2 ...]`
 *   `ZREMRANGEBYSCORE key min max`
 *   `ZRANK key member`
 *   `ZREVRANK key member`
@@ -279,3 +292,9 @@ These are the top-level commands, often compatible with Redis's standard command
 *   `HSCAN key cursor [MATCH pattern] [COUNT count]`
 *   `SSCAN key cursor [MATCH pattern] [COUNT count]`
 *   `ZSCAN key cursor [MATCH pattern] [COUNT count]`
+
+---
+
+<div align="right">
+  ➡️ <strong>Next Chapter: <a href="./01-installation-and-setup.md">1. Installation & Setup</a></strong>
+</div>

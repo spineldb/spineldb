@@ -82,10 +82,7 @@ OK
 
 ---
 
-> **Compatibility Note:** SpinelDB's HyperLogLog implementation uses the `murmur3_x64_128` hash function for optimal performance and distribution. This differs from Redis, which uses `MurmurHash2`. As a result, the binary representation of HLL keys in SpinelDB is not compatible with Redis. You cannot merge HLLs between a SpinelDB and a Redis instance.
-
----
-
-With these three commands, you can build a powerful and memory-efficient system for tracking unique events in your application.
-
-➡️ **Next Chapter: [18. Bloom Filter](./16-bloom-filter.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./16-bloom-filter.md">16. Bloom Filter Commands</a></strong></span>
+  <span></span>
+</div>

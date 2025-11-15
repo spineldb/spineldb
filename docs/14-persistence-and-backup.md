@@ -1,4 +1,4 @@
-# Chapter 13: Persistence and Backup
+# Chapter 14: Persistence and Backup
 
 While SpinelDB is an in-memory database, a key feature for any production system is **persistence**—the ability to save the in-memory dataset to durable storage on disk. This protects your data against process restarts, server reboots, and other unexpected shutdowns.
 

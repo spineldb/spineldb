@@ -194,8 +194,8 @@ OK
 
 ---
 
-### Congratulations!
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./00-command-reference.md">0. Command Reference</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./02-core-data-types.md">2. Core Data Types & Commands</a></strong></span>
+</div>
 
-You have successfully installed, configured, and run your first SpinelDB instance. You are now ready to explore its various data types and advanced features.
-
-➡️ **Next Chapter: [2. Core Data Types & Commands](./02-core-data-types.md)**

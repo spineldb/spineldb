@@ -130,16 +130,7 @@ Client 1's application should now detect the `(nil)` reply and retry the entire 
 
 ---
 
-### Scripts vs. Transactions
-
-Both Lua scripts and `MULTI`/`EXEC` transactions provide atomicity. So when should you use which?
-
-*   **Use `MULTI`/`EXEC` with `WATCH` when:**
-    *   You need to make decisions in your application code based on data from SpinelDB before you start the transaction.
-    *   Your logic is complex and better suited for your application's primary language.
-*   **Use Lua scripts (`EVAL`) when:**
-    *   Your operation is self-contained and doesn't require fetching data to the client first.
-    *   You want to minimize network latency by performing many steps in a single command.
-    *   You are creating a new, reusable atomic command.
-
-➡️ **Next Chapter: [11. Publish/Subscribe Messaging](./11-pubsub.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./10-lua-scripting.md">10. Server-Side Scripting with Lua</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./12-pubsub.md">12. Publish/Subscribe Messaging</a></strong></span>
+</div>

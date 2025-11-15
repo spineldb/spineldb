@@ -127,8 +127,7 @@ When you use `SCRIPT LOAD` or `EVALSHA`, SpinelDB ensures that these scripts are
 
 ---
 
-### Unlock Custom Atomic Operations
-
-Lua scripting is an advanced feature that unlocks a new level of power and performance. By moving complex, multi-step operations to the server, you can create custom atomic commands tailored perfectly to your application's needs.
-
-➡️ **Next Chapter: [10. Atomic Operations with Transactions](./10-transactions.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./09-security-acl.md">9. Security with Access Control Lists (ACL)</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./11-transactions.md">11. Atomic Operations with Transactions</a></strong></span>
+</div>

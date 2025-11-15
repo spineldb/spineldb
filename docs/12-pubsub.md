@@ -147,8 +147,7 @@ Once a client is no longer subscribed to any channels or patterns, its connectio
 
 ---
 
-### Real-Time, Decoupled Communication
-
-The Pub/Sub system in SpinelDB is a simple yet incredibly effective tool for building event-driven and real-time applications. It provides a "fire and forget" messaging model that decouples your application's components and allows them to communicate efficiently.
-
-➡️ **Next Chapter: [12. Introspection and Monitoring](./12-introspection-and-monitoring.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./11-transactions.md">11. Atomic Operations with Transactions</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./13-introspection-and-monitoring.md">13. Introspection and Monitoring</a></strong></span>
+</div>

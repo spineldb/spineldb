@@ -129,8 +129,7 @@ This confirms that the node is a replica and shows its connection status to the 
 
 ---
 
-### The Foundation for High Availability
-
-Primary-replica replication is the fundamental building block for creating a fault-tolerant SpinelDB setup. While you can manually promote a replica if the primary fails, the most robust solution is to use SpinelDB's clustering and automated failover capabilities.
-
-➡️ **Next Chapter: [6. Cluster Mode](./06-clustering.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./05-caching.md">5. Intelligent Caching</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./07-clustering.md">7. Cluster Mode</a></strong></span>
+</div>

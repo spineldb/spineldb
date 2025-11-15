@@ -138,8 +138,7 @@ Integrating SpinelDB with Prometheus and Grafana provides a powerful, industry-s
 
 ---
 
-### A Fully Observable System
-
-With these tools, SpinelDB is not a black box. You have deep visibility into its internal state, performance characteristics, and resource usage, giving you the confidence to run it reliably in production.
-
-➡️ **Next Chapter: [13. Persistence and Backup](./13-persistence-and-backup.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./12-pubsub.md">12. Publish/Subscribe Messaging</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./14-persistence-and-backup.md">14. Persistence and Backup</a></strong></span>
+</div>
