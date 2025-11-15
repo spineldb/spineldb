@@ -105,4 +105,9 @@ This two-tiered approach ensures your disk usage doesn't grow indefinitely and t
 
 This hybrid approach makes SpinelDB an exceptionally powerful and memory-efficient caching solution for a wide range of content types.
 
-➡️ **Next Chapter: [4e. Content Negotiation with `Vary`](./04e-content-negotiation-vary.md)**
+---
+
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./03-tag-based-invalidation.md">4c. Tag-Based Invalidation</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./05-content-negotiation-vary.md">4e. Content Negotiation with Vary</a></strong></span>
+</div>
