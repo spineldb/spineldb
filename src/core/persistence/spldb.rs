@@ -84,13 +84,39 @@ impl SpldbLoader {
             return Ok(());
         }
 
-        let spldb_bytes = Bytes::from(fs::read(path).await?);
+        let spldb_bytes = match fs::read(path).await {
+            Ok(bytes) => Bytes::from(bytes),
+            Err(e) => return Err(e.into()),
+        };
         info!(
             "SPLDB file found ({} bytes). Starting parsing...",
             spldb_bytes.len()
         );
-        load_from_bytes(&spldb_bytes, &state.dbs).await?;
-        info!("Successfully loaded database from SPLDB file {}", path);
+
+        if let Err(e) = load_from_bytes(&spldb_bytes, &state.dbs).await {
+            if e.kind() == ErrorKind::InvalidData {
+                warn!(
+                    "SPLDB file at {} is corrupt or in an incompatible format: {}. Backing it up and starting fresh.",
+                    path, e
+                );
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup_path = format!("{}.corrupted.{}", path, timestamp);
+                if let Err(rename_err) = fs::rename(path, &backup_path).await {
+                    warn!(
+                        "Failed to rename corrupted SPLDB file to {}: {}",
+                        backup_path, rename_err
+                    );
+                }
+            } else {
+                return Err(e.into());
+            }
+        } else {
+            info!("Successfully loaded database from SPLDB file {}", path);
+        }
+
         Ok(())
     }
 }
@@ -277,7 +303,7 @@ pub async fn save_to_bytes(dbs: &[Arc<Db>]) -> io::Result<Bytes> {
     buf.put_u8(SPLDB_OPCODE_AUX);
     let ctime = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     write_string(&mut buf, b"ctime");
     write_string(&mut buf, &ctime.to_string().into_bytes());
@@ -526,10 +552,8 @@ fn serialize_single_value_data(buf: &mut BytesMut, data: &DataValue) -> io::Resu
         }
         DataValue::BloomFilter(bf) => {
             buf.put_u8(SPLDB_TYPE_BLOOMFILTER);
-            buf.put_u32_le(bf.num_hashes);
-            buf.put_u64_le(bf.seeds[0]);
-            buf.put_u64_le(bf.seeds[1]);
-            write_string(buf, &bf.bits);
+            let serialized_bf = bf.serialize();
+            write_string(buf, &serialized_bf);
         }
         DataValue::HttpCache {
             variants, vary_on, ..
@@ -719,7 +743,7 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
             )))
         }
         SPLDB_TYPE_BLOOMFILTER => {
-            let bloom_filter_bytes = cursor.split_to(cursor.len()); // Consume all remaining bytes for the bloom filter
+            let bloom_filter_bytes = read_string(cursor)?;
             let bf = crate::core::storage::bloom::BloomFilter::deserialize(&bloom_filter_bytes)
                 .ok_or_else(|| {
                     Error::new(ErrorKind::InvalidData, "Failed to deserialize BloomFilter")
