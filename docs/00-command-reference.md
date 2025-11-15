@@ -79,6 +79,14 @@ The `BF` command provides access to SpinelDB's Bloom filter functionality.
 *   `BF.INFO key`
 *   `BF.CARD key`
 
+### `PF.*` Commands (HyperLogLog)
+
+The `PF` command provides access to SpinelDB's HyperLogLog functionality.
+
+*   `PFADD key element [element ...]`
+*   `PFCOUNT key [key ...]`
+*   `PFMERGE destkey sourcekey [sourcekey ...]`
+
 ## Standard Commands
 
 These are the top-level commands, often compatible with Redis's standard commands.
