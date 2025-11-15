@@ -1,4 +1,4 @@
-# Chapter 5: Primary-Replica Replication
+# Chapter 6: Primary-Replica Replication
 
 Running a single instance of SpinelDB is great for development, but for production environments, you need redundancy and the ability to scale. SpinelDB supports a standard **primary-replica** (formerly master-slave) replication model, which provides a simple yet powerful way to achieve high availability and scale read operations.
 
