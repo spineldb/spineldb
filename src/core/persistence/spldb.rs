@@ -719,23 +719,12 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
             )))
         }
         SPLDB_TYPE_BLOOMFILTER => {
-            if cursor.remaining() < 4 + 8 + 8 {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "Not enough bytes for BloomFilter metadata",
-                ));
-            }
-            let num_hashes = cursor.get_u32_le();
-            let seed1 = cursor.get_u64_le();
-            let seed2 = cursor.get_u64_le();
-            let bits = read_string(cursor)?.to_vec();
-            Ok(DataValue::BloomFilter(Box::new(
-                crate::core::storage::bloom::BloomFilter {
-                    bits,
-                    num_hashes,
-                    seeds: [seed1, seed2],
-                },
-            )))
+            let bloom_filter_bytes = cursor.split_to(cursor.len()); // Consume all remaining bytes for the bloom filter
+            let bf = crate::core::storage::bloom::BloomFilter::deserialize(&bloom_filter_bytes)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "Failed to deserialize BloomFilter")
+                })?;
+            Ok(DataValue::BloomFilter(Box::new(bf)))
         }
         SPLDB_TYPE_HTTPCACHE => {
             let vary_len = read_length_encoding(cursor)? as usize;

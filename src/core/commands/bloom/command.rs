@@ -11,7 +11,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use super::bf_add::BfAdd;
+use super::bf_card::BfCard;
 use super::bf_exists::BfExists;
+use super::bf_info::BfInfo;
+use super::bf_insert::BfInsert;
+use super::bf_madd::BfMAdd;
+use super::bf_mexists::BfMExists;
 use super::bf_reserve::BfReserve;
 
 /// Represents the specific Bloom filter subcommand being executed.
@@ -21,8 +26,18 @@ pub enum BloomSubcommand {
     Reserve(BfReserve),
     /// The `BF.ADD` subcommand, used to add an item to a Bloom filter.
     Add(BfAdd),
+    /// The `BF.MADD` subcommand, used to add multiple items to a Bloom filter.
+    MAdd(BfMAdd),
     /// The `BF.EXISTS` subcommand, used to check if an item might be in a Bloom filter.
     Exists(BfExists),
+    /// The `BF.MEXISTS` subcommand, used to check if multiple items might be in a Bloom filter.
+    MExists(BfMExists),
+    /// The `BF.INFO` subcommand, used to get information about a Bloom filter.
+    Info(BfInfo),
+    /// The `BF.CARD` subcommand, used to get the cardinality of a Bloom filter.
+    Card(BfCard),
+    /// The `BF.INSERT` subcommand, used to add items with optional creation.
+    Insert(BfInsert),
 }
 
 /// Implements the top-level `BF` command, acting as a dispatcher for its subcommands.
@@ -52,7 +67,12 @@ impl ParseCommand for Bloom {
         let subcommand = match subcommand_name.as_str() {
             "reserve" => BloomSubcommand::Reserve(BfReserve::parse(subcommand_args)?),
             "add" => BloomSubcommand::Add(BfAdd::parse(subcommand_args)?),
+            "madd" => BloomSubcommand::MAdd(BfMAdd::parse(subcommand_args)?),
             "exists" => BloomSubcommand::Exists(BfExists::parse(subcommand_args)?),
+            "mexists" => BloomSubcommand::MExists(BfMExists::parse(subcommand_args)?),
+            "info" => BloomSubcommand::Info(BfInfo::parse(subcommand_args)?),
+            "card" => BloomSubcommand::Card(BfCard::parse(subcommand_args)?),
+            "insert" => BloomSubcommand::Insert(BfInsert::parse(subcommand_args)?),
             _ => {
                 return Err(SpinelDBError::UnknownCommand(format!(
                     "BF.{}",
@@ -79,7 +99,12 @@ impl ExecutableCommand for Bloom {
         match &self.subcommand {
             Some(BloomSubcommand::Reserve(cmd)) => cmd.execute(ctx).await,
             Some(BloomSubcommand::Add(cmd)) => cmd.execute(ctx).await,
+            Some(BloomSubcommand::MAdd(cmd)) => cmd.execute(ctx).await,
             Some(BloomSubcommand::Exists(cmd)) => cmd.execute(ctx).await,
+            Some(BloomSubcommand::MExists(cmd)) => cmd.execute(ctx).await,
+            Some(BloomSubcommand::Info(cmd)) => cmd.execute(ctx).await,
+            Some(BloomSubcommand::Card(cmd)) => cmd.execute(ctx).await,
+            Some(BloomSubcommand::Insert(cmd)) => cmd.execute(ctx).await,
             None => Err(SpinelDBError::Internal("Bloom command not parsed".into())),
         }
     }
@@ -102,7 +127,7 @@ impl CommandSpec for Bloom {
     /// The top-level `BF` command is marked as `WRITE` because some of its subcommands
     /// (like `BF.ADD` and `BF.RESERVE`) modify the dataset.
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::DENY_OOM
+        CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::READONLY
     }
     /// Returns the position of the first key argument.
     ///
@@ -128,7 +153,12 @@ impl CommandSpec for Bloom {
         match &self.subcommand {
             Some(BloomSubcommand::Reserve(cmd)) => cmd.get_keys(),
             Some(BloomSubcommand::Add(cmd)) => cmd.get_keys(),
+            Some(BloomSubcommand::MAdd(cmd)) => cmd.get_keys(),
             Some(BloomSubcommand::Exists(cmd)) => cmd.get_keys(),
+            Some(BloomSubcommand::MExists(cmd)) => cmd.get_keys(),
+            Some(BloomSubcommand::Info(cmd)) => cmd.get_keys(),
+            Some(BloomSubcommand::Card(cmd)) => cmd.get_keys(),
+            Some(BloomSubcommand::Insert(cmd)) => cmd.get_keys(),
             None => vec![],
         }
     }
@@ -139,7 +169,12 @@ impl CommandSpec for Bloom {
         match &self.subcommand {
             Some(BloomSubcommand::Reserve(cmd)) => cmd.to_resp_args(),
             Some(BloomSubcommand::Add(cmd)) => cmd.to_resp_args(),
+            Some(BloomSubcommand::MAdd(cmd)) => cmd.to_resp_args(),
             Some(BloomSubcommand::Exists(cmd)) => cmd.to_resp_args(),
+            Some(BloomSubcommand::MExists(cmd)) => cmd.to_resp_args(),
+            Some(BloomSubcommand::Info(cmd)) => cmd.to_resp_args(),
+            Some(BloomSubcommand::Card(cmd)) => cmd.to_resp_args(),
+            Some(BloomSubcommand::Insert(cmd)) => cmd.to_resp_args(),
             None => vec![],
         }
     }

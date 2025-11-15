@@ -10,11 +10,14 @@ pub struct BloomFilter {
     pub bits: Vec<u8>,
     pub num_hashes: u32,
     pub seeds: [u64; 2], // Two seeds for double hashing
+    pub capacity: u64,
+    pub error_rate: f64,
+    pub items_added: u64,
 }
 
 impl BloomFilter {
     const BF_MAGIC: &'static [u8] = b"SPINELBF";
-    const BF_ENCODING_VERSION: u8 = 1;
+    const BF_ENCODING_VERSION: u8 = 2;
 
     /// Creates a new Bloom filter with optimal parameters.
     ///
@@ -28,6 +31,9 @@ impl BloomFilter {
             bits: vec![0; m as usize],
             num_hashes: k,
             seeds: [rand::random::<u64>(), rand::random::<u64>()],
+            capacity,
+            error_rate,
+            items_added: 0,
         }
     }
 
@@ -66,6 +72,9 @@ impl BloomFilter {
                 changed = true;
             }
         }
+        if changed {
+            self.items_added += 1;
+        }
         changed
     }
 
@@ -91,14 +100,17 @@ impl BloomFilter {
     }
 
     /// Serializes the Bloom Filter to a compact binary format.
-    /// Format: "SPINELBF" (8 bytes) | version (1 byte) | num_hashes (4 bytes) | seed1 (8 bytes) | seed2 (8 bytes) | bits (remaining)
+    /// V2 Format: "SPINELBF" (8) | version (1) | num_hashes (4) | seed1 (8) | seed2 (8) | capacity (8) | error_rate (8) | items_added (8) | bits
     pub fn serialize(&self) -> Bytes {
-        let mut bytes = Vec::with_capacity(8 + 1 + 4 + 8 + 8 + self.bits.len());
+        let mut bytes = Vec::with_capacity(8 + 1 + 4 + 8 + 8 + 8 + 8 + 8 + self.bits.len());
         bytes.extend_from_slice(Self::BF_MAGIC);
         bytes.push(Self::BF_ENCODING_VERSION);
         bytes.extend_from_slice(&self.num_hashes.to_le_bytes());
         bytes.extend_from_slice(&self.seeds[0].to_le_bytes());
         bytes.extend_from_slice(&self.seeds[1].to_le_bytes());
+        bytes.extend_from_slice(&self.capacity.to_le_bytes());
+        bytes.extend_from_slice(&self.error_rate.to_le_bytes());
+        bytes.extend_from_slice(&self.items_added.to_le_bytes());
         bytes.extend_from_slice(&self.bits);
         Bytes::from(bytes)
     }
@@ -109,10 +121,12 @@ impl BloomFilter {
             return None;
         }
         let mut cursor = 8;
-        if *data.get(cursor)? != Self::BF_ENCODING_VERSION {
-            return None;
-        }
+        let version = *data.get(cursor)?;
         cursor += 1;
+
+        if version > Self::BF_ENCODING_VERSION {
+            return None; // Do not support future versions
+        }
 
         let num_hashes = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
         cursor += 4;
@@ -123,12 +137,29 @@ impl BloomFilter {
         let seed2 = u64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
         cursor += 8;
 
-        let bits = data.get(cursor..)?.to_vec();
+        let (capacity, error_rate, items_added, bits) = if version == 1 {
+            let bits = data.get(cursor..)?.to_vec();
+            // V1 did not store this info, so we use 0 as a placeholder.
+            (0, 0.0, 0, bits)
+        } else {
+            // Version 2 or higher
+            let capacity = u64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+            cursor += 8;
+            let error_rate = f64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+            cursor += 8;
+            let items_added = u64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+            cursor += 8;
+            let bits = data.get(cursor..)?.to_vec();
+            (capacity, error_rate, items_added, bits)
+        };
 
         Some(Self {
             bits,
             num_hashes,
             seeds: [seed1, seed2],
+            capacity,
+            error_rate,
+            items_added,
         })
     }
 }
