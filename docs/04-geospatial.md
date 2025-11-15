@@ -139,8 +139,7 @@ The `GEORADIUS` command works identically, but you provide longitude and latitud
 
 ---
 
-### Location-Aware Applications Made Easy
-
-SpinelDB's geospatial commands provide a high-performance, easy-to-use foundation for building sophisticated location-aware features into your applications. By leveraging the power of sorted sets and geohashing, you can perform complex queries with simple, atomic commands.
-
-➡️ **Next Chapter: [4a. Manual Caching with SWR & Grace Period](./04a-manual-caching-swr.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./03-native-json.md">3. Working with JSON Documents</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./05-caching.md">5. Intelligent Caching</a></strong></span>
+</div>

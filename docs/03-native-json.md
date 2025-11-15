@@ -333,8 +333,7 @@ Let's toggle the `active` field in our user object.
 
 ---
 
-### Unlock New Possibilities
-
-With native JSON support, you can simplify your application logic by offloading data manipulation to the database, reducing network round-trips and ensuring atomicity for complex updates.
-
-➡️ **Next Chapter: [4. Geospatial Indexing](./04-geospatial.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./02-core-data-types.md">2. Core Data Types & Commands</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./04-geospatial.md">4. Geospatial Indexing</a></strong></span>
+</div>

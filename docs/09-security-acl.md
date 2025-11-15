@@ -162,8 +162,7 @@ OK
 
 ---
 
-### A Robust Security Model
-
-SpinelDB's ACL system provides a comprehensive and flexible security model that is essential for production environments. By defining fine-grained rules and assigning them to different users, you can enforce the principle of least privilege and ensure that clients can only access the data and commands they are explicitly authorized for.
-
-➡️ **Next Chapter: [9. Server-Side Scripting with Lua](./09-lua-scripting.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./08-warden-failover.md">8. Automatic Failover with Warden</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./10-lua-scripting.md">10. Server-Side Scripting with Lua</a></strong></span>
+</div>

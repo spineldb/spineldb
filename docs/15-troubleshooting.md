@@ -1,4 +1,4 @@
-# Chapter 14: Operations & Troubleshooting
+# Chapter 15: Operations & Troubleshooting
 
 This chapter provides guidance on operational procedures and how to handle specific error conditions you might encounter while running a SpinelDB server in production.
 
@@ -58,3 +58,10 @@ Recovering from this state requires manual intervention to ensure data consisten
 4.  **Restart the Primary Server:** Once all replicas have been resynchronized, the final step is to **restart the primary SpinelDB server**. The emergency read-only mode is a persistent state for the life of the process and can only be cleared by a restart.
 
 By following these steps, you can safely recover from this critical state and ensure your entire cluster is back in a consistent state.
+
+---
+
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./14-persistence-and-backup.md">14. Persistence and Backup</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./16-bloom-filter.md">16. Bloom Filter Commands</a></strong></span>
+</div>

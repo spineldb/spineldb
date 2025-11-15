@@ -96,25 +96,7 @@ The entire process is automated and typically completes within seconds.
 
 ---
 
-## 4. Client Integration
-
-The final piece of the puzzle is how your application finds the new primary after a failover. Instead of hardcoding the database address, your application should be configured to connect to one of the Warden addresses.
-
-On startup, the client should connect to a Warden and issue the command:
-`SENTINEL get-master-addr-by-name <master-name>`
-
-### Example `redis-cli` Session with Warden
-
-```shell
-# Connect to a Warden instance, not the database server
-redis-cli -p 26379
-
-# Ask the Warden for the current address of 'mymaster'
-127.0.0.1:26379> SENTINEL get-master-addr-by-name mymaster
-1) "192.168.1.10"
-2) "7878"
-```
-
-The Warden replies with the current IP and port of the primary. The client then uses this address to connect to the database. If a failover occurs, the client can simply ask the Warden again to get the new primary's address. Most robust Redis client libraries have built-in support for this Sentinel protocol, handling the discovery and reconnection logic automatically.
-
-➡️ **Next Chapter: [8. Security with Access Control Lists (ACL)](./08-security-acl.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./07-clustering.md">7. Cluster Mode</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./09-security-acl.md">9. Security with Access Control Lists (ACL)</a></strong></span>
+</div>

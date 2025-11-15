@@ -233,10 +233,7 @@ Let's model a simple sensor data stream.
 
 ---
 
-## 7. HyperLogLogs
-
-For details on using HyperLogLogs, see [Chapter 17: HyperLogLogs](./17-hyperloglog.md).
-
----
-
-➡️ **Next Chapter: [3. Working with JSON Documents](./03-native-json.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./01-installation-and-setup.md">1. Installation & Setup</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./03-native-json.md">3. Working with JSON Documents</a></strong></span>
+</div>

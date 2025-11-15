@@ -116,14 +116,7 @@ A **hash tag** is a substring within a key that is enclosed in `{...}`. When a k
 
 ---
 
-## 4. Cluster Management
-
-SpinelDB provides a set of `CLUSTER` commands to manage and observe the state of the cluster.
-
-*   `CLUSTER NODES`: Shows a list of all known nodes and their status.
-*   `CLUSTER SLOTS`: Provides a detailed map of which slots are served by which nodes.
-*   `CLUSTER RESHARD`: An administrative command to move a range of slots from one node to another. This is an online operation and does not require downtime.
-
-While you can manage the cluster manually, for production environments, using an automated failover system is highly recommended.
-
-➡️ **Next Chapter: [7. Automatic Failover with Warden](./07-warden-failover.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./06-replication.md">6. Primary-Replica Replication</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./08-warden-failover.md">8. Automatic Failover with Warden</a></strong></span>
+</div>
