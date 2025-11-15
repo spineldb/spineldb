@@ -1,4 +1,4 @@
-# Chapter 6: Cluster Mode
+# Chapter 7: Cluster Mode
 
 While primary-replica replication is excellent for high availability and read scaling, it has a limitation: the entire dataset must still fit in the memory of a single primary machine. To scale beyond the capacity of one server and to distribute the write load, SpinelDB offers **Cluster Mode**.
 
