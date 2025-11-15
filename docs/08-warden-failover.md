@@ -1,4 +1,4 @@
-# Chapter 7: Automatic Failover with Warden
+# Chapter 8: Automatic Failover with Warden
 
 While SpinelDB Cluster provides a foundation for high availability, its built-in, replica-initiated failover mechanism has limitations, particularly concerning **split-brain** scenarios during network partitions. For production deployments, a more robust solution is required.
 

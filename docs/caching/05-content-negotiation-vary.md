@@ -142,4 +142,9 @@ By correctly using the `Vary` header, you can build a cache that respects conten
 
 This concludes our deep dive into the Intelligent Caching Engine. You now have the tools to build a fast, resilient, and efficient caching strategy.
 
-➡️ **Next Chapter: [5. Primary-Replica Replication](./05-replication.md)**
+---
+
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./04-on-disk-caching.md">4d. On-Disk Caching</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="../06-replication.md">5. Primary-Replica Replication</a></strong></span>
+</div>

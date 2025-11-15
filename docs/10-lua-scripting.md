@@ -1,4 +1,4 @@
-# Chapter 9: Server-Side Scripting with Lua
+# Chapter 10: Server-Side Scripting with Lua
 
 While SpinelDB offers a rich set of commands, sometimes you need to perform a sequence of operations atomically without the overhead of a `MULTI`/`EXEC` transaction or multiple network round-trips. SpinelDB, like Redis, solves this with **server-side Lua scripting**.
 

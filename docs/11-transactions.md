@@ -1,4 +1,4 @@
-# Chapter 10: Atomic Operations with Transactions
+# Chapter 11: Atomic Operations with Transactions
 
 While Lua scripts are excellent for creating new atomic operations, sometimes you need to run a sequence of existing commands as a single, atomic transaction. SpinelDB supports this with the `MULTI`, `EXEC`, `DISCARD`, and `WATCH` commands, providing a mechanism for **optimistic locking**.
 

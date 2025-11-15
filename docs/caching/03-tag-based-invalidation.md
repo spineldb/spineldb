@@ -90,4 +90,7 @@ This lazy, cluster-aware invalidation mechanism ensures that your cache remains 
 
 ---
 
-➡️ **Next Chapter: [4d. On-Disk Caching](./04d-on-disk-caching.md)**
+<div style="display: flex; justify-content: space-between;">
+  <span>⬅️ <strong>Previous Chapter: <a href="./02-declarative-caching-proxy.md">4b. Declarative Caching with CACHE.PROXY</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./04-on-disk-caching.md">4d. On-Disk Caching</a></strong></span>
+</div>

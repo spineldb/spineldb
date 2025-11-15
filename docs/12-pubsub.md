@@ -1,4 +1,4 @@
-# Chapter 11: Publish/Subscribe Messaging
+# Chapter 12: Publish/Subscribe Messaging
 
 Beyond storing data, SpinelDB provides a powerful real-time messaging system based on the **Publish/Subscribe** (or Pub/Sub) pattern. This system allows clients to subscribe to named **channels** and receive messages as soon as they are published, without needing to poll the database.
 

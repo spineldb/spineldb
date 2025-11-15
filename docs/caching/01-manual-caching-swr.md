@@ -149,4 +149,4 @@ However, for most applications, we recommend using the **Declarative Caching** a
 
 You can learn more about this in the next chapter.
 
-➡️ **Next Chapter: [4b. Declarative Caching with Policies & `CACHE.PROXY`](./04b-declarative-caching-proxy.md)**
+➡️ **Next Chapter: [4b. Declarative Caching with Policies & `CACHE.PROXY`](./02-declarative-caching-proxy.md)**
