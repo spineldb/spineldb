@@ -106,9 +106,16 @@ impl SpldbLoader {
                 let backup_path = format!("{}.corrupted.{}", path, timestamp);
                 if let Err(rename_err) = fs::rename(path, &backup_path).await {
                     warn!(
-                        "Failed to rename corrupted SPLDB file to {}: {}",
+                        "Failed to rename corrupted SPLDB file to {}: {}. Attempting to remove it.",
                         backup_path, rename_err
                     );
+                    if let Err(remove_err) = fs::remove_file(path).await {
+                        warn!(
+                            "Failed to remove corrupted SPLDB file {}: {}. Manual intervention may be required. Aborting startup.",
+                            path, remove_err
+                        );
+                        return Err(remove_err.into());
+                    }
                 }
             } else {
                 return Err(e.into());

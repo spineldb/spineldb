@@ -110,8 +110,7 @@ impl ExecutableCommand for BitOp {
         let max_alloc_size = ctx.state.config.lock().await.safety.max_bitop_alloc_size;
         if max_alloc_size > 0 && max_len > max_alloc_size {
             return Err(SpinelDBError::InvalidState(format!(
-                "BITOP result would exceed 'max_bitop_alloc_size' limit ({} > {})",
-                max_len, max_alloc_size
+                "BITOP result would exceed 'max_bitop_alloc_size' limit ({max_len} > {max_alloc_size})"
             )));
         }
 
