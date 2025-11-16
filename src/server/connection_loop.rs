@@ -11,6 +11,7 @@ use crate::core::state::{ClientInfo, ClientRole};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
@@ -81,7 +82,20 @@ pub async fn run(mut ctx: ServerContext) {
                 typed_res
             } => {
                 match res {
-                    Ok((permit, Ok((socket, addr)))) => {
+                    Ok((permit, Ok((mut socket, addr)))) => {
+                        if ctx.protected_mode && !addr.ip().is_loopback() {
+                            warn!(
+                                "Rejected connection from {} because server is in protected mode.",
+                                addr
+                            );
+                            let error_msg = b"-ERR Protected mode is enabled. Connections are only accepted from the loopback interface.\r\n";
+                            if socket.write_all(error_msg).await.is_err() {
+                                warn!("Failed to send protected mode error to {}", addr);
+                            }
+                            // The connection will be closed when the socket is dropped.
+                            continue;
+                        }
+
                         // We have a permit and a connection. Spawn the handler.
                         info!("Accepted new connection from: {}", addr);
                         ctx.state.stats.increment_total_connections();
