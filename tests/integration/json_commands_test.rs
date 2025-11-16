@@ -804,8 +804,8 @@ async fn test_json_strappend_basic() {
     let result = ctx.json_get("mykey", &[]).await.unwrap();
     match result {
         RespValue::BulkString(json_str) => {
-            let json: serde_json::Value = serde_json::from_slice(&json_str).unwrap();
-            assert_eq!(json.as_str().unwrap(), "hello world");
+            // JSON.GET returns raw string content for string values, not JSON-encoded
+            assert_eq!(std::str::from_utf8(&json_str).unwrap(), "hello world");
         }
         _ => panic!("Expected BulkString"),
     }
@@ -1269,8 +1269,8 @@ async fn test_json_clear_string() {
     let result = ctx.json_get("mykey", &["$.str"]).await.unwrap();
     match result {
         RespValue::BulkString(json_str) => {
-            let json: serde_json::Value = serde_json::from_slice(&json_str).unwrap();
-            assert_eq!(json, serde_json::json!(""));
+            // JSON.GET returns raw string content for string values, not JSON-encoded
+            assert_eq!(json_str.as_ref(), b"");
         }
         _ => panic!("Expected BulkString"),
     }

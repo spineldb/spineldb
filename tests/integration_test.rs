@@ -12,6 +12,7 @@ mod integration {
     pub mod json_commands_test;
     pub mod list_commands_test;
     pub mod persistence_test;
+    pub mod replication_test;
     pub mod set_commands_test;
     pub mod string_commands_test;
     pub mod test_helpers;

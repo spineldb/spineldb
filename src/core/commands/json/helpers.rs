@@ -203,7 +203,7 @@ pub fn find_values_by_jsonpath<'a>(
     let final_path = if path_str == "." {
         "$".to_string()
     } else if path_str.starts_with('.') {
-        format!("${}", path_str)
+        format!("${path_str}")
     } else {
         path_str.to_string()
     };
@@ -211,7 +211,7 @@ pub fn find_values_by_jsonpath<'a>(
     find_values_with_jsonpath(root, &final_path).map_err(|e| {
         // Sanitize the error message to prevent protocol errors
         let sanitized_error = e.to_string().replace('\n', " ");
-        SpinelDBError::InvalidState(format!("Invalid JSONPath: {}", sanitized_error))
+        SpinelDBError::InvalidState(format!("Invalid JSONPath: {sanitized_error}"))
     })
 }
 
