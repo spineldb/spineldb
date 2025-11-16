@@ -1,6 +1,6 @@
 [package]
 name = "spineldb"
-version = "4.3.10"
+version = "4.4.1"
 edition = "2024"
 authors = ["SpinelDB <spineldb@gmail.com>"]
 description = "SpinelD is in-memory data store written in Rust."
