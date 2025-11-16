@@ -16,4 +16,5 @@ pub struct ServerContext {
     pub background_tasks: JoinSet<Result<(), anyhow::Error>>,
     pub acceptor: Option<TlsAcceptor>,
     pub connection_permits: Arc<tokio::sync::Semaphore>,
+    pub protected_mode: bool,
 }

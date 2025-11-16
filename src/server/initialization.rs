@@ -72,6 +72,19 @@ pub async fn setup(
         "SpinelDB server listening on {}:{}",
         listener_config.host, listener_config.port
     );
+
+    let protected_mode = listener_config.host == "0.0.0.0"
+        && listener_config.password.is_none()
+        && !listener_config.acl.enabled;
+    if protected_mode {
+        warn!("--------------------------------------------------------------------------------");
+        warn!("WARNING: Server is running in PROTECTED MODE because it is listening on 0.0.0.0");
+        warn!("and no password is set. In this mode, connections are only accepted from");
+        warn!("the loopback interface. To disable protected mode, set a password using the");
+        warn!("'password' config option or bind to a specific IP address.");
+        warn!("--------------------------------------------------------------------------------");
+    }
+
     let connection_permits = Arc::new(tokio::sync::Semaphore::new(listener_config.max_clients));
     drop(listener_config);
 
@@ -83,6 +96,7 @@ pub async fn setup(
         background_tasks: JoinSet::new(),
         acceptor,
         connection_permits,
+        protected_mode,
     })
 }
 

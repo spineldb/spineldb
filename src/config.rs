@@ -83,6 +83,7 @@ impl Default for SafetyConfig {
 /// Holds security-related configurations, such as network access controls.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SecurityConfig {
+    pub password: Option<String>,
     /// A list of glob patterns for domains that `CACHE.FETCH` can connect to.
     /// If empty, all domains are allowed (default, for backward compatibility).
     #[serde(default = "default_allowed_fetch_domains")]
@@ -217,7 +218,6 @@ struct RawConfig {
     host: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    password: Option<String>,
     #[serde(default = "default_log_level")]
     log_level: String,
     #[serde(default = "default_max_clients")]
@@ -528,10 +528,13 @@ impl Config {
         let available_memory = get_available_memory()?;
         let resolved_maxmemory = resolve_maxmemory(raw_config.maxmemory, available_memory)?;
 
+        let security_config_clone = raw_config.security.clone();
+        let password_option = raw_config.security.password;
+
         let mut config = Config {
             host: raw_config.host,
             port: raw_config.port,
-            password: raw_config.password,
+            password: password_option,
             log_level: raw_config.log_level,
             max_clients: raw_config.max_clients,
             maxmemory: resolved_maxmemory,
@@ -542,7 +545,7 @@ impl Config {
             cluster: raw_config.cluster,
             tls: raw_config.tls,
             safety: raw_config.safety,
-            security: raw_config.security,
+            security: security_config_clone,
             acl_file: raw_config.acl_file,
             acl: raw_config.acl,
             cache: raw_config.cache,
