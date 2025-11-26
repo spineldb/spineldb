@@ -3,6 +3,7 @@
 //! Integration tests for Bloom Filter commands
 
 use bytes::Bytes;
+use spineldb::core::commands::command_trait::CommandExt;
 use spineldb::core::protocol::RespFrame;
 use spineldb::core::{Command, RespValue, SpinelDBError};
 
