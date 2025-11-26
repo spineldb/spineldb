@@ -10,8 +10,24 @@ use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::{filter::EnvFilter, prelude::*, reload};
 
+fn main() -> Result<()> {
+    //
+    // Use a dedicated thread with a larger stack size to run the application,
+    // which is a common workaround for stack overflow issues in Rust applications,
+    // especially when dealing with deep recursion or large data structures on the stack.
+    //
+    const STACK_SIZE: usize = 32 * 1024 * 1024; // 32MB
+
+    let child = std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .name("main".to_string())
+        .spawn(run_app)?;
+
+    child.join().unwrap()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run_app() -> Result<()> {
     // Define version information.
     const VERSION: &str = env!("CARGO_PKG_VERSION");
 
