@@ -2140,6 +2140,53 @@ impl TestContext {
             sleep(Duration::from_millis(100)).await;
         }
     }
+
+    // ===== PubSub Command Helpers =====
+
+    /// Helper to execute PUBLISH command
+    pub async fn publish(&self, channel: &str, message: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"PUBLISH")),
+            RespFrame::BulkString(Bytes::from(channel.to_string())),
+            RespFrame::BulkString(Bytes::from(message.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute PUBSUB CHANNELS command
+    pub async fn pubsub_channels(&self, pattern: Option<&str>) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"PUBSUB")),
+            RespFrame::BulkString(Bytes::from_static(b"CHANNELS")),
+        ];
+        if let Some(p) = pattern {
+            frames.push(RespFrame::BulkString(Bytes::from(p.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute PUBSUB NUMSUB command
+    pub async fn pubsub_numsub(&self, channels: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"PUBSUB")),
+            RespFrame::BulkString(Bytes::from_static(b"NUMSUB")),
+        ];
+        for channel in channels {
+            frames.push(RespFrame::BulkString(Bytes::from(channel.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute PUBSUB NUMPAT command
+    pub async fn pubsub_numpat(&self) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"PUBSUB")),
+            RespFrame::BulkString(Bytes::from_static(b"NUMPAT")),
+        ]))?;
+        self.execute(command).await
+    }
 }
 
 // ===== Test Assertion Helpers =====
