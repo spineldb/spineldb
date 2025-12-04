@@ -94,37 +94,112 @@ impl Decoder for RespFrameCodec {
     type Item = RespFrame;
     type Error = SpinelDBError;
 
-    /// Decodes a `RespFrame` from a `BytesMut` buffer.
-    ///
-    /// It returns `Ok(None)` if the buffer does not contain a full frame yet,
-    /// allowing the `Framed` stream to wait for more data from the network.
+    /// Decodes a `RespFrame` from a `BytesMut` buffer using an iterative, stack-based approach
+    /// to prevent stack overflows from deeply nested arrays.
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match parse_frame(src) {
-            Ok((frame, len)) => {
-                // Advance the buffer past the successfully parsed frame.
-                src.advance(len);
-                Ok(Some(frame))
-            }
-            // If the data is incomplete, wait for more data.
-            Err(SpinelDBError::IncompleteData) => Ok(None),
-            // For other errors, propagate them up to the connection handler.
-            Err(e) => Err(e),
+        if src.is_empty() {
+            return Ok(None);
         }
+
+        let mut cursor = 0;
+        // The parsing state stack. Each element is `(elements_remaining, frames_collected)`.
+        let mut stack: Vec<(usize, Vec<RespFrame>)> = vec![(1, Vec::with_capacity(1))];
+
+        while let Some((remaining, frames)) = stack.last_mut() {
+            if *remaining == 0 {
+                // This level is complete. Pop, build the array, and add it to the parent.
+                let (completed_count, completed_frames) = stack.pop().unwrap();
+                let frame = if completed_count > 1 || stack.len() == 1 {
+                    RespFrame::Array(completed_frames)
+                } else if let Some(frame) = completed_frames.into_iter().next() {
+                    // This handles the top-level case where we expect just one frame.
+                    frame
+                } else {
+                    // Should be unreachable if completed_count was > 0.
+                    return Err(SpinelDBError::Internal("Empty frame list popped".into()));
+                };
+
+                if let Some((_, parent_frames)) = stack.last_mut() {
+                    parent_frames.push(frame);
+                } else {
+                    // This was the last frame on the stack, so it's our final result.
+                    src.advance(cursor);
+                    return Ok(Some(frame));
+                }
+                continue;
+            }
+
+            // Try to parse one frame at the current level.
+            match parse_frame_non_recursive(&src[cursor..]) {
+                Ok((Some(frame), frame_len)) => {
+                    cursor += frame_len;
+                    *remaining -= 1;
+                    frames.push(frame);
+                }
+                Ok((None, frame_len)) => {
+                    // This means we encountered an array and need to go deeper.
+                    cursor += frame_len;
+                    let (arr_len, new_cursor_pos) = parse_array_header(&src[cursor..])?;
+                    cursor += new_cursor_pos;
+
+                    if arr_len > 0 {
+                        stack.push((arr_len as usize, Vec::with_capacity(arr_len as usize)));
+                    } else {
+                        // Handle empty or null arrays without pushing to the stack.
+                        let array_frame = if arr_len == 0 {
+                            RespFrame::Array(vec![])
+                        } else {
+                            RespFrame::NullArray
+                        };
+                        *remaining -= 1;
+                        frames.push(array_frame);
+                    }
+                }
+                Err(e) => {
+                    // If data is incomplete, just return Ok(None) and wait for more.
+                    // Otherwise, propagate the error.
+                    return if matches!(e, SpinelDBError::IncompleteData) {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    };
+                }
+            }
+        }
+
+        // Should be unreachable if the logic is correct.
+        Ok(None)
     }
 }
 
-/// The main parsing entry point. It inspects the first byte (the type prefix)
-/// and dispatches to the appropriate parsing function.
-fn parse_frame(src: &[u8]) -> Result<(RespFrame, usize), SpinelDBError> {
+/// Parses the header of an array, returning the number of elements.
+fn parse_array_header(src: &[u8]) -> Result<(isize, usize), SpinelDBError> {
+    let (line, len_of_line) = parse_line(&src[1..])?;
+    let s = String::from_utf8_lossy(line);
+    let arr_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
+
+    if arr_len as usize > MAX_FRAME_ELEMENTS {
+        return Err(SpinelDBError::SyntaxError);
+    }
+    Ok((arr_len, len_of_line + 1))
+}
+
+/// A non-recursive frame parser.
+/// For arrays, it only parses the header (`*<len>\r\n`) and returns `Ok((None, len))`,
+/// signaling to the iterative decoder that it needs to push a new state onto the stack.
+fn parse_frame_non_recursive(src: &[u8]) -> Result<(Option<RespFrame>, usize), SpinelDBError> {
     if src.is_empty() {
         return Err(SpinelDBError::IncompleteData);
     }
     match src[0] {
-        b'+' => parse_simple_string(src),
-        b'-' => parse_error(src),
-        b':' => parse_integer(src),
-        b'$' => parse_bulk_string(src),
-        b'*' => parse_array(src),
+        b'+' => parse_simple_string(src).map(|(f, l)| (Some(f), l)),
+        b'-' => parse_error(src).map(|(f, l)| (Some(f), l)),
+        b':' => parse_integer(src).map(|(f, l)| (Some(f), l)),
+        b'$' => parse_bulk_string(src).map(|(f, l)| (Some(f), l)),
+        b'*' => {
+            // For arrays, just signal that an array was found. The iterative decoder will handle it.
+            Ok((None, 0))
+        }
         _ => Err(SpinelDBError::SyntaxError),
     }
 }
@@ -198,33 +273,4 @@ fn parse_bulk_string(src: &[u8]) -> Result<(RespFrame, usize), SpinelDBError> {
     let data_end = total_len_prefix + str_len;
     let data = Bytes::copy_from_slice(&src[data_start..data_end]);
     Ok((RespFrame::BulkString(data), data_end + CRLF_LEN))
-}
-
-/// Parses an Array (e.g., `*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n`).
-fn parse_array(src: &[u8]) -> Result<(RespFrame, usize), SpinelDBError> {
-    let (line, len_of_line) = parse_line(&src[1..])?;
-    let s = String::from_utf8_lossy(line);
-    let arr_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
-
-    // Handle Null Array (*-1\r\n).
-    if arr_len == -1 {
-        return Ok((RespFrame::NullArray, len_of_line + 1));
-    }
-
-    let arr_len = arr_len as usize;
-    if arr_len > MAX_FRAME_ELEMENTS {
-        return Err(SpinelDBError::SyntaxError);
-    }
-
-    let mut frames = Vec::with_capacity(arr_len);
-    let mut cursor = len_of_line + 1;
-
-    // Recursively parse each element of the array.
-    for _ in 0..arr_len {
-        let (frame, frame_len) = parse_frame(&src[cursor..])?;
-        frames.push(frame);
-        cursor += frame_len;
-    }
-
-    Ok((RespFrame::Array(frames), cursor))
 }

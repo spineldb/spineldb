@@ -192,17 +192,19 @@ impl Db {
             let shard = self.get_shard(current_shard_idx);
             let guard = shard.entries.lock().await;
 
-            let keys_in_shard: Vec<Bytes> = guard.iter().map(|(k, _)| k.clone()).collect();
             let starting_point = internal_cursor;
             internal_cursor = 0;
 
-            for (i, key) in keys_in_shard.iter().enumerate().skip(starting_point) {
+            // Iterate directly on the LRU cache iterator to avoid collecting all keys into a vector.
+            for (i, (key, _value)) in guard.iter().enumerate().skip(starting_point) {
+                // The value from the iterator might be stale, so we peek to get the latest state
+                // and check for expiration.
                 if guard.peek(key).is_some_and(|value| !value.is_expired()) {
                     result_keys.push(key.clone());
                 }
 
                 if result_keys.len() >= count {
-                    internal_cursor = i + 1;
+                    internal_cursor = i + 1; // Save the position for the next scan call.
                     break 'outer;
                 }
             }
