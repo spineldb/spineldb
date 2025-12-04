@@ -297,11 +297,43 @@ impl SortedSet {
 
     /// Removes entries within a score range.
     pub fn remove_range_by_score(&mut self, min: ScoreBoundary, max: ScoreBoundary) -> usize {
-        let to_remove: Vec<ZSetEntry> = self.get_range_by_score(min, max);
-        let count = to_remove.len();
+        let members_to_remove: Vec<Bytes> = {
+            let min_bound = match min {
+                ScoreBoundary::Inclusive(score) => Bound::Included(ZSetEntry {
+                    score,
+                    member: Bytes::new(),
+                }),
+                ScoreBoundary::Exclusive(score) => Bound::Excluded(ZSetEntry {
+                    score,
+                    member: Bytes::from_static(&[255; 64]),
+                }),
+                ScoreBoundary::NegInfinity => Bound::Unbounded,
+                ScoreBoundary::PosInfinity => return 0,
+            };
+
+            let max_bound = match max {
+                ScoreBoundary::Inclusive(score) => Bound::Included(ZSetEntry {
+                    score,
+                    member: Bytes::from_static(&[255; 64]),
+                }),
+                ScoreBoundary::Exclusive(score) => Bound::Excluded(ZSetEntry {
+                    score,
+                    member: Bytes::new(),
+                }),
+                ScoreBoundary::PosInfinity => Bound::Unbounded,
+                ScoreBoundary::NegInfinity => return 0,
+            };
+
+            self.sorted
+                .range((min_bound, max_bound))
+                .map(|entry| entry.member.clone())
+                .collect()
+        };
+
+        let count = members_to_remove.len();
         if count > 0 {
-            for entry in to_remove {
-                self.remove(&entry.member);
+            for member in members_to_remove {
+                self.remove(&member);
             }
         }
         count
@@ -342,11 +374,45 @@ impl SortedSet {
 
     /// Removes entries within a lexicographical range.
     pub fn remove_range_by_lex(&mut self, min: &LexBoundary, max: &LexBoundary) -> usize {
-        let to_remove = self.get_range_by_lex(min, max);
-        let count = to_remove.len();
+        let members_to_remove: Vec<Bytes> = {
+            const LEX_SCORE: f64 = 0.0;
+
+            let min_bound = match min {
+                LexBoundary::Inclusive(b) => Bound::Included(ZSetEntry {
+                    score: LEX_SCORE,
+                    member: b.clone(),
+                }),
+                LexBoundary::Exclusive(b) => Bound::Excluded(ZSetEntry {
+                    score: LEX_SCORE,
+                    member: b.clone(),
+                }),
+                LexBoundary::Min => Bound::Unbounded,
+                LexBoundary::Max => return 0,
+            };
+
+            let max_bound = match max {
+                LexBoundary::Inclusive(b) => Bound::Included(ZSetEntry {
+                    score: LEX_SCORE,
+                    member: b.clone(),
+                }),
+                LexBoundary::Exclusive(b) => Bound::Excluded(ZSetEntry {
+                    score: LEX_SCORE,
+                    member: b.clone(),
+                }),
+                LexBoundary::Max => Bound::Unbounded,
+                LexBoundary::Min => return 0,
+            };
+
+            self.sorted
+                .range((min_bound, max_bound))
+                .map(|entry| entry.member.clone())
+                .collect()
+        };
+
+        let count = members_to_remove.len();
         if count > 0 {
-            for entry in to_remove {
-                self.remove(&entry.member);
+            for member in members_to_remove {
+                self.remove(&member);
             }
         }
         count
@@ -354,11 +420,29 @@ impl SortedSet {
 
     /// Removes entries within a rank range.
     pub fn remove_range_by_rank(&mut self, start: i64, stop: i64) -> usize {
-        let to_remove: Vec<ZSetEntry> = self.get_range(start, stop);
-        let count = to_remove.len();
+        let members_to_remove: Vec<Bytes> = {
+            let len = self.len() as i64;
+            if len == 0 {
+                return 0;
+            }
+            let start = if start < 0 { len + start } else { start }.max(0);
+            let stop = if stop < 0 { len + stop } else { stop }.min(len - 1);
+            if start > stop || start >= len {
+                return 0;
+            }
+
+            self.sorted
+                .iter()
+                .skip(start as usize)
+                .take((stop - start + 1) as usize)
+                .map(|entry| entry.member.clone())
+                .collect()
+        };
+
+        let count = members_to_remove.len();
         if count > 0 {
-            for entry in to_remove {
-                self.remove(&entry.member);
+            for member in members_to_remove {
+                self.remove(&member);
             }
         }
         count
