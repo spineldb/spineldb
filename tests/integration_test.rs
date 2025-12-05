@@ -6,6 +6,7 @@
 //! verifying command execution, state changes, and data consistency.
 
 mod integration {
+    pub mod cache_test;
     pub mod fixtures;
     pub mod geospatial_test;
     pub mod hash_commands_test;
