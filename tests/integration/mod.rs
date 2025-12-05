@@ -17,3 +17,4 @@ pub mod geospatial_test;
 pub mod transaction_test;
 pub mod persistence_test;
 pub mod replication_test;
+pub mod cache_test;
