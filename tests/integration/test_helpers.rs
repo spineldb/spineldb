@@ -2187,6 +2187,467 @@ impl TestContext {
         ]))?;
         self.execute(command).await
     }
+
+    // ===== Stream Command Helpers =====
+
+    #[allow(dead_code)]
+    /// Helper to execute XADD command
+    /// fields: Vec of (field, value) tuples
+    /// id: Optional ID (None means "*" for auto-generation)
+    /// maxlen: Optional (is_approximate, count) tuple for MAXLEN
+    /// nomkstream: If true, don't create stream if it doesn't exist
+    pub async fn xadd(
+        &self,
+        key: &str,
+        fields: &[(&str, &str)],
+        id: Option<&str>,
+        maxlen: Option<(bool, usize)>,
+        nomkstream: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"XADD"))];
+        frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+
+        if let Some((approx, count)) = maxlen {
+            if approx {
+                frames.push(RespFrame::BulkString(Bytes::from_static(b"MAXLEN")));
+                frames.push(RespFrame::BulkString(Bytes::from_static(b"~")));
+            } else {
+                frames.push(RespFrame::BulkString(Bytes::from_static(b"MAXLEN")));
+            }
+            frames.push(RespFrame::BulkString(Bytes::from(count.to_string())));
+        }
+
+        if nomkstream {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"NOMKSTREAM")));
+        }
+
+        if let Some(id_str) = id {
+            frames.push(RespFrame::BulkString(Bytes::from(id_str.to_string())));
+        } else {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"*")));
+        }
+
+        for (field, value) in fields {
+            frames.push(RespFrame::BulkString(Bytes::from(field.to_string())));
+            frames.push(RespFrame::BulkString(Bytes::from(value.to_string())));
+        }
+
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XRANGE command
+    pub async fn xrange(
+        &self,
+        key: &str,
+        start: &str,
+        end: &str,
+        count: Option<usize>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XRANGE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(end.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"COUNT")));
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XREVRANGE command
+    #[allow(dead_code)]
+    pub async fn xrevrange(
+        &self,
+        key: &str,
+        start: &str,
+        end: &str,
+        count: Option<usize>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XREVRANGE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+            RespFrame::BulkString(Bytes::from(end.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"COUNT")));
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XLEN command
+    pub async fn xlen(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XLEN")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XDEL command
+    pub async fn xdel(&self, key: &str, ids: &[&str]) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XDEL")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        for id in ids {
+            frames.push(RespFrame::BulkString(Bytes::from(id.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XTRIM command
+    #[allow(dead_code)]
+    pub async fn xtrim(
+        &self,
+        key: &str,
+        strategy: &str, // "MAXLEN" or "MINID"
+        approx: bool,
+        value: &str, // count for MAXLEN, id for MINID
+        limit: Option<usize>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XTRIM")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if let Some(l) = limit {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"LIMIT")));
+            frames.push(RespFrame::BulkString(Bytes::from(l.to_string())));
+        }
+        frames.push(RespFrame::BulkString(Bytes::from(strategy.to_string())));
+        if approx {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"~")));
+        }
+        frames.push(RespFrame::BulkString(Bytes::from(value.to_string())));
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XINFO STREAM command
+    #[allow(dead_code)]
+    pub async fn xinfo_stream(&self, key: &str, full: bool) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XINFO")),
+            RespFrame::BulkString(Bytes::from_static(b"STREAM")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ];
+        if full {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"FULL")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XINFO GROUPS command
+    #[allow(dead_code)]
+    pub async fn xinfo_groups(&self, key: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XINFO")),
+            RespFrame::BulkString(Bytes::from_static(b"GROUPS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XINFO CONSUMERS command
+    #[allow(dead_code)]
+    pub async fn xinfo_consumers(
+        &self,
+        key: &str,
+        group: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XINFO")),
+            RespFrame::BulkString(Bytes::from_static(b"CONSUMERS")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XGROUP CREATE command
+    pub async fn xgroup_create(
+        &self,
+        key: &str,
+        group: &str,
+        id: &str,
+        mkstream: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XGROUP")),
+            RespFrame::BulkString(Bytes::from_static(b"CREATE")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+            RespFrame::BulkString(Bytes::from(id.to_string())),
+        ];
+        if mkstream {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"MKSTREAM")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XGROUP SETID command
+    #[allow(dead_code)]
+    pub async fn xgroup_setid(
+        &self,
+        key: &str,
+        group: &str,
+        id: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XGROUP")),
+            RespFrame::BulkString(Bytes::from_static(b"SETID")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+            RespFrame::BulkString(Bytes::from(id.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XGROUP DESTROY command
+    #[allow(dead_code)]
+    pub async fn xgroup_destroy(&self, key: &str, group: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XGROUP")),
+            RespFrame::BulkString(Bytes::from_static(b"DESTROY")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XGROUP DELCONSUMER command
+    #[allow(dead_code)]
+    pub async fn xgroup_delconsumer(
+        &self,
+        key: &str,
+        group: &str,
+        consumer: &str,
+    ) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XGROUP")),
+            RespFrame::BulkString(Bytes::from_static(b"DELCONSUMER")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+            RespFrame::BulkString(Bytes::from(consumer.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XACK command
+    #[allow(dead_code)]
+    pub async fn xack(
+        &self,
+        key: &str,
+        group: &str,
+        ids: &[&str],
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XACK")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+        ];
+        for id in ids {
+            frames.push(RespFrame::BulkString(Bytes::from(id.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XPENDING command (summary)
+    #[allow(dead_code)]
+    pub async fn xpending(&self, key: &str, group: &str) -> Result<RespValue, SpinelDBError> {
+        let command = Command::try_from(RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"XPENDING")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+        ]))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XPENDING command (detailed)
+    #[allow(dead_code)]
+    pub async fn xpending_range(
+        &self,
+        key: &str,
+        group: &str,
+        start: &str,
+        end: &str,
+        count: usize,
+        consumer: Option<&str>,
+        idle: Option<u64>,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XPENDING")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+        ];
+        if let Some(idle_ms) = idle {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"IDLE")));
+            frames.push(RespFrame::BulkString(Bytes::from(idle_ms.to_string())));
+        }
+        frames.push(RespFrame::BulkString(Bytes::from(start.to_string())));
+        frames.push(RespFrame::BulkString(Bytes::from(end.to_string())));
+        frames.push(RespFrame::BulkString(Bytes::from(count.to_string())));
+        if let Some(cons) = consumer {
+            frames.push(RespFrame::BulkString(Bytes::from(cons.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XREAD command
+    #[allow(dead_code)]
+    pub async fn xread(
+        &self,
+        streams: &[(&str, &str)], // Vec of (key, id) tuples
+        count: Option<usize>,
+        block: Option<u64>, // milliseconds
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![RespFrame::BulkString(Bytes::from_static(b"XREAD"))];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"COUNT")));
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        if let Some(b) = block {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"BLOCK")));
+            frames.push(RespFrame::BulkString(Bytes::from(b.to_string())));
+        }
+        frames.push(RespFrame::BulkString(Bytes::from_static(b"STREAMS")));
+        for (key, _) in streams {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        for (_, id) in streams {
+            frames.push(RespFrame::BulkString(Bytes::from(id.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XREADGROUP command
+    #[allow(dead_code)]
+    pub async fn xreadgroup(
+        &self,
+        group: &str,
+        consumer: &str,
+        streams: &[(&str, &str)], // Vec of (key, id) tuples, id can be ">" or "0-0" etc.
+        count: Option<usize>,
+        block: Option<u64>, // milliseconds
+        noack: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XREADGROUP")),
+            RespFrame::BulkString(Bytes::from_static(b"GROUP")),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+            RespFrame::BulkString(Bytes::from(consumer.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"COUNT")));
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        if let Some(b) = block {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"BLOCK")));
+            frames.push(RespFrame::BulkString(Bytes::from(b.to_string())));
+        }
+        if noack {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"NOACK")));
+        }
+        frames.push(RespFrame::BulkString(Bytes::from_static(b"STREAMS")));
+        for (key, _) in streams {
+            frames.push(RespFrame::BulkString(Bytes::from(key.to_string())));
+        }
+        for (_, id) in streams {
+            frames.push(RespFrame::BulkString(Bytes::from(id.to_string())));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XCLAIM command
+    #[allow(dead_code)]
+    pub async fn xclaim(
+        &self,
+        key: &str,
+        group: &str,
+        consumer: &str,
+        min_idle_time: u64, // milliseconds
+        ids: &[&str],
+        idle: Option<u64>,
+        time: Option<u64>,
+        retrycount: Option<u64>,
+        force: bool,
+        justid: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XCLAIM")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+            RespFrame::BulkString(Bytes::from(consumer.to_string())),
+            RespFrame::BulkString(Bytes::from(min_idle_time.to_string())),
+        ];
+        for id in ids {
+            frames.push(RespFrame::BulkString(Bytes::from(id.to_string())));
+        }
+        if let Some(i) = idle {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"IDLE")));
+            frames.push(RespFrame::BulkString(Bytes::from(i.to_string())));
+        }
+        if let Some(t) = time {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"TIME")));
+            frames.push(RespFrame::BulkString(Bytes::from(t.to_string())));
+        }
+        if let Some(r) = retrycount {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"RETRYCOUNT")));
+            frames.push(RespFrame::BulkString(Bytes::from(r.to_string())));
+        }
+        if force {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"FORCE")));
+        }
+        if justid {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"JUSTID")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
+
+    /// Helper to execute XAUTOCLAIM command
+    #[allow(dead_code)]
+    pub async fn xautoclaim(
+        &self,
+        key: &str,
+        group: &str,
+        consumer: &str,
+        min_idle_time: u64, // milliseconds
+        start: &str,
+        count: Option<usize>,
+        justid: bool,
+    ) -> Result<RespValue, SpinelDBError> {
+        let mut frames = vec![
+            RespFrame::BulkString(Bytes::from_static(b"XAUTOCLAIM")),
+            RespFrame::BulkString(Bytes::from(key.to_string())),
+            RespFrame::BulkString(Bytes::from(group.to_string())),
+            RespFrame::BulkString(Bytes::from(consumer.to_string())),
+            RespFrame::BulkString(Bytes::from(min_idle_time.to_string())),
+            RespFrame::BulkString(Bytes::from(start.to_string())),
+        ];
+        if let Some(c) = count {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"COUNT")));
+            frames.push(RespFrame::BulkString(Bytes::from(c.to_string())));
+        }
+        if justid {
+            frames.push(RespFrame::BulkString(Bytes::from_static(b"JUSTID")));
+        }
+        let command = Command::try_from(RespFrame::Array(frames))?;
+        self.execute(command).await
+    }
 }
 
 // ===== Test Assertion Helpers =====
