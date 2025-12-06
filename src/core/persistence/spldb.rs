@@ -103,7 +103,7 @@ impl SpldbLoader {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let backup_path = format!("{}.corrupted.{}", path, timestamp);
+                let backup_path = format!("{path}.corrupted.{timestamp}");
                 if let Err(rename_err) = fs::rename(path, &backup_path).await {
                     warn!(
                         "Failed to rename corrupted SPLDB file to {}: {}. Attempting to remove it.",
