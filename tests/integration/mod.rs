@@ -19,3 +19,4 @@ pub mod persistence_test;
 pub mod replication_test;
 pub mod cache_test;
 pub mod acl_test;
+pub mod cluster_test;

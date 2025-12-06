@@ -8,6 +8,7 @@
 mod integration {
     pub mod acl_test;
     pub mod cache_test;
+    pub mod cluster_test;
     pub mod fixtures;
     pub mod geospatial_test;
     pub mod hash_commands_test;
