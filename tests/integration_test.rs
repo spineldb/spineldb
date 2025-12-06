@@ -7,6 +7,7 @@
 
 mod integration {
     pub mod acl_test;
+    pub mod blocking_test;
     pub mod cache_test;
     pub mod cluster_test;
     pub mod fixtures;
