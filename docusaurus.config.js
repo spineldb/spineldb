@@ -17,7 +17,7 @@ const config = {
   // For GitHub pages deployments:
   // - If repo is 'spineldb/spineldb.github.io', use baseUrl: '/'
   // - If repo is 'spineldb/spineldb', use baseUrl: '/spineldb/'
-  baseUrl: '/',
+  baseUrl: '/spineldb/',
 
   // GitHub pages deployment config.
   organizationName: 'spineldb',

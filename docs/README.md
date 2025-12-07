@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="/img/spineldb-logo.png" alt="SpinelDB Logo" width="200"/>
+  <img src="/spineldb/img/spineldb-logo.png" alt="SpinelDB Logo" width="200"/>
   <h1>SpinelDB: Tutorials & Guides</h1>
 </p>
 
