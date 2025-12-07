@@ -139,7 +139,7 @@ The `GEORADIUS` command works identically, but you provide longitude and latitud
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./03-native-json.md">3. Working with JSON Documents</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./05-caching.md">5. Intelligent Caching</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./native-json">3. Working with JSON Documents</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./caching">5. Intelligent Caching</a></strong></span>
 </div>

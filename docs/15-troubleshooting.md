@@ -61,7 +61,7 @@ By following these steps, you can safely recover from this critical state and en
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./14-persistence-and-backup.md">14. Persistence and Backup</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./16-bloom-filter.md">16. Bloom Filter Commands</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./persistence-and-backup">14. Persistence and Backup</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./bloom-filter">16. Bloom Filter Commands</a></strong></span>
 </div>

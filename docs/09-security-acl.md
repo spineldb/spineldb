@@ -162,7 +162,7 @@ OK
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./08-warden-failover.md">8. Automatic Failover with Warden</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./10-lua-scripting.md">10. Server-Side Scripting with Lua</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./warden-failover">8. Automatic Failover with Warden</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./lua-scripting">10. Server-Side Scripting with Lua</a></strong></span>
 </div>

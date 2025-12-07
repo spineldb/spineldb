@@ -144,7 +144,7 @@ This concludes our deep dive into the Intelligent Caching Engine. You now have t
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./04-on-disk-caching.md">4d. On-Disk Caching</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="../06-replication.md">5. Primary-Replica Replication</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./04-on-disk-caching">4d. On-Disk Caching</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="../replication">5. Primary-Replica Replication</a></strong></span>
 </div>

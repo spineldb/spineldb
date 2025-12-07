@@ -116,7 +116,7 @@ A **hash tag** is a substring within a key that is enclosed in `{...}`. When a k
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./06-replication.md">6. Primary-Replica Replication</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./08-warden-failover.md">8. Automatic Failover with Warden</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./replication">6. Primary-Replica Replication</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./warden-failover">8. Automatic Failover with Warden</a></strong></span>
 </div>

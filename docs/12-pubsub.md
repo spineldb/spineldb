@@ -147,7 +147,7 @@ Once a client is no longer subscribed to any channels or patterns, its connectio
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./11-transactions.md">11. Atomic Operations with Transactions</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./13-introspection-and-monitoring.md">13. Introspection and Monitoring</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./transactions">11. Atomic Operations with Transactions</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./introspection-and-monitoring">13. Introspection and Monitoring</a></strong></span>
 </div>

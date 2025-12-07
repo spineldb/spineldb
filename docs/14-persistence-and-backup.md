@@ -1,6 +1,10 @@
+# Chapter 14: Persistence and Backup
+
+This chapter covers persistence and backup strategies for SpinelDB.
+
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./13-introspection-and-monitoring.md">13. Introspection and Monitoring</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./15-troubleshooting.md">15. Operations & Troubleshooting</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./introspection-and-monitoring">13. Introspection and Monitoring</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./troubleshooting">15. Operations & Troubleshooting</a></strong></span>
 </div>
