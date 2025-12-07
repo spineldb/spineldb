@@ -14,7 +14,7 @@ This section is a deep dive into the caching capabilities of SpinelDB.
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./04-geospatial.md">4. Geospatial Indexing</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./06-replication.md">6. Primary-Replica Replication</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./geospatial">4. Geospatial Indexing</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./replication">6. Primary-Replica Replication</a></strong></span>
 </div>

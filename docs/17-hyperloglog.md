@@ -82,7 +82,7 @@ OK
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./16-bloom-filter.md">16. Bloom Filter Commands</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./bloom-filter">16. Bloom Filter Commands</a></strong></span>
   <span></span>
 </div>

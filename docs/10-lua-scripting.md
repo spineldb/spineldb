@@ -127,7 +127,7 @@ When you use `SCRIPT LOAD` or `EVALSHA`, SpinelDB ensures that these scripts are
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./09-security-acl.md">9. Security with Access Control Lists (ACL)</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./11-transactions.md">11. Atomic Operations with Transactions</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./security-acl">9. Security with Access Control Lists (ACL)</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./transactions">11. Atomic Operations with Transactions</a></strong></span>
 </div>

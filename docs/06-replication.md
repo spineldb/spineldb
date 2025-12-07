@@ -129,7 +129,7 @@ This confirms that the node is a replica and shows its connection status to the 
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./05-caching.md">5. Intelligent Caching</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./07-clustering.md">7. Cluster Mode</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./caching">5. Intelligent Caching</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./clustering">7. Cluster Mode</a></strong></span>
 </div>

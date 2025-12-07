@@ -233,7 +233,7 @@ Let's model a simple sensor data stream.
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./01-installation-and-setup.md">1. Installation & Setup</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./03-native-json.md">3. Working with JSON Documents</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./installation-and-setup">1. Installation & Setup</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./native-json">3. Working with JSON Documents</a></strong></span>
 </div>

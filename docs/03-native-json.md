@@ -333,7 +333,7 @@ Let's toggle the `active` field in our user object.
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./02-core-data-types.md">2. Core Data Types & Commands</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./04-geospatial.md">4. Geospatial Indexing</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./core-data-types">2. Core Data Types & Commands</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./geospatial">4. Geospatial Indexing</a></strong></span>
 </div>
