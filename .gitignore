@@ -34,3 +34,20 @@ log.sh
 push.sh
 config.toml
 warden.toml
+
+
+# docusaurus
+node_modules
+dist
+build
+out
+.next
+.nuxt
+.svelte-kit
+.vitepress
+.docusaurus
+.serverless
+.fusebox
+.dynamodb
+.firebase
+.tern-port

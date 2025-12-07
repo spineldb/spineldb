@@ -96,7 +96,7 @@ The entire process is automated and typically completes within seconds.
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./07-clustering.md">7. Cluster Mode</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./09-security-acl.md">9. Security with Access Control Lists (ACL)</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./clustering">7. Cluster Mode</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./security-acl">9. Security with Access Control Lists (ACL)</a></strong></span>
 </div>

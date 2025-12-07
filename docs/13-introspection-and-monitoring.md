@@ -138,7 +138,7 @@ Integrating SpinelDB with Prometheus and Grafana provides a powerful, industry-s
 
 ---
 
-<div style="display: flex; justify-content: space-between;">
-  <span>⬅️ <strong>Previous Chapter: <a href="./12-pubsub.md">12. Publish/Subscribe Messaging</a></strong></span>
-  <span>➡️ <strong>Next Chapter: <a href="./14-persistence-and-backup.md">14. Persistence and Backup</a></strong></span>
+<div className="doc-nav-links">
+  <span>⬅️ <strong>Previous Chapter: <a href="./pubsub">12. Publish/Subscribe Messaging</a></strong></span>
+  <span>➡️ <strong>Next Chapter: <a href="./persistence-and-backup">14. Persistence and Backup</a></strong></span>
 </div>
