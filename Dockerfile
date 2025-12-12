@@ -8,7 +8,7 @@ COPY build.rs ./
 
 # Create a dummy project to cache dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release
+RUN cargo build --release --bin spineldb
 
 # Remove dummy source and copy the actual project source
 RUN rm -f src/main.rs
