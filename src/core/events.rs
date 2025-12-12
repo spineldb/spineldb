@@ -4,6 +4,7 @@
 //! and replication subsystems.
 
 use crate::core::Command;
+use crate::core::protocol::RespFrame;
 use crate::core::state::ServerState;
 use std::sync::Arc;
 use tokio::sync::{
@@ -27,6 +28,13 @@ pub struct PropagatedWork {
     pub uow: UnitOfWork,
 }
 
+impl PropagatedWork {
+    /// Estimates the size of the work unit as it would be written to the AOF.
+    pub fn estimated_size(&self) -> usize {
+        self.uow.estimated_size()
+    }
+}
+
 /// A struct to hold the data for a transaction.
 /// This is boxed within `UnitOfWork` to keep the enum's size small.
 #[derive(Debug, Clone)]
@@ -48,6 +56,33 @@ pub enum UnitOfWork {
     Command(Box<Command>),
     /// An entire transaction. Boxed for the same reason.
     Transaction(Box<TransactionData>),
+}
+
+impl UnitOfWork {
+    /// Estimates the size of the unit of work by encoding it to its RESP representation.
+    pub fn estimated_size(&self) -> usize {
+        let frames: Vec<RespFrame> = match self {
+            UnitOfWork::Transaction(tx_data) => {
+                if tx_data.all_commands.is_empty() {
+                    return 0;
+                }
+                let mut frames: Vec<RespFrame> = Vec::with_capacity(tx_data.all_commands.len() + 2);
+                frames.push(Command::Multi.into());
+                frames.extend(tx_data.all_commands.iter().cloned().map(Into::into));
+                frames.push(Command::Exec.into());
+                frames
+            }
+            UnitOfWork::Command(cmd) => vec![(**cmd).clone().into()],
+        };
+
+        let mut encoded_size = 0;
+        for frame in &frames {
+            if let Ok(encoded) = frame.encode_to_vec() {
+                encoded_size += encoded.len();
+            }
+        }
+        encoded_size
+    }
 }
 
 /// The `EventBus` is the central distribution hub for all write operations.

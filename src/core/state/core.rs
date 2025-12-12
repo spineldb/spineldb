@@ -210,6 +210,8 @@ impl ServerState {
             }
         }
 
+        let on_disk_max_open_files = config.cache.on_disk_max_open_files;
+
         // Assemble the final ServerState struct.
         let state = Arc::new(Self {
             dbs,
@@ -238,7 +240,7 @@ impl ServerState {
             critical_tasks: Arc::new(Mutex::new(JoinSet::new())),
             persistence: PersistenceState::new(fsync_tx, rewrite_complete_tx, lazy_free_tx),
             replication: ReplicationState::new(master_replid),
-            cache: CacheState::new(reval_tx),
+            cache: CacheState::new(reval_tx, on_disk_max_open_files),
             stats: StatsState::new(),
         });
 

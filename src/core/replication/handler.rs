@@ -2,28 +2,23 @@
 
 //! Handles an incoming connection from a replica that has sent a `PSYNC` command.
 //!
-//! This handler is spawned by the `ConnectionHandler` when it detects a `PSYNC` command,
-//! effectively "handing off" the TCP stream. Its sole responsibility is to manage the
-//! synchronization process for that single replica. It decides whether to perform a
-//! full resynchronization (sending the entire dataset via an SPLDB snapshot) or a
-//! partial resynchronization (sending only the missed commands from the replication backlog).
-//! After synchronization, it streams live command updates.
+//! This handler manages the synchronization process for a single replica, deciding
+//! between full or partial resynchronization and streaming live command updates.
 
 use crate::core::Command;
 use crate::core::commands::generic::script::ScriptSubcommand;
 use crate::core::protocol::RespFrame;
-use crate::core::replication::sync::InitialSyncer;
 use crate::core::state::{ReplicaStateInfo, ReplicaSyncState, ServerState};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::fs::File as TokioFile;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{info, warn};
 
 /// `ReplicaHandler` manages the synchronization and command streaming process
-/// for a single connected replica. It is generic over the stream type `S` to
-/// support both plain TCP and TLS connections.
+/// for a single connected replica. It is generic over the stream type `S`.
 pub struct ReplicaHandler<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     state: Arc<ServerState>,
     addr: SocketAddr,
@@ -41,17 +36,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
     }
 
     /// The main entry point for the replica handler task.
-    /// This function handles the entire lifecycle of the replica's session,
-    /// including graceful shutdown and resource cleanup.
+    /// Handles the entire lifecycle of the replica's session.
     pub async fn run(
         mut self,
         repl_id: String,
         offset_str: String,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) {
-        // Use tokio::select! to race the sync process against a shutdown signal.
+        // Race the sync process against a shutdown signal.
         let sync_result = tokio::select! {
-            biased; // Prioritize the shutdown signal.
+            biased;
             _ = shutdown_rx.recv() => {
                 info!("Replica handler for {} received kill signal. Aborting.", self.addr);
                 Err(anyhow::anyhow!("Killed by CLIENT KILL command"))
@@ -65,10 +59,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
             warn!("Replication sync cycle for {} ended: {}", self.addr, e);
         }
 
-        // Cleanup: Ensure the replica's state is removed from the primary's global maps
-        // when the connection is terminated for any reason.
         info!(
-            "Replica handler for {} is terminating. Cleaning up its state.",
+            "Replica handler for {} is terminating. Cleaning up state.",
             self.addr
         );
         self.state.replica_states.remove(&self.addr);
@@ -81,7 +73,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         repl_id: String,
         offset_str: String,
     ) -> Result<(), anyhow::Error> {
-        // Use a lock to prevent multiple concurrent `PSYNC` attempts from the same replica IP:port.
+        // Prevent concurrent sync attempts from the same replica address.
         let sync_lock = self
             .state
             .replica_sync_locks
@@ -91,7 +83,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
 
         let Ok(_guard) = sync_lock.try_lock() else {
             warn!(
-                "Another sync process is already running for replica {}. Aborting this one.",
+                "Another sync process is running for replica {}. Aborting.",
                 self.addr
             );
             let _ = self.stream.write_all(b"-ERR Sync in progress\r\n").await;
@@ -111,10 +103,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
             .map(|r| r.value().sync_state);
 
         // --- Decision: Partial vs. Full Resync ---
-        // A partial resync is possible if:
-        // 1. The replica's run ID matches the primary's current run ID.
-        // 2. The replica was previously online (not in the middle of a full sync).
-        // 3. The requested offset is still present in the replication backlog.
         if repl_id.eq_ignore_ascii_case(master_replid)
             && replica_state == Some(ReplicaSyncState::Online)
             && let Ok(offset) = offset_str.parse::<u64>()
@@ -125,14 +113,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
 
             let current_offset = self.state.replication.get_replication_offset();
             if self.do_partial_resync(&frames_only).await.is_ok() {
-                // After sending the backlog, transition to streaming live updates.
                 self.stream_live_updates(current_offset).await;
             }
             return Ok(());
         }
 
         // --- Full Resync Path ---
-        // If any of the partial resync conditions fail, we must perform a full resync.
         self.state.replica_states.insert(
             self.addr,
             ReplicaStateInfo {
@@ -145,7 +131,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         info!("Performing full resync for replica {}", self.addr);
         let sync_start_offset = self.do_full_resync().await?;
 
-        // Update the replica's state to Online *after* the full sync is complete.
+        // Update replica state to Online.
         let should_stream = {
             if let Some(mut entry) = self.state.replica_states.get_mut(&self.addr) {
                 entry.value_mut().sync_state = ReplicaSyncState::Online;
@@ -161,7 +147,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         };
 
         if should_stream {
-            // Transition to streaming live updates.
             self.stream_live_updates(sync_start_offset).await;
         }
 
@@ -180,12 +165,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         Ok(())
     }
 
-    /// Sends a `+FULLRESYNC` response, the SPLDB snapshot file, and any cached scripts.
+    /// Sends a `+FULLRESYNC` response, streams the SPLDB snapshot, and sends cached scripts.
     async fn do_full_resync(&mut self) -> Result<u64, anyhow::Error> {
         let master_replid = &self.state.replication.replication_info.master_replid;
         let master_repl_offset = self.state.replication.get_replication_offset();
 
-        // 1. Send the FULLRESYNC header.
+        // 1. Send FULLRESYNC header.
         let full_resync_response = format!("+FULLRESYNC {master_replid} {master_repl_offset}\r\n");
         self.stream
             .write_all(full_resync_response.as_bytes())
@@ -195,18 +180,35 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
             self.addr, master_repl_offset
         );
 
-        // 2. Generate and send the SPLDB snapshot.
-        let spldb_bytes = crate::core::persistence::spldb::save_to_bytes(&self.state.dbs).await?;
+        // 2. Generate and stream the SPLDB snapshot.
+        // We write to a temporary file first to avoid buffering the entire DB in memory,
+        // then stream that file to the replica.
+        let temp_path = format!("temp-repl-{}.spldb", self.addr.port());
+        let temp_file = TokioFile::create(&temp_path).await?;
+        let mut buf_writer = BufWriter::new(temp_file);
+
         info!(
-            "Generated SPLDB snapshot ({} bytes) for replica {}.",
-            spldb_bytes.len(),
+            "Generating SPLDB snapshot to temp file for replica {}...",
             self.addr
         );
-        let mut syncer = InitialSyncer::new(&mut self.stream);
-        syncer.send_snapshot_file(&spldb_bytes).await?;
-        info!("Finished sending SPLDB file to replica {}.", self.addr);
+        crate::core::persistence::spldb::write_database(&mut buf_writer, &self.state.dbs).await?;
+        buf_writer.flush().await?;
 
-        // 3. Send all cached Lua scripts to make the replica's state consistent.
+        // Get file size for the bulk string header.
+        let file_len = tokio::fs::metadata(&temp_path).await?.len();
+        let bulk_header = format!("${}\r\n", file_len);
+        self.stream.write_all(bulk_header.as_bytes()).await?;
+
+        // Open the file again for reading and stream it to the socket.
+        let mut file_reader = TokioFile::open(&temp_path).await?;
+        tokio::io::copy(&mut file_reader, &mut self.stream).await?;
+
+        // Clean up temp file.
+        tokio::fs::remove_file(&temp_path).await.ok();
+
+        info!("Finished streaming SPLDB file to replica {}.", self.addr);
+
+        // 3. Send cached Lua scripts.
         let all_scripts = self.state.scripting.get_all_scripts();
         if !all_scripts.is_empty() {
             info!(
@@ -228,21 +230,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         Ok(master_repl_offset)
     }
 
-    /// Enters a loop to stream live commands to a now-synchronized replica.
+    /// Enters a loop to stream live commands to a synchronized replica.
     async fn stream_live_updates(&mut self, mut last_known_offset: u64) {
         info!(
-            "Replica {} is now in sync and receiving live updates from offset {}.",
+            "Replica {} is in sync. Streaming live updates from offset {}.",
             self.addr, last_known_offset
         );
 
-        // Subscribe to the primary's offset notifier.
         let mut offset_receiver = self.state.replication_offset_receiver.clone();
 
         loop {
-            // Wait for the primary to signal that new commands have been processed.
             if offset_receiver.changed().await.is_err() {
                 warn!(
-                    "Replication offset channel closed. Shutting down replica handler for {}.",
+                    "Replication offset channel closed. Shutting down handler for {}.",
                     self.addr
                 );
                 return;
@@ -250,10 +250,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
 
             let current_global_offset = *offset_receiver.borrow();
             if last_known_offset >= current_global_offset {
-                continue; // Spurious wakeup, no new data.
+                continue;
             }
 
-            // Fetch the commands from the backlog since our last known offset.
             if let Some(frames_with_offsets) = self
                 .state
                 .replication_backlog
@@ -265,33 +264,28 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
                     continue;
                 }
 
-                // Send each frame and update our local offset tracker.
                 for (frame_offset, frame) in frames_with_offsets {
                     match frame.encode_to_vec() {
                         Ok(encoded) => {
                             let frame_len = encoded.len() as u64;
                             if self.stream.write_all(&encoded).await.is_err() {
                                 warn!(
-                                    "Failed to send update to replica {}. Connection lost. Last successful offset: {}",
-                                    self.addr, last_known_offset
+                                    "Failed to send update to replica {}. Connection lost.",
+                                    self.addr
                                 );
                                 return;
                             }
                             last_known_offset = frame_offset + frame_len;
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to encode frame for replication: {e}. Closing connection with replica {}",
-                                self.addr
-                            );
+                            warn!("Failed to encode frame: {e}. Closing connection.");
                             return;
                         }
                     }
                 }
             } else {
-                // If get_since returns None, we've fallen too far behind the backlog.
                 warn!(
-                    "Lost position in backlog for replica {}. Closing connection to force full resync.",
+                    "Lost position in backlog for replica {}. Forcing full resync.",
                     self.addr
                 );
                 return;

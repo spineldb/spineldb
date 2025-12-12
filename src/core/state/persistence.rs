@@ -17,6 +17,8 @@ pub struct AofRewriteState {
     pub is_in_progress: bool,
     /// Buffers write commands that arrive while the rewrite is in progress.
     pub buffer: Vec<PropagatedWork>,
+    /// The estimated total size of the buffered commands in bytes.
+    pub buffer_size: usize,
 }
 
 /// Holds all state and channels related to persistence.

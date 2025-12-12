@@ -305,6 +305,9 @@ pub struct CacheConfig {
     /// The TTL in seconds for caching origin failures (negative caching). `0` disables it.
     #[serde(default = "default_negative_cache_ttl")]
     pub negative_cache_ttl_seconds: u64,
+    /// The maximum number of concurrent file reads from the on-disk cache.
+    #[serde(default = "default_on_disk_max_open_files")]
+    pub on_disk_max_open_files: usize,
 }
 
 fn default_streaming_threshold() -> usize {
@@ -322,6 +325,9 @@ fn default_max_variants_per_key() -> usize {
 fn default_negative_cache_ttl() -> u64 {
     10 // 10 seconds
 }
+fn default_on_disk_max_open_files() -> usize {
+    1024
+}
 
 impl Default for CacheConfig {
     fn default() -> Self {
@@ -331,6 +337,7 @@ impl Default for CacheConfig {
             max_disk_size: default_max_disk_size(),
             max_variants_per_key: default_max_variants_per_key(),
             negative_cache_ttl_seconds: default_negative_cache_ttl(),
+            on_disk_max_open_files: default_on_disk_max_open_files(),
         }
     }
 }
@@ -403,6 +410,8 @@ pub struct PersistenceConfig {
     pub auto_aof_rewrite_percentage: u64,
     #[serde(default = "default_auto_aof_rewrite_min_size")]
     pub auto_aof_rewrite_min_size: u64,
+    #[serde(default = "default_aof_rewrite_buffer_limit")]
+    pub aof_rewrite_buffer_limit: usize,
     pub spldb_enabled: bool,
     pub spldb_path: String,
     pub save_rules: Vec<SaveRule>,
@@ -413,6 +422,9 @@ fn default_auto_aof_rewrite_percentage() -> u64 {
 }
 fn default_auto_aof_rewrite_min_size() -> u64 {
     64 * 1024 * 1024 // 64MB
+}
+fn default_aof_rewrite_buffer_limit() -> usize {
+    256 * 1024 * 1024 // 256MB
 }
 
 /// A rule defining when to automatically save the SPLDB file.
@@ -484,6 +496,7 @@ impl Default for PersistenceConfig {
             appendfsync: default_appendfsync(),
             auto_aof_rewrite_percentage: default_auto_aof_rewrite_percentage(),
             auto_aof_rewrite_min_size: default_auto_aof_rewrite_min_size(),
+            aof_rewrite_buffer_limit: default_aof_rewrite_buffer_limit(),
             spldb_enabled: true,
             spldb_path: default_spldb_path(),
             save_rules: default_save_rules(),

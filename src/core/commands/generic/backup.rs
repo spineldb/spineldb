@@ -33,31 +33,17 @@ impl ExecutableCommand for Backup {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        let state_clone = ctx.state.clone();
-        let path_clone = self.path.clone();
-
-        // Spawn in a blocking task to avoid blocking the main runtime.
-        let save_result = tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async { spldb::save(&state_clone.dbs, &path_clone).await })
-        })
-        .await;
-
-        match save_result {
-            Ok(Ok(_)) => {
+        match spldb::save(&ctx.state.dbs, &self.path).await {
+            Ok(_) => {
                 info!("Manual backup to '{}' completed successfully.", self.path);
                 Ok((
                     RespValue::SimpleString("OK".into()),
                     WriteOutcome::DidNotWrite,
                 ))
             }
-            Ok(Err(e)) => Err(SpinelDBError::Internal(format!(
+            Err(e) => Err(SpinelDBError::Internal(format!(
                 "Failed to save backup to '{}': {}",
                 self.path, e
-            ))),
-
-            Err(join_err) => Err(SpinelDBError::Internal(format!(
-                "Backup task panicked: {join_err}"
             ))),
         }
     }

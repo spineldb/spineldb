@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::fs::File as TokioFile;
+use tokio::sync::OwnedSemaphorePermit;
 use tracing::error;
 use tracing::{Instrument, info_span};
 
@@ -41,6 +42,7 @@ pub enum RouteResponse {
     StreamBody {
         resp_header: Vec<u8>,
         file: TokioFile,
+        _permit: OwnedSemaphorePermit,
     },
     /// No operation; no response should be sent to the client.
     NoOp,

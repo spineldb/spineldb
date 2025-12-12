@@ -19,6 +19,7 @@ use bytes::Bytes;
 use regex::Regex;
 use tokio::io::AsyncReadExt;
 use tracing::debug;
+use url::Url;
 use urlencoding::encode;
 use wildmatch::WildMatch;
 
@@ -301,6 +302,27 @@ impl CacheProxy {
             SpinelDBError::InvalidState("No matching cache policy found and no URL provided".into())
         })?;
 
+        // DNS Rebinding Fix: Pre-resolve URL and pass IP to fetcher
+        let (allowed_domains, allow_private) = {
+            let config = ctx.state.config.lock().await;
+            (
+                config.security.allowed_fetch_domains.clone(),
+                config.security.allow_private_fetch_ips,
+            )
+        };
+        let resolved_ips = crate::core::commands::helpers::validate_fetch_url(
+            &final_url,
+            &allowed_domains,
+            allow_private,
+        )
+        .await?;
+        let target_ip = resolved_ips.first().cloned().ok_or_else(|| {
+            SpinelDBError::Internal("Validated URL did not return any IP addresses".to_string())
+        })?;
+        let url_parsed = Url::parse(&final_url)
+            .map_err(|e| SpinelDBError::InvalidRequest(format!("Invalid URL: {e}")))?;
+        let domain = url_parsed.host_str().unwrap_or("").to_string();
+
         // Step 3: Delegate the fetch-and-set logic to CACHE.FETCH.
         let fetch_cmd = CacheFetch {
             key: self.key.clone(),
@@ -318,7 +340,9 @@ impl CacheProxy {
             .with_label_values(&[policy_name])
             .inc();
 
-        let (outcome, _write_outcome) = fetch_cmd.fetch_from_origin(&ctx.state, false).await?;
+        let (outcome, _write_outcome) = fetch_cmd
+            .fetch_from_origin(&ctx.state, false, target_ip, domain)
+            .await?;
 
         match outcome {
             FetchOutcome::InMemory(bytes) => Ok(RouteResponse::Single(RespValue::Array(vec![

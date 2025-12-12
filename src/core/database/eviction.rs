@@ -42,7 +42,6 @@ impl Db {
         };
 
         // If the primary policy failed to find a key, fallback to allkeys-random.
-        // This prevents getting stuck if, for example, `volatile-lru` is set but no keys have TTLs.
         if evicted_key.is_none() {
             warn!(
                 "Could not find a key to evict with policy '{:?}'. Falling back to allkeys-random.",
@@ -62,6 +61,22 @@ impl Db {
         }
     }
 
+    /// Notifies any waiting clients that a key has been removed.
+    /// This prevents clients blocked on `BLPOP`, `XREAD BLOCK`, etc., from hanging indefinitely.
+    fn notify_waiters_on_eviction(state: &Arc<ServerState>, key: &Bytes, value: &StoredValue) {
+        match &value.data {
+            DataValue::List(_) | DataValue::SortedSet(_) => {
+                // Wake up list/zset blockers. They will check the key, find it missing, and return null/timeout.
+                state.blocker_manager.wake_waiters_for_modification(key);
+            }
+            DataValue::Stream(_) => {
+                // Notify stream blockers.
+                state.stream_blocker_manager.notify_and_remove_all(key);
+            }
+            _ => {}
+        }
+    }
+
     /// Evicts the least recently used key from a random shard. Returns the key if successful.
     async fn evict_lru(&self, state: &Arc<ServerState>) -> Option<Bytes> {
         let mut rng = rand::rngs::SmallRng::from_entropy();
@@ -70,6 +85,7 @@ impl Db {
 
         if let Some((key, value)) = guard.pop_lru() {
             Self::handle_cache_eviction_stat(state, &value);
+            Self::notify_waiters_on_eviction(state, &key, &value);
             debug!(
                 "Evicted LRU key '{}' from shard {}",
                 String::from_utf8_lossy(&key),
@@ -101,6 +117,7 @@ impl Db {
             && let Some(value) = guard.pop(&key)
         {
             Self::handle_cache_eviction_stat(state, &value);
+            Self::notify_waiters_on_eviction(state, &key, &value);
             debug!(
                 "Evicted RANDOM key '{}' (volatile_only: {}) from shard {}.",
                 String::from_utf8_lossy(&key),
@@ -118,6 +135,7 @@ impl Db {
             let mut guard = self.get_shard(shard_index).entries.lock().await;
             if let Some(value) = guard.pop(&key) {
                 Self::handle_cache_eviction_stat(state, &value);
+                Self::notify_waiters_on_eviction(state, &key, &value);
                 debug!(
                     "Evicted VOLATILE-LRU key '{}' from shard {}.",
                     String::from_utf8_lossy(&key),
@@ -169,6 +187,7 @@ impl Db {
             let mut guard = self.get_shard(shard_index).entries.lock().await;
             if let Some(value) = guard.pop(&key_to_evict) {
                 Self::handle_cache_eviction_stat(state, &value);
+                Self::notify_waiters_on_eviction(state, &key_to_evict, &value);
                 debug!(
                     "Evicted VOLATILE-TTL key '{}' from shard {}.",
                     String::from_utf8_lossy(&key_to_evict),
@@ -206,6 +225,7 @@ impl Db {
             let mut guard = self.get_shard(shard_index).entries.lock().await;
             if let Some(value) = guard.pop(&key_to_evict) {
                 Self::handle_cache_eviction_stat(state, &value);
+                Self::notify_waiters_on_eviction(state, &key_to_evict, &value);
                 debug!(
                     "Evicted LFU key '{}' (volatile_only: {}) from shard {}.",
                     String::from_utf8_lossy(&key_to_evict),

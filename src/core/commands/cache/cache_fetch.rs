@@ -19,11 +19,13 @@ use crate::core::{Command, RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{File as TokioFile, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, warn};
+use url::Url;
 use uuid::Uuid;
 use wildmatch::WildMatch;
 
@@ -188,7 +190,15 @@ impl CacheFetch {
                 config.security.allow_private_fetch_ips,
             )
         };
-        validate_fetch_url(&self.url, &allowed_domains, allow_private).await?;
+        let resolved_ips = validate_fetch_url(&self.url, &allowed_domains, allow_private).await?;
+        let target_ip = resolved_ips.first().cloned().ok_or_else(|| {
+            SpinelDBError::Internal("Validated URL did not return any IP addresses".to_string())
+        })?;
+
+        // Extract domain for Host header
+        let url_parsed = Url::parse(&self.url)
+            .map_err(|e| SpinelDBError::InvalidRequest(format!("Invalid URL: {e}")))?;
+        let domain = url_parsed.host_str().unwrap_or("").to_string();
 
         // Bypass cache store and shared future logic for authorized requests.
         if self
@@ -201,7 +211,9 @@ impl CacheFetch {
                 "Bypassing cache store for authorized request to '{}'",
                 self.url
             );
-            let (outcome, _) = self.fetch_from_origin(&ctx.state, true).await?;
+            let (outcome, _) = self
+                .fetch_from_origin(&ctx.state, true, target_ip, domain)
+                .await?;
             let body_bytes = match outcome {
                 FetchOutcome::InMemory(bytes) => bytes,
                 FetchOutcome::OnDisk { path, .. } => tokio::fs::read(&path).await?.into(),
@@ -249,10 +261,15 @@ impl CacheFetch {
 
                 let state_clone = state.clone();
                 let command_clone = self.clone();
+                let leader_ip = target_ip;
+                let leader_domain = domain;
 
                 let fetch_future: BoxFuture<'static, Result<FetchOutcome, Arc<SpinelDBError>>> =
                     async move {
-                        match command_clone.fetch_from_origin(&state_clone, false).await {
+                        match command_clone
+                            .fetch_from_origin(&state_clone, false, leader_ip, leader_domain)
+                            .await
+                        {
                             Ok((outcome, write_outcome)) => {
                                 // The leader is responsible for updating the dirty keys counter.
                                 if let WriteOutcome::Write { keys_modified } = write_outcome {
@@ -285,13 +302,30 @@ impl CacheFetch {
                         Ok(RouteResponse::Single(RespValue::BulkString(bytes)))
                     }
                     FetchOutcome::OnDisk { path, size } => {
+                        let permit = state
+                            .cache
+                            .on_disk_read_semaphore
+                            .clone()
+                            .acquire_owned()
+                            .await
+                            .map_err(|e| {
+                                SpinelDBError::Internal(format!(
+                                    "Failed to acquire semaphore permit: {}",
+                                    e
+                                ))
+                            })?;
+
                         let file = TokioFile::open(&path).await.map_err(|e| {
                             SpinelDBError::Internal(format!(
                                 "Failed to open cache file for streaming: {e}"
                             ))
                         })?;
                         let resp_header = format!("${size}\r\n").into_bytes();
-                        Ok(RouteResponse::StreamBody { resp_header, file })
+                        Ok(RouteResponse::StreamBody {
+                            resp_header,
+                            file,
+                            _permit: permit,
+                        })
                     }
                     FetchOutcome::Negative { status, body } => {
                         Err(SpinelDBError::InvalidState(format!(
@@ -310,6 +344,8 @@ impl CacheFetch {
         &self,
         server_state: &Arc<ServerState>,
         mut bypass_store: bool,
+        resolved_ip: IpAddr,
+        domain: String,
     ) -> Result<(FetchOutcome, WriteOutcome), SpinelDBError> {
         let (streaming_threshold, cache_path, global_negative_ttl) = {
             let config = server_state.config.lock().await;
@@ -330,7 +366,18 @@ impl CacheFetch {
         let policy_negative_ttl = matched_policy.and_then(|p| p.negative_ttl);
 
         server_state.cache.increment_misses();
-        let client = reqwest::Client::new();
+
+        let url_parsed = Url::parse(&self.url)
+            .map_err(|e| SpinelDBError::InvalidRequest(format!("Invalid URL: {e}")))?;
+        let port = url_parsed.port_or_known_default().unwrap_or(80);
+        let socket_addr = std::net::SocketAddr::new(resolved_ip, port);
+
+        let client = reqwest::Client::builder()
+            .resolve(&domain, socket_addr)
+            .redirect(reqwest::redirect::Policy::none()) // Prevent redirects
+            .build()
+            .map_err(|e| SpinelDBError::HttpClientError(e.to_string()))?;
+
         let mut res = client
             .get(&self.url)
             .send()
@@ -522,7 +569,6 @@ impl CacheFetch {
         Ok((final_outcome_for_client, write_outcome))
     }
 }
-
 impl CommandSpec for CacheFetch {
     fn name(&self) -> &'static str {
         "cache.fetch"

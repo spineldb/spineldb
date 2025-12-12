@@ -233,7 +233,7 @@ impl CacheGet {
             .with_label_values(&["none"])
             .inc();
 
-        let body_response = Self::create_body_response(&variant.body).await?;
+        let body_response = Self::create_body_response(&state, &variant.body).await?;
         let final_body = match body_response {
             RouteResponse::Single(RespValue::BulkString(bytes)) => bytes,
             RouteResponse::StreamBody { mut file, .. } => {
@@ -329,7 +329,7 @@ impl CacheGet {
                 });
             }
         }
-        Self::create_body_response(&variant.body).await
+        Self::create_body_response(&state, &variant.body).await
     }
 
     /// Serves content from its grace period after a failed revalidation attempt.
@@ -382,13 +382,13 @@ impl CacheGet {
             .ok_or_else(|| SpinelDBError::Internal("Variant vanished after revalidation".into()))?;
 
         match reval_result {
-            Ok(Some(new_body)) => return Self::create_body_response(&new_body).await,
-            Ok(None) => return Self::create_body_response(&variant.body).await,
+            Ok(Some(new_body)) => return Self::create_body_response(&state, &new_body).await,
+            Ok(None) => return Self::create_body_response(&state, &variant.body).await,
             Err(_) => {
                 let now = Instant::now();
                 if entry.grace_expiry.is_some_and(|exp| exp > now) {
                     state.cache.increment_stale_hits();
-                    return Self::create_body_response(&variant.body).await;
+                    return Self::create_body_response(&state, &variant.body).await;
                 }
             }
         };
@@ -450,8 +450,8 @@ impl CacheGet {
             .ok_or_else(|| SpinelDBError::Internal("Variant vanished after revalidation".into()))?;
 
         match reval_result {
-            Ok(Some(new_body)) => Self::create_body_response(&new_body).await,
-            Ok(None) => Self::create_body_response(&variant.body).await, // 304 Not Modified
+            Ok(Some(new_body)) => Self::create_body_response(&state, &new_body).await,
+            Ok(None) => Self::create_body_response(&state, &variant.body).await, // 304 Not Modified
             Err(e) => Err(e),
         }
     }
@@ -492,17 +492,37 @@ impl CacheGet {
     }
 
     /// Creates a `RouteResponse` from a `CacheBody`, handling decompression if necessary.
-    async fn create_body_response(body: &CacheBody) -> Result<RouteResponse, SpinelDBError> {
+    async fn create_body_response(
+        state: &Arc<ServerState>,
+        body: &CacheBody,
+    ) -> Result<RouteResponse, SpinelDBError> {
         match body {
             CacheBody::InMemory(bytes) => {
                 Ok(RouteResponse::Single(RespValue::BulkString(bytes.clone())))
             }
             CacheBody::OnDisk { path, size } => {
+                let permit = state
+                    .cache
+                    .on_disk_read_semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| {
+                        SpinelDBError::Internal(format!(
+                            "Failed to acquire semaphore permit: {}",
+                            e
+                        ))
+                    })?;
+
                 let file = TokioFile::open(path).await.map_err(|e| {
                     SpinelDBError::Internal(format!("Failed to open cache file: {e}"))
                 })?;
                 let resp_header = format!("${size}\r\n").into_bytes();
-                Ok(RouteResponse::StreamBody { resp_header, file })
+                Ok(RouteResponse::StreamBody {
+                    resp_header,
+                    file,
+                    _permit: permit,
+                })
             }
             CacheBody::CompressedInMemory { data, .. } => {
                 let decompressed = zstd::decode_all(data.as_ref()).map_err(|e| {

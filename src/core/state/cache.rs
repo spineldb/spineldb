@@ -22,7 +22,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{Mutex, RwLock, Semaphore, mpsc};
 use tracing::{debug, warn};
 
 /// The time window within which a cache variant is considered "hot" or popular,
@@ -77,11 +77,22 @@ pub struct CacheState {
     pub manual_locks: Arc<DashMap<Bytes, Instant>>,
     /// A synchronized writer for the on-disk cache manifest file.
     pub manifest_writer: Arc<Mutex<Option<BufWriter<TokioFile>>>>,
+    /// A semaphore to limit concurrent file reads from the on-disk cache.
+    pub on_disk_read_semaphore: Arc<Semaphore>,
 }
 
 impl CacheState {
     /// Creates a new `CacheState` with initialized counters and maps.
-    pub fn new(revalidation_tx: mpsc::Sender<RevalidationJob>) -> Self {
+    pub fn new(
+        revalidation_tx: mpsc::Sender<RevalidationJob>,
+        on_disk_max_open_files: usize,
+    ) -> Self {
+        let semaphore_permits = if on_disk_max_open_files == 0 {
+            1024 // A reasonable default if set to 0, to prevent locking the system.
+        } else {
+            on_disk_max_open_files
+        };
+
         Self {
             fetch_locks: Arc::new(DashMap::with_capacity(256)),
             swr_locks: Arc::new(DashMap::new()),
@@ -97,6 +108,7 @@ impl CacheState {
             purge_patterns: Arc::new(DashMap::new()),
             manual_locks: Arc::new(DashMap::new()),
             manifest_writer: Arc::new(Mutex::new(None)),
+            on_disk_read_semaphore: Arc::new(Semaphore::new(semaphore_permits)),
         }
     }
 
