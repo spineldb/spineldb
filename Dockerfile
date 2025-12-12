@@ -53,7 +53,7 @@ RUN apt-get update && \
 USER spineldb
 
 # Expose the default port used by SpinelDB (adjust if necessary)
-EXPOSE 7890
+EXPOSE 7878
 
 # Set the default command to run the server
 CMD ["/usr/local/bin/spineldb", "--config", "/etc/spineldb/config.toml"]
