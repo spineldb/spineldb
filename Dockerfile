@@ -40,6 +40,15 @@ RUN sed -i 's/host = "127.0.0.1"/host = "0.0.0.0"/' /etc/spineldb/config.toml
 # Modify the config.toml to set log_level to info
 RUN sed -i 's/log_level = "debug"/log_level = "info"/' /etc/spineldb/config.toml
 
+# Install spinel-cli
+# Temporarily install curl, run the install script, then remove curl to keep image size small
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/spineldb/spinel-cli/main/install.sh)" && \
+    apt-get remove --purge -y curl ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 # Set the user to run the application
 USER spineldb
 
