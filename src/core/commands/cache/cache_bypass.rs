@@ -14,6 +14,7 @@ use crate::core::protocol::RespFrame;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
+use url::Url;
 
 /// Represents the `CACHE.BYPASS` command.
 #[derive(Debug, Clone, Default)]
@@ -44,6 +45,27 @@ impl ExecutableCommand for CacheBypass {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
+        // DNS Rebinding Fix: Pre-resolve URL and pass IP to fetcher.
+        let (allowed_domains, allow_private) = {
+            let config = ctx.state.config.lock().await;
+            (
+                config.security.allowed_fetch_domains.clone(),
+                config.security.allow_private_fetch_ips,
+            )
+        };
+        let resolved_ips = crate::core::commands::helpers::validate_fetch_url(
+            &self.url,
+            &allowed_domains,
+            allow_private,
+        )
+        .await?;
+        let target_ip = resolved_ips.first().cloned().ok_or_else(|| {
+            SpinelDBError::Internal("Validated URL did not return any IP addresses".to_string())
+        })?;
+        let url_parsed = Url::parse(&self.url)
+            .map_err(|e| SpinelDBError::InvalidRequest(format!("Invalid URL: {e}")))?;
+        let domain = url_parsed.host_str().unwrap_or("").to_string();
+
         // Construct a `CacheFetch` command to delegate the origin fetch logic.
         let fetch_cmd = CacheFetch {
             key: self.key.clone(),
@@ -52,7 +74,9 @@ impl ExecutableCommand for CacheBypass {
         };
 
         // Call the fetch logic with the `bypass_store` flag set to true.
-        let (outcome, _) = fetch_cmd.fetch_from_origin(&ctx.state, true).await?;
+        let (outcome, _) = fetch_cmd
+            .fetch_from_origin(&ctx.state, true, target_ip, domain)
+            .await?;
 
         // Convert the fetch outcome into a single byte buffer for the client.
         let body_bytes = match outcome {

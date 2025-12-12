@@ -2,20 +2,39 @@
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use mlua::Lua;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Manages the storage and retrieval of Lua scripts for EVALSHA.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LuaManager {
     /// A thread-safe hash map to store scripts, keyed by their SHA1 hash.
     scripts: DashMap<String, Bytes>,
+    /// A persistent Lua VM instance used for script execution.
+    /// Wrapped in a Mutex because mlua::Lua is not Sync.
+    pub vm: Mutex<Lua>,
+}
+
+impl Default for LuaManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LuaManager {
-    /// Creates a new, empty Lua script manager.
+    /// Creates a new Lua script manager with a pre-initialized Lua VM.
     pub fn new() -> Self {
-        Default::default()
+        // This is marked as unsafe because it allows the loading of potentially dangerous
+        // libraries like 'debug'. In our controlled environment, we accept this risk
+        // to provide full-featured scripting capabilities.
+        let lua = Lua::new();
+
+        Self {
+            scripts: DashMap::new(),
+            vm: Mutex::new(lua),
+        }
     }
 
     /// Loads a script into the cache and returns its SHA1 hash.
@@ -51,8 +70,16 @@ impl LuaManager {
             .collect()
     }
 
-    /// Removes all scripts from the cache.
+    /// Removes all scripts from the cache and resets the Lua VM.
+    /// This is equivalent to the `SCRIPT FLUSH` command.
     pub fn flush(&self) {
         self.scripts.clear();
+
+        // Re-initialize the VM to clear any global state set by previous scripts.
+        if let Ok(mut vm_guard) = self.vm.lock() {
+            // This is marked as unsafe for the same reasons as in the `new` function.
+            let new_lua = Lua::new();
+            *vm_guard = new_lua;
+        }
     }
 }

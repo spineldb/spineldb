@@ -11,9 +11,10 @@ use tokio_util::codec::{Decoder, Encoder};
 const CRLF: &[u8] = b"\r\n";
 const CRLF_LEN: usize = 2;
 
-// Protocol-level limits to prevent denial-of-service attacks from malicious or malformed frames.
+// Protocol-level limits to prevent denial-of-service attacks.
 const MAX_FRAME_ELEMENTS: usize = 1_024 * 1_024; // Max elements in an array.
 const MAX_BULK_STRING_SIZE: usize = 512 * 1024 * 1024; // 512MB max bulk string size.
+const MAX_RECURSION_DEPTH: usize = 256; // Limit recursion to prevent stack overflow.
 
 /// An enum representing a single frame in the RESP protocol.
 /// This is the low-level representation of data exchanged between the client and server.
@@ -102,7 +103,7 @@ impl Decoder for RespFrameCodec {
         }
 
         let mut bytes = &src[..];
-        match self.decode_recursive(&mut bytes) {
+        match self.decode_recursive(&mut bytes, 0) {
             Ok(frame) => {
                 let len = src.len() - bytes.len();
                 src.advance(len);
@@ -119,7 +120,18 @@ impl Decoder for RespFrameCodec {
 impl RespFrameCodec {
     /// A recursive helper function to decode a `RespFrame`.
     /// The `bytes` parameter is a mutable slice that is advanced as it's parsed.
-    fn decode_recursive(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+    /// `depth` tracks recursion level to prevent stack overflow.
+    fn decode_recursive(
+        &self,
+        bytes: &mut &[u8],
+        depth: usize,
+    ) -> Result<RespFrame, SpinelDBError> {
+        if depth > MAX_RECURSION_DEPTH {
+            return Err(SpinelDBError::InvalidRequest(
+                "RESP recursion depth limit exceeded".to_string(),
+            ));
+        }
+
         if bytes.is_empty() {
             return Err(SpinelDBError::IncompleteData);
         }
@@ -129,7 +141,7 @@ impl RespFrameCodec {
             b'-' => self.parse_error(bytes),
             b':' => self.parse_integer(bytes),
             b'$' => self.parse_bulk_string(bytes),
-            b'*' => self.parse_array(bytes),
+            b'*' => self.parse_array(bytes, depth),
             _ => Err(SpinelDBError::SyntaxError),
         }
     }
@@ -206,7 +218,7 @@ impl RespFrameCodec {
     }
 
     /// Parses an Array (e.g., `*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n`).
-    fn parse_array(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+    fn parse_array(&self, bytes: &mut &[u8], depth: usize) -> Result<RespFrame, SpinelDBError> {
         // Advance past the '*' prefix.
         *bytes = &bytes[1..];
         let line = self.parse_line(bytes)?;
@@ -224,7 +236,7 @@ impl RespFrameCodec {
 
         let mut frames = Vec::with_capacity(arr_len);
         for _ in 0..arr_len {
-            frames.push(self.decode_recursive(bytes)?);
+            frames.push(self.decode_recursive(bytes, depth + 1)?);
         }
         Ok(RespFrame::Array(frames))
     }

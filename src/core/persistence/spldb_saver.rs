@@ -11,6 +11,8 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use tokio::fs::File as TokioFile;
+use tokio::io::BufWriter;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
@@ -127,22 +129,34 @@ impl SpldbSaverTask {
         let temp_path_str = format!("{}.tmp.{}", path_clone, rand::random::<u32>());
         let temp_path = std::path::Path::new(&temp_path_str);
 
-        // Step 1: Save to a temporary file.
-        if let Err(e) = spldb::save(&state.dbs, &temp_path_str).await {
-            let err_msg = format!("Failed to save SPLDB snapshot to temporary file: {e}");
-            error!("{}", err_msg);
-            *state.persistence.last_save_failure_time.lock().await =
-                Some(std::time::Instant::now());
-            if temp_path.exists()
-                && let Err(remove_err) = fs::remove_file(temp_path)
-            {
-                error!(
-                    "Additionally failed to remove temporary SPLDB file '{}': {remove_err}",
-                    temp_path_str
-                );
+        // Step 1: Create file and stream the database state to it.
+        // We open the file and wrap it in a BufWriter for efficiency.
+        let file_result = TokioFile::create(&temp_path).await;
+        match file_result {
+            Ok(file) => {
+                let mut writer = BufWriter::new(file);
+                if let Err(e) = spldb::write_database(&mut writer, &state.dbs).await {
+                    let err_msg = format!("Failed to write SPLDB snapshot to temporary file: {e}");
+                    error!("{}", err_msg);
+                    *state.persistence.last_save_failure_time.lock().await =
+                        Some(std::time::Instant::now());
+
+                    // Attempt to clean up the incomplete file.
+                    if let Err(remove_err) = fs::remove_file(temp_path) {
+                        error!(
+                            "Additionally failed to remove temporary SPLDB file '{}': {remove_err}",
+                            temp_path_str
+                        );
+                    }
+                    add_latency_sample(state);
+                    return Err(anyhow!(err_msg));
+                }
             }
-            add_latency_sample(state);
-            return Err(anyhow!(err_msg));
+            Err(e) => {
+                let err_msg = format!("Failed to create temporary SPLDB file: {e}");
+                error!("{}", err_msg);
+                return Err(anyhow!(err_msg));
+            }
         }
 
         info!(

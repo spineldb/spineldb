@@ -17,6 +17,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, reload};
 
 /// TestContext provides a complete test environment with a real database instance
+#[derive(Clone)]
 pub struct TestContext {
     pub state: Arc<ServerState>,
     pub db: Arc<Db>,

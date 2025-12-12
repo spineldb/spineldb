@@ -79,7 +79,7 @@ impl ParseCommand for Eval {
 
 #[async_trait]
 impl ExecutableCommand for Eval {
-    /// Executes the Lua script in a sandboxed environment.
+    /// Executes the Lua script using the shared Lua VM.
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
@@ -105,17 +105,25 @@ impl ExecutableCommand for Eval {
         let script_has_timeout = timeout_duration.as_millis() > 0;
         let script_has_mem_limit = memory_limit_mb > 0;
 
-        // Since `mlua::Lua` is not `Send`, the entire Lua interaction must happen
-        // within a dedicated thread managed by `spawn_blocking`.
+        // Clone the Lua VM reference for use in spawn_blocking
+        let lua_manager = ctx.state.scripting.clone();
+
+        // The Lua execution must happen within a dedicated blocking thread because
+        // `mlua::Lua` is not `Send`, and we need to lock the shared VM mutex.
         let lua_future = tokio::task::spawn_blocking(move || {
-            let lua = Lua::new();
+            // Lock the shared Lua VM for execution. This serializes script execution,
+            // ensuring atomicity and preserving global state across calls.
+            let lua_guard = lua_manager
+                .vm
+                .lock()
+                .map_err(|_| SpinelDBError::Internal("Failed to lock Lua VM".into()))?;
+            let lua = &*lua_guard;
 
             // Enforce memory limit if configured.
             if script_has_mem_limit {
                 // `set_memory_limit` expects bytes.
                 let limit_in_bytes = memory_limit_mb * 1024 * 1024;
                 if let Err(e) = lua.set_memory_limit(limit_in_bytes) {
-                    // This could fail if the Lua version doesn't support it, but it's unlikely with mlua.
                     return Err(mlua::Error::external(SpinelDBError::Internal(format!(
                         "Failed to set Lua memory limit: {e}"
                     ))));
@@ -264,6 +272,45 @@ impl ExecutableCommand for Eval {
     }
 }
 
+impl CommandSpec for Eval {
+    fn name(&self) -> &'static str {
+        "eval"
+    }
+
+    fn arity(&self) -> i64 {
+        -3
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::SCRIPTING
+    }
+
+    fn first_key(&self) -> i64 {
+        3
+    }
+
+    fn last_key(&self) -> i64 {
+        3 + self.num_keys as i64 - 1
+    }
+
+    fn step(&self) -> i64 {
+        1
+    }
+
+    fn get_keys(&self) -> Vec<Bytes> {
+        self.keys.clone()
+    }
+
+    fn to_resp_args(&self) -> Vec<Bytes> {
+        let mut args = Vec::with_capacity(2 + self.keys.len() + self.args.len());
+        args.push(self.script.clone());
+        args.push(Bytes::from(self.num_keys.to_string()));
+        args.extend_from_slice(&self.keys);
+        args.extend_from_slice(&self.args);
+        args
+    }
+}
+
 // --- Type Conversion Helpers ---
 
 /// Converts a `LuaValue` to a `RespFrame` for command execution.
@@ -337,39 +384,5 @@ fn lua_error_to_table(lua: &Lua, error: SpinelDBError) -> mlua::Result<LuaTable>
 impl From<SpinelDBError> for mlua::Error {
     fn from(e: SpinelDBError) -> Self {
         mlua::Error::external(e)
-    }
-}
-
-impl CommandSpec for Eval {
-    fn name(&self) -> &'static str {
-        "eval"
-    }
-    fn arity(&self) -> i64 {
-        -3
-    }
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-    fn first_key(&self) -> i64 {
-        3
-    }
-    fn last_key(&self) -> i64 {
-        if self.num_keys > 0 {
-            2 + self.num_keys as i64
-        } else {
-            0
-        }
-    }
-    fn step(&self) -> i64 {
-        1
-    }
-    fn get_keys(&self) -> Vec<Bytes> {
-        self.keys.clone()
-    }
-    fn to_resp_args(&self) -> Vec<Bytes> {
-        let mut args = vec![self.script.clone(), self.num_keys.to_string().into()];
-        args.extend(self.keys.clone());
-        args.extend(self.args.clone());
-        args
     }
 }

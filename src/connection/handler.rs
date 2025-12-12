@@ -214,6 +214,7 @@ impl ConnectionHandler {
             RouteResponse::StreamBody {
                 resp_header,
                 mut file,
+                ..
             } => {
                 debug!(
                     "Session {}: Streaming file with header: {:?}",

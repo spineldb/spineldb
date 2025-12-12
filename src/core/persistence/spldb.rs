@@ -24,6 +24,7 @@ use std::io::{self, Error, ErrorKind};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 
 // --- SPLDB Constants ---
@@ -278,71 +279,108 @@ pub async fn load_from_bytes(data: &Bytes, dbs: &[Arc<Db>]) -> io::Result<()> {
     Ok(())
 }
 
-/// Saves the current state of all databases to an SPLDB file at the given path.
+/// Streaming writes the state of all databases into a writer in SPLDB format.
+/// This implementation writes directly to the I/O sink without buffering the entire dataset in RAM.
 pub async fn save(dbs: &[Arc<Db>], path: &str) -> io::Result<()> {
-    info!("Starting SPLDB save to disk at {}", path);
-    let temp_path_str = format!("{}.tmp.{}", path, rand::random::<u32>());
-    let bytes = save_to_bytes(dbs).await?;
-    fs::write(&temp_path_str, &bytes).await?;
-    info!(
-        "SPLDB snapshot successfully written to temporary file {}",
-        temp_path_str
-    );
-    fs::rename(&temp_path_str, path).await?;
-    info!("SPLDB file successfully saved to {}", path);
-    Ok(())
+    let mut file = tokio::fs::File::create(path).await?;
+    write_database(&mut file, dbs).await
 }
 
-/// Serializes the state of all databases into a single `Bytes` object in SPLDB format.
-pub async fn save_to_bytes(dbs: &[Arc<Db>]) -> io::Result<Bytes> {
-    let mut buf = BytesMut::new();
-    buf.put_slice(SPLDB_MAGIC);
-    buf.put_slice(SPLDB_VERSION);
+pub async fn write_database<W>(writer: &mut W, dbs: &[Arc<Db>]) -> io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    // Use a small buffer to accumulate data before writing to reduce syscalls.
+    // The CRC calculation must include everything written.
+    let mut buffer = BytesMut::with_capacity(8192);
+    let mut crc_digest = CHECKSUM_ALGO.digest();
 
-    buf.put_u8(SPLDB_OPCODE_AUX);
-    write_string(&mut buf, b"spineldb-ver");
-    write_string(&mut buf, env!("CARGO_PKG_VERSION").as_bytes());
+    // Helper closure to write to the underlying writer and update CRC.
+    // We can't use a closure easily with async/await and borrowing `writer`,
+    // so we'll buffer small chunks and flush periodically.
+    async fn flush_buffer<W>(
+        writer: &mut W,
+        buffer: &mut BytesMut,
+        digest: &mut crc::Digest<'_, u64>,
+    ) -> io::Result<()>
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        if !buffer.is_empty() {
+            digest.update(buffer);
+            writer.write_all(buffer).await?;
+            buffer.clear();
+        }
+        Ok(())
+    }
 
-    buf.put_u8(SPLDB_OPCODE_AUX);
-    write_string(&mut buf, b"spineldb-bits");
-    write_string(&mut buf, b"64");
+    // --- Header ---
+    buffer.put_slice(SPLDB_MAGIC);
+    buffer.put_slice(SPLDB_VERSION);
 
-    buf.put_u8(SPLDB_OPCODE_AUX);
+    // --- Metadata ---
+    buffer.put_u8(SPLDB_OPCODE_AUX);
+    write_string(&mut buffer, b"spineldb-ver");
+    write_string(&mut buffer, env!("CARGO_PKG_VERSION").as_bytes());
+
+    buffer.put_u8(SPLDB_OPCODE_AUX);
+    write_string(&mut buffer, b"spineldb-bits");
+    write_string(&mut buffer, b"64");
+
+    buffer.put_u8(SPLDB_OPCODE_AUX);
     let ctime = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    write_string(&mut buf, b"ctime");
-    write_string(&mut buf, &ctime.to_string().into_bytes());
+    write_string(&mut buffer, b"ctime");
+    write_string(&mut buffer, &ctime.to_string().into_bytes());
 
+    flush_buffer(writer, &mut buffer, &mut crc_digest).await?;
+
+    // --- Database Content ---
     for (db_index, db) in dbs.iter().enumerate() {
+        // Snapshot keys. Note: This still loads all keys of a DB into memory vectors,
+        // but it's done per-DB and values are processed one by one.
+        // For extremely large DBs, locking shards individually would be even better but more complex.
         let all_kvs = db.get_all_kvs_for_sync().await;
         let valid_kvs: Vec<_> = all_kvs
             .into_iter()
             .filter(|(_, val)| !val.is_expired())
             .collect();
+
         if valid_kvs.is_empty() {
             continue;
         }
 
         if db_index > 0 {
-            buf.put_u8(SPLDB_OPCODE_SELECTDB);
-            write_length_encoding(&mut buf, db_index as u64);
+            buffer.put_u8(SPLDB_OPCODE_SELECTDB);
+            write_length_encoding(&mut buffer, db_index as u64);
         }
 
-        buf.put_u8(SPLDB_OPCODE_RESIZEDB);
-        write_length_encoding(&mut buf, valid_kvs.len() as u64);
-        write_length_encoding(&mut buf, 0);
+        buffer.put_u8(SPLDB_OPCODE_RESIZEDB);
+        write_length_encoding(&mut buffer, valid_kvs.len() as u64);
+        write_length_encoding(&mut buffer, 0);
+
+        flush_buffer(writer, &mut buffer, &mut crc_digest).await?;
 
         for (key, stored_value) in valid_kvs {
-            write_kv(&mut buf, &key, &stored_value)?;
+            write_kv(&mut buffer, &key, &stored_value)?;
+            // Flush periodically to keep memory usage low.
+            if buffer.len() > 64 * 1024 {
+                flush_buffer(writer, &mut buffer, &mut crc_digest).await?;
+            }
         }
+        flush_buffer(writer, &mut buffer, &mut crc_digest).await?;
     }
 
-    buf.put_u8(SPLDB_OPCODE_EOF);
-    let checksum = CHECKSUM_ALGO.checksum(&buf);
-    buf.put_u64_le(checksum);
-    Ok(buf.freeze())
+    // --- EOF and Checksum ---
+    buffer.put_u8(SPLDB_OPCODE_EOF);
+    flush_buffer(writer, &mut buffer, &mut crc_digest).await?;
+
+    let checksum = crc_digest.finalize();
+    writer.write_u64_le(checksum).await?;
+
+    Ok(())
 }
 
 /// Writes a single key-value pair, including its TTL if it exists.
@@ -356,12 +394,14 @@ fn write_kv(buf: &mut BytesMut, key: &Bytes, value: &StoredValue) -> io::Result<
         buf.put_u64_le(expiry_ms);
     }
 
+    // Serialize value data into a separate buffer first to determine its type byte.
+    // Optimization: We could stream this too, but for single values, buffering is acceptable.
     let mut value_buf = BytesMut::new();
     serialize_single_value_data(&mut value_buf, &value.data)?;
 
-    buf.put_u8(value_buf.get_u8());
+    buf.put_u8(value_buf.get_u8()); // Value Type
     write_string(buf, key);
-    buf.put(value_buf.freeze());
+    buf.put(value_buf);
 
     Ok(())
 }
@@ -803,4 +843,13 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
             format!("Unknown SPLDB value type: {other:#04x}"),
         )),
     }
+}
+
+/// Helper function to save only the data required for replication to bytes.
+/// Note: This is an alias for the same logic as full save for now,
+/// but kept separate if logic diverges.
+pub async fn save_to_bytes(dbs: &[Arc<Db>]) -> io::Result<Bytes> {
+    let mut buffer: Vec<u8> = Vec::new();
+    write_database(&mut buffer, dbs).await?;
+    Ok(Bytes::from(buffer))
 }

@@ -63,12 +63,16 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
     }
 
     // --- Core Maintenance Tasks ---
-    let ttl_manager = TtlManager::new(server_state.dbs.clone());
-    let shutdown_rx_ttl = shutdown_tx.subscribe();
-    background_tasks.spawn(async move {
-        ttl_manager.run(shutdown_rx_ttl).await;
-        Ok(())
-    });
+    if let ReplicationConfig::Primary(_) = &config_clone.replication {
+        let ttl_manager = TtlManager::new(server_state.dbs.clone());
+        let shutdown_rx_ttl = shutdown_tx.subscribe();
+        background_tasks.spawn(async move {
+            ttl_manager.run(shutdown_rx_ttl).await;
+            Ok(())
+        });
+    } else {
+        info!("Server is a replica. Active TTL expiration task will not run.");
+    }
 
     let eviction_manager = EvictionManager::new(server_state.clone());
     let shutdown_rx_evict = shutdown_tx.subscribe();

@@ -31,7 +31,7 @@ pub async fn validate_fetch_url(
     url_str: &str,
     allowed_domains: &[String],
     allow_private_ips: bool,
-) -> Result<(), SpinelDBError> {
+) -> Result<Vec<IpAddr>, SpinelDBError> {
     // Parse the URL to extract the domain.
     let url = Url::parse(url_str)
         .map_err(|_| SpinelDBError::InvalidRequest(format!("Invalid URL format: {url_str}")))?;
@@ -61,7 +61,7 @@ pub async fn validate_fetch_url(
     let port = url
         .port()
         .unwrap_or_else(|| if url.scheme() == "https" { 443 } else { 80 });
-    let domain_with_port = format!("{domain}:{port}"); // <-- FIXED AS PER CLIPPY SUGGESTION
+    let domain_with_port = format!("{domain}:{port}");
 
     // `to_socket_addrs` can block, so we wrap it in `spawn_blocking`.
     let addrs = tokio::task::spawn_blocking(move || domain_with_port.to_socket_addrs())
@@ -71,24 +71,24 @@ pub async fn validate_fetch_url(
             SpinelDBError::InvalidRequest(format!("Could not resolve domain '{domain}': {e}"))
         })?;
 
-    let mut has_ips = false;
+    let mut resolved_ips = Vec::new();
     for addr in addrs {
-        has_ips = true;
         let ip = addr.ip();
         if !allow_private_ips && !is_globally_routable(&ip) {
             return Err(SpinelDBError::SecurityViolation(format!(
                 "URL domain \"{domain}\" resolves to a forbidden IP address: {ip}"
             )));
         }
+        resolved_ips.push(ip);
     }
 
-    if !has_ips {
+    if resolved_ips.is_empty() {
         return Err(SpinelDBError::InvalidRequest(format!(
             "Could not resolve domain '{domain}' to any IP addresses"
         )));
     }
 
-    Ok(())
+    Ok(resolved_ips)
 }
 
 /// Helper function to check if an IP address is globally routable.

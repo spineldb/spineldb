@@ -130,7 +130,27 @@ impl AofWriterTask {
     async fn handle_work_item(&mut self, work: PropagatedWork) -> Result<(), SpinelDBError> {
         let mut rewrite_state = self.state.persistence.aof_rewrite_state.lock().await;
         if rewrite_state.is_in_progress {
+            let limit = self
+                .state
+                .config
+                .lock()
+                .await
+                .persistence
+                .aof_rewrite_buffer_limit;
+            let work_size = work.estimated_size();
+
+            if rewrite_state.buffer_size + work_size > limit {
+                let err_msg = format!(
+                    "AOF rewrite buffer limit reached (limit: {} bytes, current: {} bytes, incoming: {} bytes). Aborting to prevent OOM.",
+                    limit, rewrite_state.buffer_size, work_size
+                );
+                error!("{}", err_msg);
+                self.state.set_read_only(true, "AOF rewrite buffer full");
+                return Err(SpinelDBError::AofError(err_msg));
+            }
+
             rewrite_state.buffer.push(work);
+            rewrite_state.buffer_size += work_size;
             return Ok(());
         }
         drop(rewrite_state);
@@ -192,6 +212,7 @@ impl AofWriterTask {
         let buffered_work = {
             let mut rewrite_state = self.state.persistence.aof_rewrite_state.lock().await;
             rewrite_state.is_in_progress = false;
+            rewrite_state.buffer_size = 0; // Reset the size counter
             std::mem::take(&mut rewrite_state.buffer)
         };
         info!("AOF rewrite state unlocked. Normal writing can resume.");

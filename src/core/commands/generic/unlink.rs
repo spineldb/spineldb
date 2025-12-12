@@ -99,14 +99,16 @@ impl ExecutableCommand for Unlink {
             {
                 Ok(_) => {}
                 Err(TrySendError::Full(items)) => {
-                    // This is a critical state where the background task cannot keep up.
-                    // Instead of blocking or spawning, we log, increment a metric,
-                    // and let the items be dropped synchronously. This provides backpressure.
                     warn!(
-                        "Lazy-free channel is full. Deallocating {} items synchronously.",
+                        "Lazy-free channel is full. Offloading deallocation of {} items to a background task to avoid blocking.",
                         items.len()
                     );
                     ctx.state.persistence.increment_lazy_free_errors();
+                    // Spawn a new task to drop the items, so the current worker thread is not blocked.
+                    tokio::spawn(async move {
+                        // By moving `items` into this task, they will be dropped when the task completes.
+                        drop(items);
+                    });
                 }
                 Err(TrySendError::Closed(_)) => {
                     // The lazy-free task has terminated, which is a critical failure.

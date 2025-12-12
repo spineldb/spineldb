@@ -31,6 +31,8 @@ bitflags! {
         const TRANSACTION    = 1 << 6;
         /// The command's keys can be moved (used for cluster hashing).
         const MOVABLEKEYS    = 1 << 7;
+        /// The command is a scripting command (e.g., `EVAL`).
+        const SCRIPTING      = 1 << 8;
     }
 }
 
