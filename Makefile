@@ -1,4 +1,4 @@
-.PHONY: help build run clean check clippy fmt test test-coverage test-coverage-html install-tools
+.PHONY: help build run clean check clippy fmt test test-coverage test-coverage-html bench bench-command bench-concurrent bench-memory install-tools
 
 # Default target
 help:
@@ -13,6 +13,10 @@ help:
 	@echo "  make fmt                - Format code with rustfmt"
 	@echo "  make fmt-check          - Check if code is formatted"
 	@echo "  make test               - Run tests"
+	@echo "  make bench              - Run all performance benchmarks"
+	@echo "  make bench-command      - Run command execution benchmarks"
+	@echo "  make bench-concurrent   - Run concurrent access benchmarks"
+	@echo "  make bench-memory       - Run memory usage benchmarks"
 	@echo "  make test-coverage      - Run tests with coverage (llvm-cov)"
 	@echo "  make test-coverage-html - Run tests and generate HTML coverage report"
 	@echo "  make install-tools      - Install required tools (llvm-cov, clippy, rustfmt)"
@@ -52,6 +56,21 @@ fmt-check:
 # Test commands
 test:
 	RUST_MIN_STACK=8388608 cargo test
+
+bench:
+	RUST_MIN_STACK=8388608 cargo bench
+
+bench-command:
+	@echo "Running command execution benchmarks..."
+	RUST_MIN_STACK=8388608 cargo bench --bench command_bench
+
+bench-concurrent:
+	@echo "Running concurrent access benchmarks..."
+	RUST_MIN_STACK=8388608 cargo bench --bench concurrent_bench
+
+bench-memory:
+	@echo "Running memory usage benchmarks..."
+	RUST_MIN_STACK=8388608 cargo bench --bench memory_bench
 
 test-coverage:
 	@echo "Running tests with coverage (llvm-cov)..."
