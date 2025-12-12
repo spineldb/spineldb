@@ -73,6 +73,18 @@ murmur3 = "0.5.2"
 codegen-units = 1
 rpath = true
 
+[[bench]]
+name = "command_bench"
+harness = false
+
+[[bench]]
+name = "concurrent_bench"
+harness = false
+
+[[bench]]
+name = "memory_bench"
+harness = false
+
 [dev-dependencies]
 # Property-based testing
 proptest = "1.4"
