@@ -326,18 +326,15 @@ impl MasterMonitor {
                     replica_state.down_since = None;
                 }
             } else if let Some(mut replica_state) = self.state.lock().replicas.get_mut(&addr) {
-                if replica_state.down_since.is_none() {
+                if let Some(down_since) = replica_state.down_since {
+                    if down_since.elapsed() > down_after {
+                        warn!(
+                            "Replica {} for master '{}' is down.",
+                            addr, self.master_name
+                        );
+                    }
+                } else {
                     replica_state.down_since = Some(Instant::now());
-                } else if replica_state
-                    .down_since
-                    .expect("down_since is set")
-                    .elapsed()
-                    > down_after
-                {
-                    warn!(
-                        "Replica {} for master '{}' is down.",
-                        addr, self.master_name
-                    );
                 }
             }
         }
