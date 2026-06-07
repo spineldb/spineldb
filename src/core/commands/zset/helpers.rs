@@ -85,3 +85,185 @@ pub(super) fn parse_range_args(args: &[RespFrame]) -> Result<(i64, i64, bool), S
     }
     Ok((start, stop, with_scores))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::database::zset::{LexBoundary, ScoreBoundary, ZSetEntry};
+
+    fn bs(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    fn bs_frame(s: &str) -> RespFrame {
+        RespFrame::BulkString(bs(s))
+    }
+
+    #[test]
+    fn test_parse_score_boundary_neg_inf() {
+        assert!(matches!(
+            parse_score_boundary("-inf").unwrap(),
+            ScoreBoundary::NegInfinity
+        ));
+    }
+
+    #[test]
+    fn test_parse_score_boundary_pos_inf() {
+        assert!(matches!(
+            parse_score_boundary("+inf").unwrap(),
+            ScoreBoundary::PosInfinity
+        ));
+    }
+
+    #[test]
+    fn test_parse_score_boundary_inclusive() {
+        let r = parse_score_boundary("10").unwrap();
+        assert!(matches!(r, ScoreBoundary::Inclusive(v) if (v - 10.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn test_parse_score_boundary_exclusive() {
+        let r = parse_score_boundary("(10").unwrap();
+        assert!(matches!(r, ScoreBoundary::Exclusive(v) if (v - 10.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn test_parse_score_boundary_invalid_is_error() {
+        assert!(matches!(
+            parse_score_boundary("abc").unwrap_err(),
+            SpinelDBError::NotAFloat
+        ));
+    }
+
+    #[test]
+    fn test_parse_score_boundary_case_insensitive() {
+        assert!(matches!(
+            parse_score_boundary("-INF").unwrap(),
+            ScoreBoundary::NegInfinity
+        ));
+    }
+
+    #[test]
+    fn test_parse_lex_boundary_min_max() {
+        assert!(matches!(parse_lex_boundary("-").unwrap(), LexBoundary::Min));
+        assert!(matches!(parse_lex_boundary("+").unwrap(), LexBoundary::Max));
+    }
+
+    #[test]
+    fn test_parse_lex_boundary_inclusive() {
+        let r = parse_lex_boundary("[abc]").unwrap();
+        if let LexBoundary::Inclusive(b) = r {
+            assert_eq!(b, bs("abc"));
+        } else {
+            panic!("expected Inclusive");
+        }
+    }
+
+    #[test]
+    fn test_parse_lex_boundary_exclusive() {
+        let r = parse_lex_boundary("(abc)").unwrap();
+        if let LexBoundary::Exclusive(b) = r {
+            assert_eq!(b, bs("abc"));
+        } else {
+            panic!("expected Exclusive");
+        }
+    }
+
+    #[test]
+    fn test_parse_lex_boundary_unprefixed_is_syntax_error() {
+        assert!(matches!(
+            parse_lex_boundary("abc").unwrap_err(),
+            SpinelDBError::SyntaxError
+        ));
+    }
+
+    #[test]
+    fn test_format_zrange_response_empty() {
+        let r = format_zrange_response(vec![], false);
+        if let RespValue::Array(arr) = r {
+            assert!(arr.is_empty());
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn test_format_zrange_response_without_scores() {
+        let entries = vec![
+            ZSetEntry { score: 1.0, member: bs("a") },
+            ZSetEntry { score: 2.0, member: bs("b") },
+        ];
+        let r = format_zrange_response(entries, false);
+        if let RespValue::Array(arr) = r {
+            assert_eq!(arr.len(), 2);
+            assert!(matches!(&arr[0], RespValue::BulkString(b) if b == &bs("a")));
+            assert!(matches!(&arr[1], RespValue::BulkString(b) if b == &bs("b")));
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn test_format_zrange_response_with_scores() {
+        let entries = vec![ZSetEntry { score: 1.5, member: bs("a") }];
+        let r = format_zrange_response(entries, true);
+        if let RespValue::Array(arr) = r {
+            assert_eq!(arr.len(), 2);
+            assert!(matches!(&arr[0], RespValue::BulkString(b) if b == &bs("a")));
+            if let RespValue::BulkString(b) = &arr[1] {
+                let s = std::str::from_utf8(b).unwrap();
+                assert_eq!(s, "1.5");
+            } else {
+                panic!("expected BulkString score");
+            }
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn test_parse_range_args_minimal() {
+        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("-1")];
+        let (s, e, ws) = parse_range_args(&args).unwrap();
+        assert_eq!(s, 0);
+        assert_eq!(e, -1);
+        assert!(!ws);
+    }
+
+    #[test]
+    fn test_parse_range_args_with_withscores() {
+        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("10"), bs_frame("WITHSCORES")];
+        let (s, e, ws) = parse_range_args(&args).unwrap();
+        assert_eq!(s, 0);
+        assert_eq!(e, 10);
+        assert!(ws);
+    }
+
+    #[test]
+    fn test_parse_range_args_withscores_case_insensitive() {
+        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("-1"), bs_frame("withscores")];
+        let (_, _, ws) = parse_range_args(&args).unwrap();
+        assert!(ws);
+    }
+
+    #[test]
+    fn test_parse_range_args_invalid_option_is_syntax_error() {
+        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("10"), bs_frame("LIMIT")];
+        let r = parse_range_args(&args);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_range_args_invalid_start_is_not_integer() {
+        let args = [bs_frame("ZRANGE"), bs_frame("abc"), bs_frame("0")];
+        let r = parse_range_args(&args);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_parse_range_args_invalid_stop_is_not_integer() {
+        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("xyz")];
+        let r = parse_range_args(&args);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+}

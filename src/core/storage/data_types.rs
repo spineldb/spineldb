@@ -474,3 +474,320 @@ fn lfu_log_incr(counter: u8) -> u8 {
         counter
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::cache_types::{CacheVariant, HttpMetadata};
+    use std::time::Duration;
+
+    #[test]
+    fn test_lfu_info_default() {
+        let lfu = LfuInfo::default();
+        assert_eq!(lfu.counter, LFU_INIT_VAL);
+    }
+
+    #[test]
+    fn test_stored_value_new_default_metadata() {
+        let sv = StoredValue::new(DataValue::String(Bytes::from_static(b"hello")));
+        assert!(sv.expiry.is_none());
+        assert!(sv.stale_revalidate_expiry.is_none());
+        assert!(sv.grace_expiry.is_none());
+        assert_eq!(sv.version, 1);
+        assert_eq!(sv.size, 5);
+        assert_eq!(sv.lfu.counter, LFU_INIT_VAL);
+    }
+
+    #[test]
+    fn test_stored_value_not_expired_without_expiry() {
+        let sv = StoredValue::new(DataValue::String(Bytes::from_static(b"x")));
+        assert!(!sv.is_expired());
+        assert!(sv.remaining_ttl_secs().is_none());
+        assert!(sv.remaining_ttl_ms().is_none());
+    }
+
+    #[test]
+    fn test_stored_value_not_expired_when_future_ttl() {
+        let mut sv = StoredValue::new(DataValue::String(Bytes::from_static(b"x")));
+        sv.expiry = Some(Instant::now() + Duration::from_secs(60));
+        assert!(!sv.is_expired());
+        let secs = sv.remaining_ttl_secs().unwrap();
+        // Allow a small tolerance (allow 60 or 59 due to scheduling).
+        assert!(secs <= 60);
+    }
+
+    #[test]
+    fn test_stored_value_expired_when_past_ttl() {
+        let mut sv = StoredValue::new(DataValue::String(Bytes::from_static(b"x")));
+        sv.expiry = Some(Instant::now() - Duration::from_secs(1));
+        assert!(sv.is_expired());
+        assert!(sv.remaining_ttl_secs().is_none());
+        assert!(sv.remaining_ttl_ms().is_none());
+    }
+
+    #[test]
+    fn test_stored_value_http_cache_expired_via_grace() {
+        // HttpCache uses grace_expiry, not expiry.
+        let sv = StoredValue {
+            data: DataValue::HttpCache {
+                variants: VariantMap::new(),
+                vary_on: vec![],
+                tags_epoch: 0,
+            },
+            expiry: None,
+            stale_revalidate_expiry: None,
+            grace_expiry: Some(Instant::now() - Duration::from_secs(1)),
+            version: 1,
+            size: 0,
+            lfu: LfuInfo::default(),
+        };
+        assert!(sv.is_expired());
+    }
+
+    #[test]
+    fn test_stored_value_http_cache_not_expired_within_grace() {
+        let sv = StoredValue {
+            data: DataValue::HttpCache {
+                variants: VariantMap::new(),
+                vary_on: vec![],
+                tags_epoch: 0,
+            },
+            expiry: None,
+            stale_revalidate_expiry: None,
+            grace_expiry: Some(Instant::now() + Duration::from_secs(60)),
+            version: 1,
+            size: 0,
+            lfu: LfuInfo::default(),
+        };
+        assert!(!sv.is_expired());
+    }
+
+    #[test]
+    fn test_stored_value_http_cache_expired_via_expiry_when_no_grace() {
+        // HttpCache: if grace is None and expiry is past, treat as expired.
+        let sv = StoredValue {
+            data: DataValue::HttpCache {
+                variants: VariantMap::new(),
+                vary_on: vec![],
+                tags_epoch: 0,
+            },
+            expiry: Some(Instant::now() - Duration::from_secs(1)),
+            stale_revalidate_expiry: None,
+            grace_expiry: None,
+            version: 1,
+            size: 0,
+            lfu: LfuInfo::default(),
+        };
+        assert!(sv.is_expired());
+    }
+
+    #[test]
+    fn test_stored_value_memory_usage_includes_overhead() {
+        let sv = StoredValue::new(DataValue::String(Bytes::from_static(b"abcd")));
+        // size_of(StoredValue) overhead + 4 bytes payload.
+        let expected = std::mem::size_of::<StoredValue>() + 4;
+        assert_eq!(sv.memory_usage(), expected);
+    }
+
+    #[test]
+    fn test_stored_value_update_lfu_saturates_at_255() {
+        let mut sv = StoredValue::new(DataValue::String(Bytes::from_static(b"x")));
+        sv.lfu.counter = 255;
+        // Calling update_lfu must not overflow.
+        sv.update_lfu();
+        assert_eq!(sv.lfu.counter, 255);
+    }
+
+    #[test]
+    fn test_data_value_memory_string() {
+        let dv = DataValue::String(Bytes::from_static(b"hello"));
+        assert_eq!(dv.memory_usage(), 5);
+    }
+
+    #[test]
+    fn test_data_value_memory_list() {
+        let mut l = VecDeque::new();
+        l.push_back(Bytes::from_static(b"a"));
+        l.push_back(Bytes::from_static(b"bc"));
+        // The memory formula accounts for the collection's capacity (not length),
+        // which is at least the number of pushed elements.
+        let expected = l.capacity() * std::mem::size_of::<Bytes>() + 3;
+        let dv = DataValue::List(l);
+        assert_eq!(dv.memory_usage(), expected);
+    }
+
+    #[test]
+    fn test_data_value_memory_hash() {
+        let mut h = IndexMap::new();
+        h.insert(Bytes::from_static(b"k1"), Bytes::from_static(b"v1"));
+        h.insert(Bytes::from_static(b"k2"), Bytes::from_static(b"v22"));
+        let capacity_bytes =
+            h.capacity() * (std::mem::size_of::<Bytes>() + std::mem::size_of::<Bytes>());
+        let data_bytes: usize = h.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let expected = capacity_bytes + data_bytes;
+        let dv = DataValue::Hash(h);
+        assert_eq!(dv.memory_usage(), expected);
+    }
+
+    #[test]
+    fn test_data_value_memory_set() {
+        let mut s = HashSet::new();
+        s.insert(Bytes::from_static(b"x"));
+        s.insert(Bytes::from_static(b"yy"));
+        let expected = s.capacity() * std::mem::size_of::<Bytes>() + 1 + 2;
+        let dv = DataValue::Set(s);
+        assert_eq!(dv.memory_usage(), expected);
+    }
+
+    #[test]
+    fn test_data_value_memory_json_null() {
+        let dv = DataValue::Json(serde_json::Value::Null);
+        assert_eq!(dv.memory_usage(), std::mem::size_of::<serde_json::Value>());
+    }
+
+    #[test]
+    fn test_data_value_memory_json_string() {
+        let dv = DataValue::Json(serde_json::Value::String("hi".to_string()));
+        let s = std::mem::size_of::<serde_json::Value>() + "hi".len();
+        assert_eq!(dv.memory_usage(), s);
+    }
+
+    #[test]
+    fn test_data_value_memory_http_cache_includes_vary() {
+        let mut variants = VariantMap::new();
+        variants.insert(
+            1,
+            CacheVariant {
+                metadata: HttpMetadata::default(),
+                body: CacheBody::InMemory(Bytes::from_static(b"abcd")),
+                last_accessed: Instant::now(),
+            },
+        );
+        let meta_size = variants.values().next().unwrap().metadata.memory_usage();
+        let dv = DataValue::HttpCache {
+            variants,
+            vary_on: vec![Bytes::from_static(b"accept")],
+            tags_epoch: 0,
+        };
+        // 6 (accept) + 4 (body) + 0 (default metadata) + 8 (tags_epoch)
+        let expected = 6 + 4 + meta_size + std::mem::size_of::<u64>();
+        assert_eq!(dv.memory_usage(), expected);
+    }
+
+    #[test]
+    fn test_data_value_partial_eq_string() {
+        let a = DataValue::String(Bytes::from_static(b"x"));
+        let b = DataValue::String(Bytes::from_static(b"x"));
+        let c = DataValue::String(Bytes::from_static(b"y"));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_data_value_partial_eq_different_variants() {
+        let a = DataValue::String(Bytes::from_static(b"x"));
+        let b = DataValue::Json(serde_json::Value::Null);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_to_construction_commands_string_no_ttl() {
+        let sv = StoredValue::new(DataValue::String(Bytes::from_static(b"hi")));
+        let key = Bytes::from_static(b"mykey");
+        let cmds = sv.to_construction_commands(&key);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], Command::Set(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_string_with_ttl_still_one_set() {
+        // For DataValue::String the TTL is bundled into the SET command itself;
+        // an additional EXPIRE is NOT appended (only non-String types get one).
+        let mut sv = StoredValue::new(DataValue::String(Bytes::from_static(b"hi")));
+        sv.expiry = Some(Instant::now() + Duration::from_secs(60));
+        let key = Bytes::from_static(b"mykey");
+        let cmds = sv.to_construction_commands(&key);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], Command::Set(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_list_with_ttl_adds_expire() {
+        let mut l = VecDeque::new();
+        l.push_back(Bytes::from_static(b"a"));
+        let mut sv = StoredValue::new(DataValue::List(l));
+        sv.expiry = Some(Instant::now() + Duration::from_secs(60));
+        let key = Bytes::from_static(b"lst");
+        let cmds = sv.to_construction_commands(&key);
+        // 1 RPUSH + 1 EXPIRE
+        assert_eq!(cmds.len(), 2);
+        assert!(matches!(cmds[1], Command::Expire(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_list_chunks() {
+        let mut l = VecDeque::new();
+        for i in 0..120u8 {
+            l.push_back(Bytes::copy_from_slice(&[i]));
+        }
+        let sv = StoredValue::new(DataValue::List(l));
+        let key = Bytes::from_static(b"lst");
+        let cmds = sv.to_construction_commands(&key);
+        // 120 items / 50 per chunk = 3 RPUSH commands.
+        assert_eq!(cmds.len(), 3);
+    }
+
+    #[test]
+    fn test_to_construction_commands_empty_list_no_commands() {
+        let sv = StoredValue::new(DataValue::List(VecDeque::new()));
+        let key = Bytes::from_static(b"lst");
+        let cmds = sv.to_construction_commands(&key);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn test_to_construction_commands_empty_hash_no_commands() {
+        let sv = StoredValue::new(DataValue::Hash(IndexMap::new()));
+        let key = Bytes::from_static(b"h");
+        let cmds = sv.to_construction_commands(&key);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn test_to_construction_commands_empty_set_no_commands() {
+        let sv = StoredValue::new(DataValue::Set(HashSet::new()));
+        let key = Bytes::from_static(b"s");
+        let cmds = sv.to_construction_commands(&key);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn test_to_construction_commands_json() {
+        let sv = StoredValue::new(DataValue::Json(serde_json::json!({"x": 1})));
+        let key = Bytes::from_static(b"j");
+        let cmds = sv.to_construction_commands(&key);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], Command::Json(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_hll() {
+        let mut hll = HyperLogLog::new();
+        hll.add(&Bytes::from_static(b"elem"));
+        let sv = StoredValue::new(DataValue::HyperLogLog(Box::new(hll)));
+        let key = Bytes::from_static(b"hll");
+        let cmds = sv.to_construction_commands(&key);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], Command::Set(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_bloom() {
+        let bf = BloomFilter::new(100, 0.01);
+        let sv = StoredValue::new(DataValue::BloomFilter(Box::new(bf)));
+        let key = Bytes::from_static(b"bf");
+        let cmds = sv.to_construction_commands(&key);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], Command::Set(_)));
+    }
+}

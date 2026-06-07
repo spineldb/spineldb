@@ -108,3 +108,45 @@ impl CommandSpec for BfMExists {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfmexists_parses_key_and_items() {
+        let c = BfMExists::parse(&[bs("k"), bs("i1"), bs("i2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.items.len(), 2);
+    }
+
+    #[test]
+    fn test_bfmexists_with_too_few_args_is_error() {
+        let r = BfMExists::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfmexists_with_no_args_is_error() {
+        let r = BfMExists::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfmexists_with_non_bulk_key_is_wrong_type() {
+        let r = BfMExists::parse(&[RespFrame::Integer(1), bs("item")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bfmexists_to_resp_args_round_trips() {
+        let c = BfMExists::parse(&[bs("k"), bs("i1"), bs("i2"), bs("i3")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

@@ -165,3 +165,101 @@ pub struct GlobalWardenState {
     /// A thread-safe map from a master's name to its `MasterState`.
     pub masters: DashMap<String, Arc<Mutex<MasterState>>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_monitored_master() -> MonitoredMaster {
+        MonitoredMaster {
+            name: "m".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 6379,
+            quorum: 2,
+            down_after: Duration::from_secs(15),
+            failover_timeout: Duration::from_secs(60),
+            hello_interval: Duration::from_secs(2),
+        }
+    }
+
+    #[test]
+    fn test_master_status_variants() {
+        assert_ne!(MasterStatus::Ok, MasterStatus::Sdown);
+        assert_ne!(MasterStatus::Sdown, MasterStatus::Odown);
+        assert_ne!(MasterStatus::Ok, MasterStatus::Odown);
+    }
+
+    #[test]
+    fn test_failover_state_variants() {
+        assert_ne!(FailoverState::None, FailoverState::Wait);
+        assert_ne!(FailoverState::Wait, FailoverState::Vote);
+        assert_ne!(FailoverState::Vote, FailoverState::Start);
+        assert_ne!(FailoverState::Start, FailoverState::SelectReplica);
+        assert_ne!(FailoverState::SelectReplica, FailoverState::PromoteReplica);
+    }
+
+    #[test]
+    fn test_instance_state_new_defaults() {
+        let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let s = InstanceState::new(addr);
+        assert_eq!(s.addr, addr);
+        assert_eq!(s.run_id, "?");
+        assert!(s.down_since.is_none());
+        assert_eq!(s.replication_offset, 0);
+    }
+
+    #[test]
+    fn test_master_state_from_starts_at_ok() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert_eq!(s.status, MasterStatus::Ok);
+        assert_eq!(s.failover_state, FailoverState::None);
+        assert_eq!(s.config_epoch, 0);
+        assert_eq!(s.last_voted_epoch, 0);
+        assert!(s.failover_start_time.is_none());
+        assert!(s.promotion_candidate.is_none());
+    }
+
+    #[test]
+    fn test_master_state_reset_failover_clears_all_failover_fields() {
+        let cfg = make_monitored_master();
+        let mut s = MasterState::from(cfg);
+        // Simulate a failover in progress.
+        s.failover_state = FailoverState::PromoteReplica;
+        s.failover_start_time = Some(Instant::now());
+        s.promotion_candidate = Some("127.0.0.1:6380".parse().unwrap());
+        s.votes.insert("peer1".to_string(), Instant::now());
+        s.replicas_pending_reconfiguration
+            .insert("127.0.0.1:6381".parse().unwrap());
+
+        s.reset_failover_state();
+
+        assert_eq!(s.failover_state, FailoverState::None);
+        assert!(s.failover_start_time.is_none());
+        assert!(s.promotion_candidate.is_none());
+        assert!(s.votes.is_empty());
+        assert!(s.replicas_pending_reconfiguration.is_empty());
+    }
+
+    #[test]
+    fn test_global_warden_state_starts_empty() {
+        let g = GlobalWardenState {
+            my_run_id: "test-run-id".to_string(),
+            masters: DashMap::new(),
+        };
+        assert_eq!(g.my_run_id, "test-run-id");
+        assert!(g.masters.is_empty());
+    }
+
+    #[test]
+    fn test_global_warden_state_can_register_master() {
+        let g = GlobalWardenState {
+            my_run_id: "r".to_string(),
+            masters: DashMap::new(),
+        };
+        let ms = Arc::new(Mutex::new(MasterState::from(make_monitored_master())));
+        g.masters.insert("m1".to_string(), ms);
+        assert_eq!(g.masters.len(), 1);
+        assert!(g.masters.contains_key("m1"));
+    }
+}

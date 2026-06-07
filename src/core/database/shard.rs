@@ -263,3 +263,192 @@ impl ShardCache {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::data_types::DataValue;
+
+    fn make_sv(s: &str) -> StoredValue {
+        StoredValue::new(DataValue::String(Bytes::copy_from_slice(s.as_bytes())))
+    }
+
+    fn fresh_shard() -> DbShard {
+        DbShard::new()
+    }
+
+    #[tokio::test]
+    async fn test_put_and_peek() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        let old = g.put(Bytes::from_static(b"k1"), make_sv("hello"));
+        assert!(old.is_none());
+        let v = g.peek(&Bytes::from_static(b"k1")).unwrap();
+        assert_eq!(v.size, 5);
+    }
+
+    #[tokio::test]
+    async fn test_put_replaces_existing_value() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("aaa"));
+        let old = g.put(Bytes::from_static(b"k"), make_sv("bb"));
+        let old = old.unwrap();
+        assert_eq!(old.size, 3);
+        // The new value's size should match the replacement.
+        assert_eq!(g.peek(&Bytes::from_static(b"k")).unwrap().size, 2);
+    }
+
+    #[tokio::test]
+    async fn test_pop_removes_entry() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("x"));
+        let popped = g.pop(&Bytes::from_static(b"k"));
+        assert!(popped.is_some());
+        assert!(g.peek(&Bytes::from_static(b"k")).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pop_nonexistent_returns_none() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        assert!(g.pop(&Bytes::from_static(b"nope")).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pop_updates_key_count() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"a"), make_sv("1"));
+        g.put(Bytes::from_static(b"b"), make_sv("2"));
+        assert_eq!(shard.key_count.load(Ordering::Relaxed), 2);
+        g.pop(&Bytes::from_static(b"a"));
+        assert_eq!(shard.key_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_pop_updates_memory() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"a"), make_sv("hello"));
+        // key (1) + data (5) = 6
+        assert_eq!(shard.current_memory.load(Ordering::Relaxed), 6);
+        g.pop(&Bytes::from_static(b"a"));
+        assert_eq!(shard.current_memory.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pop_removes_from_slot_index() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("v"));
+        let slot = get_slot(&Bytes::from_static(b"k"));
+        assert!(g.slot_index.contains_key(&slot));
+        g.pop(&Bytes::from_static(b"k"));
+        assert!(!g.slot_index.contains_key(&slot));
+    }
+
+    #[tokio::test]
+    async fn test_clear_resets_state() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"a"), make_sv("1"));
+        g.put(Bytes::from_static(b"b"), make_sv("2"));
+        g.add_tags_for_key(
+            Bytes::from_static(b"a"),
+            &[Bytes::from_static(b"t1"), Bytes::from_static(b"t2")],
+        );
+        g.clear();
+        assert!(shard.key_count.load(Ordering::Relaxed) == 0);
+        assert!(shard.current_memory.load(Ordering::Relaxed) == 0);
+        assert!(g.tag_index.is_empty());
+        assert!(g.slot_index.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_or_insert_with_mut_inserts_once() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        let v = g.get_or_insert_with_mut(Bytes::from_static(b"k"), || make_sv("v1"));
+        assert_eq!(v.size, 2);
+        // Second call returns the same value, not re-inserted.
+        let v = g.get_or_insert_with_mut(Bytes::from_static(b"k"), || make_sv("different"));
+        assert_eq!(v.size, 2); // still "v1"
+        assert_eq!(shard.key_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_add_and_get_tags() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("v"));
+        g.add_tags_for_key(
+            Bytes::from_static(b"k"),
+            &[Bytes::from_static(b"alpha"), Bytes::from_static(b"beta")],
+        );
+        let tags = g.get_tags_for_key(&Bytes::from_static(b"k"));
+        assert_eq!(tags.len(), 2);
+        assert!(tags.contains(&Bytes::from_static(b"alpha")));
+        assert!(tags.contains(&Bytes::from_static(b"beta")));
+    }
+
+    #[tokio::test]
+    async fn test_add_empty_tags_is_noop() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("v"));
+        g.add_tags_for_key(Bytes::from_static(b"k"), &[]);
+        assert!(g.get_tags_for_key(&Bytes::from_static(b"k")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_pop_removes_key_from_all_tags() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("v"));
+        g.add_tags_for_key(
+            Bytes::from_static(b"k"),
+            &[Bytes::from_static(b"t1"), Bytes::from_static(b"t2")],
+        );
+        g.pop(&Bytes::from_static(b"k"));
+        // After popping, no tag should reference this key.
+        assert!(g.get_tags_for_key(&Bytes::from_static(b"k")).is_empty());
+        // Empty tag sets are pruned from the index.
+        assert!(g.tag_index.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_update_memory_positive_and_negative() {
+        let shard = fresh_shard();
+        shard.update_memory(100);
+        assert_eq!(shard.current_memory.load(Ordering::Relaxed), 100);
+        shard.update_memory(-40);
+        assert_eq!(shard.current_memory.load(Ordering::Relaxed), 60);
+    }
+
+    #[tokio::test]
+    async fn test_iter_returns_all_entries() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"a"), make_sv("1"));
+        g.put(Bytes::from_static(b"b"), make_sv("22"));
+        let keys: Vec<Bytes> = g.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&Bytes::from_static(b"a")));
+        assert!(keys.contains(&Bytes::from_static(b"b")));
+    }
+
+    #[tokio::test]
+    async fn test_get_mut_updates_lfu() {
+        let shard = fresh_shard();
+        let mut g = shard.entries.lock().await;
+        g.put(Bytes::from_static(b"k"), make_sv("v"));
+        let initial_counter = g.peek(&Bytes::from_static(b"k")).unwrap().lfu.counter;
+        // get_mut bumps the LFU counter (statistically).
+        let _ = g.get_mut(&Bytes::from_static(b"k"));
+        // We can't guarantee it always increments, but it must not decrease.
+        let new_counter = g.peek(&Bytes::from_static(b"k")).unwrap().lfu.counter;
+        assert!(new_counter >= initial_counter);
+    }
+}

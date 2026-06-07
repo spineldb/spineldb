@@ -131,3 +131,56 @@ impl CommandSpec for SrandMember {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_srandmember_parses_key_only() {
+        let c = SrandMember::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.count, None);
+    }
+
+    #[test]
+    fn test_srandmember_parses_with_positive_count() {
+        let c = SrandMember::parse(&[bs("k"), bs("3")]).unwrap();
+        assert_eq!(c.count, Some(3));
+    }
+
+    #[test]
+    fn test_srandmember_parses_with_negative_count() {
+        let c = SrandMember::parse(&[bs("k"), bs("-2")]).unwrap();
+        assert_eq!(c.count, Some(-2));
+    }
+
+    #[test]
+    fn test_srandmember_with_no_args_is_error() {
+        let r = SrandMember::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_srandmember_with_too_many_args_is_error() {
+        let r = SrandMember::parse(&[bs("k"), bs("3"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_srandmember_with_non_integer_count_is_error() {
+        let r = SrandMember::parse(&[bs("k"), bs("all")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_srandmember_to_resp_args_round_trips() {
+        let c = SrandMember::parse(&[bs("k"), bs("5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"5")]);
+    }
+}

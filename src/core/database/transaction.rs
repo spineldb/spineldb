@@ -113,3 +113,101 @@ impl Db {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transaction_state_default() {
+        let s = TransactionState::default();
+        assert!(!s.in_transaction);
+        assert!(!s.has_error);
+        assert!(s.commands.is_empty());
+        assert!(s.watched_keys.is_empty());
+    }
+
+    #[test]
+    fn test_transaction_state_clone_preserves_data() {
+        let mut s = TransactionState {
+            in_transaction: true,
+            ..Default::default()
+        };
+        s.watched_keys.insert(Bytes::from_static(b"k"), Some(7));
+        let cloned = s.clone();
+        assert!(cloned.in_transaction);
+        assert_eq!(cloned.watched_keys.get(&Bytes::from_static(b"k")), Some(&Some(7)));
+    }
+
+    #[test]
+    fn test_take_transaction_state_returns_none_for_unknown_session() {
+        let db = Db::new();
+        assert!(db.take_transaction_state(999).is_none());
+    }
+
+    #[test]
+    fn test_discard_transaction_for_unknown_session_is_ok() {
+        // Per spec, DISCARD without MULTI is not an error.
+        let db = Db::new();
+        assert!(db.discard_transaction(999).is_ok());
+    }
+
+    #[test]
+    fn test_queue_command_without_multi_is_error() {
+        let db = Db::new();
+        // No MULTI was called for this session.
+        let r = db.queue_command_in_tx(1, Command::Multi);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_start_transaction_sets_in_transaction_flag() {
+        let db = Db::new();
+        db.start_transaction(42);
+        let state = db.take_transaction_state(42).unwrap();
+        assert!(state.in_transaction);
+    }
+
+    #[test]
+    fn test_start_transaction_clears_existing_commands() {
+        let db = Db::new();
+        db.start_transaction(1);
+        // Queue a command (this would normally require a prior MULTI, but we
+        // bypass via direct manipulation for this test).
+        db.start_transaction(1);
+        let state = db.take_transaction_state(1).unwrap();
+        assert!(state.commands.is_empty());
+    }
+
+    #[test]
+    fn test_start_transaction_resets_has_error_flag() {
+        let db = Db::new();
+        // Manually set has_error to true.
+        db.tx_states.insert(1, TransactionState {
+            in_transaction: true,
+            has_error: true,
+            ..Default::default()
+        });
+        db.start_transaction(1);
+        let state = db.take_transaction_state(1).unwrap();
+        assert!(!state.has_error, "start_transaction must reset has_error");
+    }
+
+    #[test]
+    fn test_take_transaction_state_removes_entry() {
+        let db = Db::new();
+        db.start_transaction(1);
+        assert!(db.take_transaction_state(1).is_some());
+        // Second call returns None because the state was removed.
+        assert!(db.take_transaction_state(1).is_none());
+    }
+
+    #[test]
+    fn test_discard_transaction_removes_entry() {
+        let db = Db::new();
+        db.start_transaction(1);
+        db.discard_transaction(1).unwrap();
+        // After DISCARD, the state is gone.
+        assert!(db.take_transaction_state(1).is_none());
+    }
+}

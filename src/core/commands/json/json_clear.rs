@@ -131,3 +131,56 @@ impl CommandSpec for JsonClear {
         vec![self.key.clone(), self.path.clone().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_clear_parses() {
+        let c = JsonClear::parse(&[bs("k"), bs("$.a")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.a");
+    }
+
+    #[test]
+    fn test_json_clear_with_root_path() {
+        let c = JsonClear::parse(&[bs("k"), bs("$")]).unwrap();
+        assert_eq!(c.path, "$");
+    }
+
+    #[test]
+    fn test_json_clear_too_few_args_is_error() {
+        let r = JsonClear::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_clear_too_many_args_is_error() {
+        let r = JsonClear::parse(&[bs("k"), bs("$.a"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_clear_no_args_is_error() {
+        let r = JsonClear::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_clear_with_non_bulk_key_is_wrong_type() {
+        let r = JsonClear::parse(&[RespFrame::Integer(1), bs("$.a")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_clear_to_resp_args_round_trips() {
+        let c = JsonClear::parse(&[bs("k"), bs("$.a")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.a")]);
+    }
+}

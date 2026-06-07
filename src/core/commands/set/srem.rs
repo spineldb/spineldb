@@ -106,3 +106,38 @@ impl CommandSpec for Srem {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_srem_parses_key_and_members() {
+        let c = Srem::parse(&[bs("k"), bs("m1"), bs("m2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.members.len(), 2);
+    }
+
+    #[test]
+    fn test_srem_with_too_few_args_is_error() {
+        let r = Srem::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_srem_with_non_bulk_key_is_wrong_type() {
+        let r = Srem::parse(&[RespFrame::Integer(1), bs("m")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_srem_to_resp_args_round_trips() {
+        let c = Srem::parse(&[bs("k"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+    }
+}

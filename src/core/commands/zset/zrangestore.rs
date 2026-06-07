@@ -245,3 +245,105 @@ impl CommandSpec for ZRangeStore {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zrangestore_parses_dest_src_min_max() {
+        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1")]).unwrap();
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.source, Bytes::from_static(b"src"));
+        assert_eq!(c.min_str, "0");
+        assert_eq!(c.max_str, "-1");
+        assert!(!c.rev);
+        assert_eq!(c.limit, None);
+    }
+
+    #[test]
+    fn test_zrangestore_parses_byscore() {
+        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("1"), bs("10"), bs("BYSCORE")])
+            .unwrap();
+        assert!(matches!(c.range_type, RangeType::Score));
+    }
+
+    #[test]
+    fn test_zrangestore_parses_bylex() {
+        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("[a"), bs("[b"), bs("BYLEX")])
+            .unwrap();
+        assert!(matches!(c.range_type, RangeType::Lex));
+    }
+
+    #[test]
+    fn test_zrangestore_parses_rev() {
+        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1"), bs("REV")]).unwrap();
+        assert!(c.rev);
+    }
+
+    #[test]
+    fn test_zrangestore_parses_limit() {
+        let c = ZRangeStore::parse(&[
+            bs("dst"),
+            bs("src"),
+            bs("0"),
+            bs("-1"),
+            bs("LIMIT"),
+            bs("0"),
+            bs("5"),
+        ])
+        .unwrap();
+        assert_eq!(c.limit, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_zrangestore_options_case_insensitive() {
+        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1"), bs("byscore")])
+            .unwrap();
+        assert!(matches!(c.range_type, RangeType::Score));
+    }
+
+    #[test]
+    fn test_zrangestore_with_too_few_args_is_error() {
+        let r = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zrangestore_with_unknown_option_is_syntax_error() {
+        let r = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1"), bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zrangestore_with_limit_missing_args_is_syntax_error() {
+        let r = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1"), bs("LIMIT")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zrangestore_to_resp_args_with_all_options() {
+        let c = ZRangeStore::parse(&[
+            bs("dst"),
+            bs("src"),
+            bs("1"),
+            bs("10"),
+            bs("BYSCORE"),
+            bs("REV"),
+            bs("LIMIT"),
+            bs("0"),
+            bs("5"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"dst"));
+        assert_eq!(args[1], Bytes::from_static(b"src"));
+        assert_eq!(args[4], Bytes::from_static(b"BYSCORE"));
+        assert_eq!(args[5], Bytes::from_static(b"REV"));
+        assert_eq!(args[6], Bytes::from_static(b"LIMIT"));
+    }
+}

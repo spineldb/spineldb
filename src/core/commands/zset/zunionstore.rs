@@ -131,3 +131,94 @@ impl CommandSpec for ZUnionStore {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zunionstore_parses_dest_numkeys_keys() {
+        let c = ZUnionStore::parse(&[bs("dst"), bs("2"), bs("k1"), bs("k2")]).unwrap();
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.keys.len(), 2);
+        // Default weights are 1.0 per key.
+        assert_eq!(c.weights, vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_zunionstore_parses_with_weights() {
+        let c = ZUnionStore::parse(&[
+            bs("dst"),
+            bs("2"),
+            bs("k1"),
+            bs("k2"),
+            bs("WEIGHTS"),
+            bs("1.5"),
+            bs("2.0"),
+        ])
+        .unwrap();
+        assert_eq!(c.weights.len(), 2);
+        assert!((c.weights[0] - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_zunionstore_parses_with_aggregate_min() {
+        let c = ZUnionStore::parse(&[bs("dst"), bs("1"), bs("k1"), bs("AGGREGATE"), bs("MIN")])
+            .unwrap();
+        assert!(matches!(c.aggregate, Aggregate::Min));
+    }
+
+    #[test]
+    fn test_zunionstore_parses_with_aggregate_max() {
+        let c = ZUnionStore::parse(&[bs("dst"), bs("1"), bs("k1"), bs("AGGREGATE"), bs("MAX")])
+            .unwrap();
+        assert!(matches!(c.aggregate, Aggregate::Max));
+    }
+
+    #[test]
+    fn test_zunionstore_with_too_few_args_is_error() {
+        let r = ZUnionStore::parse(&[bs("dst")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zunionstore_with_zero_numkeys_is_syntax_error() {
+        let r = ZUnionStore::parse(&[bs("dst"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zunionstore_with_fewer_keys_than_numkeys_is_syntax_error() {
+        let r = ZUnionStore::parse(&[bs("dst"), bs("3"), bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zunionstore_with_non_integer_numkeys_is_error() {
+        let r = ZUnionStore::parse(&[bs("dst"), bs("all"), bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_zunionstore_to_resp_args_round_trips() {
+        let c = ZUnionStore::parse(&[bs("dst"), bs("1"), bs("k1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"dst"));
+        assert_eq!(args[1], Bytes::from_static(b"1"));
+        assert_eq!(args[2], Bytes::from_static(b"k1"));
+    }
+
+    #[test]
+    fn test_zunionstore_to_resp_args_with_aggregate() {
+        let c = ZUnionStore::parse(&[bs("dst"), bs("1"), bs("k1"), bs("AGGREGATE"), bs("MAX")])
+            .unwrap();
+        let args = c.to_resp_args();
+        assert!(args.contains(&Bytes::from_static(b"AGGREGATE")));
+        assert!(args.contains(&Bytes::from_static(b"MAX")));
+    }
+}

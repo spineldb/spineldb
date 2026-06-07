@@ -5,6 +5,7 @@
 
 use crate::core::SpinelDBError;
 use bytes::{Buf, Bytes, BytesMut};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::codec::{Decoder, Encoder};
 
 /// The CRLF (Carriage Return, Line Feed) sequence used to terminate lines in RESP.
@@ -13,8 +14,25 @@ const CRLF_LEN: usize = 2;
 
 // Protocol-level limits to prevent denial-of-service attacks.
 const MAX_FRAME_ELEMENTS: usize = 1_024 * 1_024; // Max elements in an array.
-const MAX_BULK_STRING_SIZE: usize = 512 * 1024 * 1024; // 512MB max bulk string size.
+const DEFAULT_MAX_BULK_STRING_SIZE: usize = 512 * 1024 * 1024; // 512MB default.
 const MAX_RECURSION_DEPTH: usize = 256; // Limit recursion to prevent stack overflow.
+/// Hard cap. Even when configured, the user can never raise the bulk string
+/// limit above this value.
+const ABSOLUTE_MAX_BULK_STRING_SIZE: usize = 16 * 1024 * 1024 * 1024; // 16 GiB.
+
+/// The currently active maximum bulk string size, in bytes.
+///
+/// This is an atomic so that `CONFIG SET safety.max_bulk_string_size <n>`
+/// can take effect without rebuilding the codec. The default value is
+/// [`DEFAULT_MAX_BULK_STRING_SIZE`].
+pub static MAX_BULK_STRING_SIZE: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_BULK_STRING_SIZE);
+
+/// Configures the active maximum bulk string size. Values above
+/// [`ABSOLUTE_MAX_BULK_STRING_SIZE`] are clamped.
+pub fn set_max_bulk_string_size(bytes: usize) {
+    let clamped = bytes.clamp(1, ABSOLUTE_MAX_BULK_STRING_SIZE);
+    MAX_BULK_STRING_SIZE.store(clamped, Ordering::Relaxed);
+}
 
 /// An enum representing a single frame in the RESP protocol.
 /// This is the low-level representation of data exchanged between the client and server.
@@ -199,7 +217,7 @@ impl RespFrameCodec {
         }
 
         let str_len = str_len as usize;
-        if str_len > MAX_BULK_STRING_SIZE {
+        if str_len > MAX_BULK_STRING_SIZE.load(Ordering::Relaxed) {
             return Err(SpinelDBError::SyntaxError);
         }
 
@@ -245,4 +263,320 @@ impl RespFrameCodec {
 /// Helper function to find the next CRLF sequence in a buffer.
 fn find_crlf(src: &[u8]) -> Option<usize> {
     src.windows(CRLF_LEN).position(|window| window == CRLF)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::SpinelDBError;
+    use bytes::BytesMut;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the global `MAX_BULK_STRING_SIZE` so they
+    /// do not race with any test that depends on its default value.
+    static MAX_BULK_STRING_SIZE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn decode_one(input: &[u8]) -> Result<Option<RespFrame>, SpinelDBError> {
+        let mut buf = BytesMut::from(input);
+        RespFrameCodec.decode(&mut buf)
+    }
+
+    fn encode(frame: RespFrame) -> Vec<u8> {
+        let mut buf = BytesMut::new();
+        RespFrameCodec.encode(frame, &mut buf).unwrap();
+        buf.to_vec()
+    }
+
+    #[test]
+    fn test_encode_decode_simple_string() {
+        let frame = RespFrame::SimpleString("OK".to_string());
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"+OK\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_error() {
+        let frame = RespFrame::Error("ERR something went wrong".to_string());
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"-ERR something went wrong\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_integer() {
+        for n in [0i64, 1, -1, 42, -42, i64::MAX, i64::MIN] {
+            let frame = RespFrame::Integer(n);
+            let encoded = encode(frame.clone());
+            assert_eq!(encoded, format!(":{n}\r\n").as_bytes());
+            let decoded = decode_one(&encoded).unwrap().unwrap();
+            assert_eq!(decoded, frame);
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_bulk_string() {
+        let frame = RespFrame::BulkString(Bytes::from_static(b"hello"));
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"$5\r\nhello\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_empty_bulk_string() {
+        let frame = RespFrame::BulkString(Bytes::new());
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"$0\r\n\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_null_bulk_string() {
+        let frame = RespFrame::Null;
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"$-1\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_null_array() {
+        let frame = RespFrame::NullArray;
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"*-1\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_empty_array() {
+        let frame = RespFrame::Array(vec![]);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"*0\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_nested_array() {
+        let frame = RespFrame::Array(vec![
+            RespFrame::BulkString(Bytes::from_static(b"GET")),
+            RespFrame::BulkString(Bytes::from_static(b"mykey")),
+        ]);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_deeply_nested_array() {
+        let frame = RespFrame::Array(vec![
+            RespFrame::Integer(1),
+            RespFrame::Array(vec![
+                RespFrame::Integer(2),
+                RespFrame::Array(vec![RespFrame::Integer(3)]),
+            ]),
+        ]);
+        let encoded = encode(frame.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_encode_decode_array_with_mixed_types() {
+        let frame = RespFrame::Array(vec![
+            RespFrame::SimpleString("PONG".to_string()),
+            RespFrame::Integer(42),
+            RespFrame::BulkString(Bytes::from_static(b"data")),
+            RespFrame::Null,
+            RespFrame::NullArray,
+        ]);
+        let encoded = encode(frame.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_decode_empty_buffer_returns_none() {
+        let result = decode_one(b"").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_incomplete_returns_none() {
+        // Just the prefix
+        let result = decode_one(b"$5").unwrap();
+        assert!(result.is_none());
+        // Prefix and length but no data
+        let result = decode_one(b"$5\r\n").unwrap();
+        assert!(result.is_none());
+        // Prefix, length, partial data
+        let result = decode_one(b"$5\r\nhel").unwrap();
+        assert!(result.is_none());
+        // Prefix, length, data, but no trailing CRLF
+        let result = decode_one(b"$5\r\nhello").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_invalid_type_byte_returns_syntax_error() {
+        let result = decode_one(b"?garbage\r\n");
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_non_integer_bulk_string_length() {
+        let result = decode_one(b"$abc\r\n");
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_missing_crlf_after_bulk_data() {
+        let result = decode_one(b"$3\r\nfooXX");
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_non_integer_array_length() {
+        let result = decode_one(b"*xyz\r\n");
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_non_integer_value() {
+        let result = decode_one(b":notanumber\r\n");
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_array_too_large() {
+        let huge = format!("*{}\r\n", MAX_FRAME_ELEMENTS + 1);
+        let result = decode_one(huge.as_bytes());
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_bulk_string_exceeds_configured_limit() {
+        // Temporarily lower the cap and ensure that oversized bulk strings are rejected.
+        // We pick a limit (8) that is above the size of all bulk strings used
+        // by other tests in this module (the largest is 6 bytes), so we don't
+        // disrupt parallel tests.
+        let _guard = MAX_BULK_STRING_SIZE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = MAX_BULK_STRING_SIZE.load(Ordering::Relaxed);
+        set_max_bulk_string_size(8);
+        let r = decode_one(b"$100\r\n");
+        set_max_bulk_string_size(original);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_decode_recursion_depth_limit() {
+        // Build a deeply nested array just past the recursion limit.
+        let mut input = String::new();
+        let depth = MAX_RECURSION_DEPTH + 5;
+        for _ in 0..depth {
+            input.push_str("*1\r\n");
+        }
+        input.push_str("$1\r\nX\r\n");
+        let result = decode_one(input.as_bytes());
+        assert!(matches!(result, Err(SpinelDBError::InvalidRequest(_))));
+    }
+
+    #[test]
+    fn test_decode_multiple_frames_in_sequence() {
+        // The decoder should return the first complete frame and leave the rest in the buffer.
+        let mut buf = BytesMut::from(&b"+OK\r\n:42\r\n"[..]);
+        let first = RespFrameCodec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(first, RespFrame::SimpleString("OK".to_string()));
+        let second = RespFrameCodec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(second, RespFrame::Integer(42));
+        assert!(RespFrameCodec.decode(&mut buf).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_encode_to_vec_helper() {
+        let frame = RespFrame::Array(vec![RespFrame::BulkString(Bytes::from_static(b"PING"))]);
+        let bytes = frame.encode_to_vec().unwrap();
+        assert_eq!(bytes, b"*1\r\n$4\r\nPING\r\n");
+    }
+
+    #[test]
+    fn test_set_max_bulk_string_size_clamps_to_absolute_max() {
+        // Setting an absurdly large value should clamp to ABSOLUTE_MAX_BULK_STRING_SIZE.
+        // Restore the previous value so we don't break parallel tests.
+        let _guard = MAX_BULK_STRING_SIZE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = MAX_BULK_STRING_SIZE.load(Ordering::Relaxed);
+        set_max_bulk_string_size(usize::MAX);
+        assert_eq!(
+            MAX_BULK_STRING_SIZE.load(Ordering::Relaxed),
+            ABSOLUTE_MAX_BULK_STRING_SIZE
+        );
+        set_max_bulk_string_size(original);
+    }
+
+    #[test]
+    fn test_set_max_bulk_string_size_clamps_to_minimum() {
+        // Setting a value of 0 should be clamped to at least 1.
+        // Restore the previous value so we don't break parallel tests.
+        let _guard = MAX_BULK_STRING_SIZE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = MAX_BULK_STRING_SIZE.load(Ordering::Relaxed);
+        set_max_bulk_string_size(0);
+        assert!(MAX_BULK_STRING_SIZE.load(Ordering::Relaxed) >= 1);
+        set_max_bulk_string_size(original);
+    }
+
+    #[test]
+    fn test_bulk_string_with_binary_data() {
+        let payload = Bytes::from_static(&[0u8, 1, 2, 3, 0xff, 0xfe]);
+        let frame = RespFrame::BulkString(payload.clone());
+        let encoded = encode(frame.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+        assert_eq!(decoded, RespFrame::BulkString(payload));
+    }
+
+    #[test]
+    fn test_unicode_bulk_string() {
+        // Use a small multibyte string to verify that non-ASCII payloads
+        // round-trip cleanly through the bulk-string codec.
+        let payload: Vec<u8> = vec![b'h', 0xC3, 0xA9, b'l', b'l', b'o'];
+        assert_eq!(payload.len(), 6);
+        let frame = RespFrame::BulkString(Bytes::from(payload.clone()));
+        let encoded = encode(frame.clone());
+        // $ + len + CRLF + data + CRLF = 12 bytes total.
+        assert_eq!(encoded.len(), 12);
+        // Verify the framing structure.
+        assert_eq!(&encoded[0..1], b"$");
+        assert_eq!(&encoded[1..2], b"6");
+        assert_eq!(&encoded[2..4], b"\r\n");
+        assert_eq!(&encoded[4..10], &payload[..]);
+        assert_eq!(&encoded[10..12], b"\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_bulk_string_with_crlf_in_payload() {
+        // A bulk string's content may contain CR/LF bytes. The decoder must
+        // not mistake them for the frame terminator: it uses the length prefix
+        // to know exactly when the payload ends.
+        let payload = Bytes::copy_from_slice(&[0x0D, 0x0A, b'a', b'b', 0x0D, 0x0A]);
+        let frame = RespFrame::BulkString(payload.clone());
+        let encoded = encode(frame.clone());
+        // 1 ($) + 1 (1) + 2 (CRLF) + 6 (data) + 2 (CRLF) = 12 bytes.
+        assert_eq!(encoded.len(), 12);
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
 }

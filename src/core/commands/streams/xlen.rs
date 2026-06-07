@@ -80,3 +80,42 @@ impl CommandSpec for XLen {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xlen_parses_key() {
+        let c = XLen::parse(&[bs("mystream")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mystream"));
+    }
+
+    #[test]
+    fn test_xlen_with_no_args_is_error() {
+        let r = XLen::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xlen_with_too_many_args_is_error() {
+        let r = XLen::parse(&[bs("k"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xlen_with_non_bulk_key_is_wrong_type() {
+        let r = XLen::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_xlen_to_resp_args_round_trips() {
+        let c = XLen::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.to_resp_args(), vec![Bytes::from_static(b"k")]);
+    }
+}

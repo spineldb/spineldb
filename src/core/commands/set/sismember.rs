@@ -76,3 +76,46 @@ impl CommandSpec for Sismember {
         vec![self.key.clone(), self.member.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_sismember_parses_key_and_member() {
+        let c = Sismember::parse(&[bs("k"), bs("m")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.member, Bytes::from_static(b"m"));
+    }
+
+    #[test]
+    fn test_sismember_with_too_few_args_is_error() {
+        let r = Sismember::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sismember_with_too_many_args_is_error() {
+        let r = Sismember::parse(&[bs("k"), bs("m"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sismember_with_non_bulk_key_is_wrong_type() {
+        let r = Sismember::parse(&[RespFrame::Integer(1), bs("m")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_sismember_to_resp_args_round_trips() {
+        let c = Sismember::parse(&[bs("k"), bs("m")]).unwrap();
+        assert_eq!(
+            c.to_resp_args(),
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"m")]
+        );
+    }
+}

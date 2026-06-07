@@ -312,3 +312,115 @@ fn build_full_stream_info_response(stream: &Stream) -> Result<RespValue, SpinelD
 
     Ok(RespValue::Array(info))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xinfo_stream_subcommand() {
+        let c = XInfo::parse(&[bs("STREAM"), bs("k")]).unwrap();
+        match c.subcommand {
+            XInfoSubcommand::Stream { full } => assert!(!full),
+            _ => panic!("expected Stream"),
+        }
+    }
+
+    #[test]
+    fn test_xinfo_stream_full_subcommand() {
+        let c = XInfo::parse(&[bs("STREAM"), bs("k"), bs("FULL")]).unwrap();
+        match c.subcommand {
+            XInfoSubcommand::Stream { full } => assert!(full),
+            _ => panic!("expected Stream full"),
+        }
+    }
+
+    #[test]
+    fn test_xinfo_groups_subcommand() {
+        let c = XInfo::parse(&[bs("GROUPS"), bs("k")]).unwrap();
+        assert!(matches!(c.subcommand, XInfoSubcommand::Groups));
+    }
+
+    #[test]
+    fn test_xinfo_consumers_subcommand() {
+        let c = XInfo::parse(&[bs("CONSUMERS"), bs("k"), bs("g1")]).unwrap();
+        match c.subcommand {
+            XInfoSubcommand::Consumers { group_name } => {
+                assert_eq!(group_name, Bytes::from_static(b"g1"));
+            }
+            _ => panic!("expected Consumers"),
+        }
+    }
+
+    #[test]
+    fn test_xinfo_consumers_without_group_is_error() {
+        let r = XInfo::parse(&[bs("CONSUMERS"), bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xinfo_unknown_subcommand_is_syntax_error() {
+        let r = XInfo::parse(&[bs("FOO"), bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xinfo_too_few_args_is_error() {
+        let r = XInfo::parse(&[bs("STREAM")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xinfo_no_args_is_error() {
+        let r = XInfo::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xinfo_subcommand_case_insensitive() {
+        let c = XInfo::parse(&[bs("stream"), bs("k")]).unwrap();
+        assert!(matches!(c.subcommand, XInfoSubcommand::Stream { .. }));
+    }
+
+    #[test]
+    fn test_xinfo_stream_full_case_insensitive() {
+        let c = XInfo::parse(&[bs("STREAM"), bs("k"), bs("full")]).unwrap();
+        match c.subcommand {
+            XInfoSubcommand::Stream { full } => assert!(full),
+            _ => panic!("expected Stream full"),
+        }
+    }
+
+    #[test]
+    fn test_xinfo_to_resp_args_round_trips_stream() {
+        let c = XInfo::parse(&[bs("STREAM"), bs("k")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"STREAM"), Bytes::from_static(b"k")]);
+    }
+
+    #[test]
+    fn test_xinfo_to_resp_args_round_trips_stream_full() {
+        let c = XInfo::parse(&[bs("STREAM"), bs("k"), bs("FULL")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"STREAM"),
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"FULL"),
+        ]);
+    }
+
+    #[test]
+    fn test_xinfo_to_resp_args_round_trips_consumers() {
+        let c = XInfo::parse(&[bs("CONSUMERS"), bs("k"), bs("g1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"CONSUMERS"),
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"g1"),
+        ]);
+    }
+}

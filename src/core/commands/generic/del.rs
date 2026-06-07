@@ -173,3 +173,51 @@ impl CommandSpec for Del {
         self.keys.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_del_with_single_key() {
+        let d = Del::parse(&[bs("k1")]).unwrap();
+        assert_eq!(d.keys, vec![Bytes::from_static(b"k1")]);
+    }
+
+    #[test]
+    fn test_del_with_many_keys() {
+        let d = Del::parse(&[bs("a"), bs("b"), bs("c")]).unwrap();
+        assert_eq!(d.keys.len(), 3);
+        assert_eq!(d.keys[0], Bytes::from_static(b"a"));
+        assert_eq!(d.keys[2], Bytes::from_static(b"c"));
+    }
+
+    #[test]
+    fn test_del_with_no_args_is_error() {
+        let r = Del::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_del_with_non_bulk_is_wrong_type() {
+        let r = Del::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_del_default_is_empty() {
+        let d = Del::default();
+        assert!(d.keys.is_empty());
+    }
+
+    #[test]
+    fn test_del_to_resp_args_round_trips() {
+        let d = Del::parse(&[bs("x"), bs("y")]).unwrap();
+        let args = d.to_resp_args();
+        assert_eq!(args, d.keys);
+    }
+}

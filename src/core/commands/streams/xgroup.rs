@@ -443,3 +443,140 @@ impl CommandSpec for XGroup {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xgroup_create() {
+        let c = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1"), bs("0")]).unwrap();
+        match c.subcommand {
+            XGroupSubcommand::Create { key, group_name, id, mkstream } => {
+                assert_eq!(key, Bytes::from_static(b"k"));
+                assert_eq!(group_name, Bytes::from_static(b"g1"));
+                assert_eq!(id, StreamId::new(0, 0));
+                assert!(!mkstream);
+            }
+            _ => panic!("expected Create"),
+        }
+    }
+
+    #[test]
+    fn test_xgroup_create_with_mkstream() {
+        let c = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1"), bs("$"), bs("MKSTREAM")]).unwrap();
+        match c.subcommand {
+            XGroupSubcommand::Create { id, mkstream, .. } => {
+                assert_eq!(id, StreamId::new(u64::MAX, u64::MAX));
+                assert!(mkstream);
+            }
+            _ => panic!("expected Create"),
+        }
+    }
+
+    #[test]
+    fn test_xgroup_create_dollar_id_serialized_back() {
+        let c = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1"), bs("$")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[3], Bytes::from_static(b"$"));
+    }
+
+    #[test]
+    fn test_xgroup_create_with_unknown_extra_arg_is_syntax_error() {
+        let r = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1"), bs("0"), bs("EXTRA")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xgroup_create_too_few_args_is_error() {
+        let r = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xgroup_setid() {
+        let c = XGroup::parse(&[bs("SETID"), bs("k"), bs("g1"), bs("1-0")]).unwrap();
+        match c.subcommand {
+            XGroupSubcommand::SetId { key, group_name, id } => {
+                assert_eq!(key, Bytes::from_static(b"k"));
+                assert_eq!(group_name, Bytes::from_static(b"g1"));
+                assert_eq!(id, StreamId::new(1, 0));
+            }
+            _ => panic!("expected SetId"),
+        }
+    }
+
+    #[test]
+    fn test_xgroup_setid_wrong_arg_count() {
+        let r = XGroup::parse(&[bs("SETID"), bs("k"), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xgroup_destroy() {
+        let c = XGroup::parse(&[bs("DESTROY"), bs("k"), bs("g1")]).unwrap();
+        match c.subcommand {
+            XGroupSubcommand::Destroy { key, group_name } => {
+                assert_eq!(key, Bytes::from_static(b"k"));
+                assert_eq!(group_name, Bytes::from_static(b"g1"));
+            }
+            _ => panic!("expected Destroy"),
+        }
+    }
+
+    #[test]
+    fn test_xgroup_destroy_wrong_arg_count() {
+        let r = XGroup::parse(&[bs("DESTROY"), bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xgroup_delconsumer() {
+        let c = XGroup::parse(&[bs("DELCONSUMER"), bs("k"), bs("g1"), bs("c1")]).unwrap();
+        match c.subcommand {
+            XGroupSubcommand::DelConsumer { key, group_name, consumer_name } => {
+                assert_eq!(key, Bytes::from_static(b"k"));
+                assert_eq!(group_name, Bytes::from_static(b"g1"));
+                assert_eq!(consumer_name, Bytes::from_static(b"c1"));
+            }
+            _ => panic!("expected DelConsumer"),
+        }
+    }
+
+    #[test]
+    fn test_xgroup_delconsumer_wrong_arg_count() {
+        let r = XGroup::parse(&[bs("DELCONSUMER"), bs("k"), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xgroup_unknown_subcommand_is_error() {
+        let r = XGroup::parse(&[bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_xgroup_with_no_args_is_error() {
+        let r = XGroup::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xgroup_subcommand_case_insensitive() {
+        let c = XGroup::parse(&[bs("destroy"), bs("k"), bs("g1")]).unwrap();
+        assert!(matches!(c.subcommand, XGroupSubcommand::Destroy { .. }));
+    }
+
+    #[test]
+    fn test_xgroup_create_mkstream_case_insensitive() {
+        let c = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1"), bs("0"), bs("mkstream")]).unwrap();
+        match c.subcommand {
+            XGroupSubcommand::Create { mkstream, .. } => assert!(mkstream),
+            _ => panic!("expected Create"),
+        }
+    }
+}

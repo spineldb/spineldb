@@ -370,3 +370,186 @@ impl CommandSpec for XReadGroup {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xreadgroup_parses_required_args() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs(">"),
+        ])
+        .unwrap();
+        assert_eq!(c.group_name, Bytes::from_static(b"g1"));
+        assert_eq!(c.consumer_name, Bytes::from_static(b"c1"));
+        assert_eq!(c.streams.len(), 1);
+        assert_eq!(c.streams[0].0, Bytes::from_static(b"k1"));
+        assert_eq!(c.streams[0].1, GroupStreamIdSpec::New);
+    }
+
+    #[test]
+    fn test_xreadgroup_with_pending_id() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs("0-0"),
+        ])
+        .unwrap();
+        assert_eq!(c.streams[0].1, GroupStreamIdSpec::Exact(StreamId::new(0, 0)));
+    }
+
+    #[test]
+    fn test_xreadgroup_with_count() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("COUNT"),
+            bs("5"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs(">"),
+        ])
+        .unwrap();
+        assert_eq!(c.count, Some(5));
+    }
+
+    #[test]
+    fn test_xreadgroup_with_block() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("BLOCK"),
+            bs("1000"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs(">"),
+        ])
+        .unwrap();
+        assert_eq!(c.block_timeout, Some(Duration::from_millis(1000)));
+    }
+
+    #[test]
+    fn test_xreadgroup_with_noack() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("NOACK"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs(">"),
+        ])
+        .unwrap();
+        assert!(c.noack);
+    }
+
+    #[test]
+    fn test_xreadgroup_multiple_streams() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs("k2"),
+            bs(">"),
+            bs("0"),
+        ])
+        .unwrap();
+        assert_eq!(c.streams.len(), 2);
+        assert_eq!(c.streams[0].1, GroupStreamIdSpec::New);
+        assert_eq!(c.streams[1].1, GroupStreamIdSpec::Exact(StreamId::new(0, 0)));
+    }
+
+    #[test]
+    fn test_xreadgroup_missing_group_keyword_is_error() {
+        let r = XReadGroup::parse(&[bs("g1"), bs("c1"), bs("STREAMS"), bs("k1"), bs(">")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xreadgroup_too_few_args_is_error() {
+        let r = XReadGroup::parse(&[bs("GROUP"), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xreadgroup_no_streams_keyword_is_error() {
+        let r = XReadGroup::parse(&[bs("GROUP"), bs("g1"), bs("c1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xreadgroup_unknown_option_is_error() {
+        let r = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("FOO"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs(">"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xreadgroup_count_without_value_is_syntax_error() {
+        let r = XReadGroup::parse(&[bs("GROUP"), bs("g1"), bs("c1"), bs("COUNT")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xreadgroup_invalid_id_is_error() {
+        let r = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs("invalid"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xreadgroup_to_resp_args_round_trips() {
+        let c = XReadGroup::parse(&[
+            bs("GROUP"),
+            bs("g1"),
+            bs("c1"),
+            bs("COUNT"),
+            bs("5"),
+            bs("NOACK"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs(">"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"GROUP"));
+        assert_eq!(args[1], Bytes::from_static(b"g1"));
+        assert_eq!(args[2], Bytes::from_static(b"c1"));
+        assert_eq!(args[3], Bytes::from_static(b"COUNT"));
+        assert_eq!(args[4], Bytes::from_static(b"5"));
+        assert_eq!(args[5], Bytes::from_static(b"NOACK"));
+        assert_eq!(args[6], Bytes::from_static(b"STREAMS"));
+        assert_eq!(args[7], Bytes::from_static(b"k1"));
+        assert_eq!(args[8], Bytes::from_static(b">"));
+    }
+}

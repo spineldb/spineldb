@@ -140,3 +140,50 @@ impl CommandSpec for Append {
         vec![self.key.clone(), self.value.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_append_parses_key_and_value() {
+        let a = Append::parse(&[bs("k"), bs("v")]).unwrap();
+        assert_eq!(a.key, Bytes::from_static(b"k"));
+        assert_eq!(a.value, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_append_with_empty_value() {
+        let a = Append::parse(&[bs("k"), bs("")]).unwrap();
+        assert!(a.value.is_empty());
+    }
+
+    #[test]
+    fn test_append_with_too_few_args_is_error() {
+        let r = Append::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_append_with_too_many_args_is_error() {
+        let r = Append::parse(&[bs("k"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_append_with_non_bulk_is_wrong_type() {
+        let r = Append::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_append_to_resp_args_round_trips() {
+        let a = Append::parse(&[bs("k"), bs("payload")]).unwrap();
+        let args = a.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"payload")]);
+    }
+}

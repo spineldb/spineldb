@@ -62,3 +62,28 @@ impl CommandSpec for DbSize {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_dbsize_parses_with_no_args() {
+        assert!(DbSize::parse(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_dbsize_with_any_args_is_error() {
+        let r = DbSize::parse(&[bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_dbsize_to_resp_args_is_empty() {
+        assert!(DbSize.to_resp_args().is_empty());
+    }
+}

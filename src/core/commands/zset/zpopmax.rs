@@ -78,3 +78,50 @@ impl CommandSpec for ZPopMax {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zpopmax_parses_key_only() {
+        let c = ZPopMax::parse(&[bs("z")]).unwrap();
+        assert_eq!(c.pop_cmd.key, Bytes::from_static(b"z"));
+        assert_eq!(c.pop_cmd.count, None);
+    }
+
+    #[test]
+    fn test_zpopmax_parses_with_count() {
+        let c = ZPopMax::parse(&[bs("z"), bs("2")]).unwrap();
+        assert_eq!(c.pop_cmd.count, Some(2));
+    }
+
+    #[test]
+    fn test_zpopmax_with_no_args_is_error() {
+        let r = ZPopMax::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zpopmax_with_too_many_args_is_error() {
+        let r = ZPopMax::parse(&[bs("z"), bs("2"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zpopmax_with_non_integer_count_is_error() {
+        let r = ZPopMax::parse(&[bs("z"), bs("all")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_zpopmax_to_resp_args_round_trips() {
+        let c = ZPopMax::parse(&[bs("z"), bs("1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"z"), Bytes::from_static(b"1")]);
+    }
+}

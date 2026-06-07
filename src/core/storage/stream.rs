@@ -251,3 +251,205 @@ impl Stream {
         entries_mem + groups_mem
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indexmap::IndexMap;
+
+    fn fields(pairs: &[(&[u8], &[u8])]) -> IndexMap<Bytes, Bytes> {
+        pairs
+            .iter()
+            .map(|(k, v)| (Bytes::copy_from_slice(k), Bytes::copy_from_slice(v)))
+            .collect()
+    }
+
+    fn fields_str(pairs: &[(&str, &str)]) -> IndexMap<Bytes, Bytes> {
+        pairs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    Bytes::copy_from_slice(k.as_bytes()),
+                    Bytes::copy_from_slice(v.as_bytes()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_stream_id_new_and_compare() {
+        let a = StreamId::new(100, 0);
+        let b = StreamId::new(100, 1);
+        let c = StreamId::new(101, 0);
+        assert!(a < b);
+        assert!(b < c);
+        assert!(a < c);
+    }
+
+    #[test]
+    fn test_stream_id_parse_only_timestamp() {
+        let id = "12345".parse::<StreamId>().unwrap();
+        assert_eq!(id, StreamId::new(12345, 0));
+    }
+
+    #[test]
+    fn test_stream_id_parse_with_sequence() {
+        let id = "12345-7".parse::<StreamId>().unwrap();
+        assert_eq!(id, StreamId::new(12345, 7));
+    }
+
+    #[test]
+    fn test_stream_id_parse_special_zero() {
+        let id = "0".parse::<StreamId>().unwrap();
+        assert_eq!(id, StreamId::new(0, 0));
+    }
+
+    #[test]
+    fn test_stream_id_parse_invalid() {
+        assert!("abc".parse::<StreamId>().is_err());
+        assert!("123-abc".parse::<StreamId>().is_err());
+        assert!("1-2-3".parse::<StreamId>().is_err());
+    }
+
+    #[test]
+    fn test_stream_id_display() {
+        let id = StreamId::new(100, 5);
+        assert_eq!(id.to_string(), "100-5");
+    }
+
+    #[test]
+    fn test_new_stream_is_empty() {
+        let s = Stream::new();
+        assert_eq!(s.entries.len(), 0);
+        assert_eq!(s.length, 0);
+        assert!(s.groups.is_empty());
+    }
+
+    #[test]
+    fn test_add_entry_explicit_id() {
+        let mut s = Stream::new();
+        let id = s
+            .add_entry(Some(StreamId::new(1000, 0)), fields_str(&[("k", "v")]))
+            .unwrap();
+        assert_eq!(id, StreamId::new(1000, 0));
+        assert_eq!(s.length, 1);
+        assert_eq!(s.last_generated_id, StreamId::new(1000, 0));
+    }
+
+    #[test]
+    fn test_add_entry_zero_id_rejected() {
+        let mut s = Stream::new();
+        let r = s.add_entry(Some(StreamId::new(0, 0)), fields(&[]));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_add_entry_id_not_strictly_greater_rejected() {
+        let mut s = Stream::new();
+        s.add_entry(Some(StreamId::new(1000, 0)), fields(&[]))
+            .unwrap();
+        // Same id
+        assert!(
+            s.add_entry(Some(StreamId::new(1000, 0)), fields(&[]))
+                .is_err()
+        );
+        // Lower timestamp
+        assert!(
+            s.add_entry(Some(StreamId::new(500, 0)), fields(&[]))
+                .is_err()
+        );
+        // Same timestamp, lower sequence
+        assert!(
+            s.add_entry(Some(StreamId::new(1000, 0)), fields(&[]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_add_entry_auto_id_increments_sequence() {
+        let mut s = Stream::new();
+        // Pin last_generated_id to a timestamp in the far future so the
+        // auto-id path always takes the "increment sequence" branch,
+        // regardless of `SystemTime::now()`.
+        s.last_generated_id = StreamId::new(u64::MAX, 5);
+        let id = s.add_entry(None, fields(&[])).unwrap();
+        assert_eq!(id.timestamp_ms, u64::MAX);
+        assert_eq!(id.sequence, 6);
+    }
+
+    #[test]
+    fn test_add_entry_bumps_sequence_number() {
+        let mut s = Stream::new();
+        s.last_generated_id = StreamId::new(2000, 0);
+        let before = s.sequence_number.load(Ordering::Relaxed);
+        s.add_entry(None, fields(&[])).unwrap();
+        let after = s.sequence_number.load(Ordering::Relaxed);
+        assert_eq!(after, before + 1);
+    }
+
+    #[test]
+    fn test_trim_respects_maxlen() {
+        let mut s = Stream::new();
+        s.maxlen = Some(3);
+        for i in 1..=5u64 {
+            s.add_entry(Some(StreamId::new(i, 0)), fields(&[])).unwrap();
+            s.trim();
+        }
+        assert_eq!(s.length, 3);
+        // Oldest 2 entries should be gone.
+        assert!(!s.entries.contains_key(&StreamId::new(1, 0)));
+        assert!(!s.entries.contains_key(&StreamId::new(2, 0)));
+        assert!(s.entries.contains_key(&StreamId::new(5, 0)));
+    }
+
+    #[test]
+    fn test_trim_with_no_maxlen_is_noop() {
+        let mut s = Stream::new();
+        s.add_entry(Some(StreamId::new(1, 0)), fields(&[])).unwrap();
+        s.add_entry(Some(StreamId::new(2, 0)), fields(&[])).unwrap();
+        let len_before = s.length;
+        s.trim();
+        assert_eq!(s.length, len_before);
+    }
+
+    #[test]
+    fn test_delete_returns_count() {
+        let mut s = Stream::new();
+        s.add_entry(Some(StreamId::new(1, 0)), fields(&[])).unwrap();
+        s.add_entry(Some(StreamId::new(2, 0)), fields(&[])).unwrap();
+        s.add_entry(Some(StreamId::new(3, 0)), fields(&[])).unwrap();
+        let to_delete: BTreeSet<_> = [StreamId::new(1, 0), StreamId::new(3, 0)]
+            .into_iter()
+            .collect();
+        assert_eq!(s.delete(&to_delete), 2);
+        assert_eq!(s.length, 1);
+    }
+
+    #[test]
+    fn test_delete_nonexistent_returns_zero() {
+        let mut s = Stream::new();
+        s.add_entry(Some(StreamId::new(1, 0)), fields(&[])).unwrap();
+        let to_delete: BTreeSet<_> = [StreamId::new(99, 0)].into_iter().collect();
+        assert_eq!(s.delete(&to_delete), 0);
+    }
+
+    #[test]
+    fn test_memory_usage_grows_with_entries() {
+        let mut s = Stream::new();
+        let m0 = s.memory_usage();
+        s.last_generated_id = StreamId::new(1, 0);
+        s.add_entry(None, fields_str(&[("k", "value")])).unwrap();
+        let m1 = s.memory_usage();
+        assert!(m1 > m0, "memory must grow after adding an entry");
+    }
+
+    #[test]
+    fn test_stream_entry_memory_usage() {
+        let entry = StreamEntry {
+            id: StreamId::new(1, 0),
+            fields: fields_str(&[("foo", "bar")]),
+        };
+        // foo(3) + bar(3) = 6
+        assert_eq!(entry.memory_usage(), 6);
+    }
+}

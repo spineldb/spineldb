@@ -92,3 +92,66 @@ impl CommandSpec for ZRange {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zrange_parses_key_start_stop() {
+        let c = ZRange::parse(&[bs("z"), bs("0"), bs("-1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert_eq!(c.start, 0);
+        assert_eq!(c.stop, -1);
+        assert!(!c.with_scores);
+    }
+
+    #[test]
+    fn test_zrange_parses_with_scores() {
+        let c = ZRange::parse(&[bs("z"), bs("0"), bs("5"), bs("WITHSCORES")]).unwrap();
+        assert!(c.with_scores);
+    }
+
+    #[test]
+    fn test_zrange_withscores_case_insensitive() {
+        let c = ZRange::parse(&[bs("z"), bs("0"), bs("5"), bs("withscores")]).unwrap();
+        assert!(c.with_scores);
+    }
+
+    #[test]
+    fn test_zrange_with_too_few_args_is_error() {
+        let r = ZRange::parse(&[bs("z"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zrange_with_too_many_args_is_error() {
+        let r = ZRange::parse(&[bs("z"), bs("0"), bs("5"), bs("WITHSCORES"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zrange_with_non_integer_start_is_error() {
+        let r = ZRange::parse(&[bs("z"), bs("start"), bs("5")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_zrange_to_resp_args_with_scores() {
+        let c = ZRange::parse(&[bs("z"), bs("0"), bs("5"), bs("WITHSCORES")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[3], Bytes::from_static(b"WITHSCORES"));
+    }
+
+    #[test]
+    fn test_zrange_to_resp_args_without_scores() {
+        let c = ZRange::parse(&[bs("z"), bs("0"), bs("5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+    }
+}

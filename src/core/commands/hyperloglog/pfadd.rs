@@ -28,6 +28,7 @@ impl ParseCommand for PfAdd {
         for arg in &args[1..] {
             elements.push(extract_bytes(arg)?);
         }
+        // PFADD can be called with just a key (returns 0)
         Ok(PfAdd { key, elements })
     }
 }
@@ -96,5 +97,61 @@ impl CommandSpec for PfAdd {
         let mut args = vec![self.key.clone()];
         args.extend(self.elements.clone());
         args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(parts: &[&str]) -> Vec<RespFrame> {
+        parts
+            .iter()
+            .map(|s| RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes())))
+            .collect()
+    }
+
+    #[test]
+    fn test_pfadd_parse_valid() {
+        let frames = make_frame(&["hllkey", "elem1", "elem2"]);
+        let cmd = PfAdd::parse(&frames).unwrap();
+        assert_eq!(cmd.key, Bytes::copy_from_slice(b"hllkey"));
+        assert_eq!(cmd.elements.len(), 2);
+    }
+
+    #[test]
+    fn test_pfadd_parse_single_element() {
+        let frames = make_frame(&["hllkey", "elem1"]);
+        let cmd = PfAdd::parse(&frames).unwrap();
+        assert_eq!(cmd.elements.len(), 1);
+    }
+
+    #[test]
+    fn test_pfadd_parse_empty_key() {
+        // PFADD requires at least a key
+        let frames = make_frame(&["hllkey"]);
+        let cmd = PfAdd::parse(&frames).unwrap();
+        assert_eq!(cmd.elements.len(), 0);
+    }
+
+    #[test]
+    fn test_pfadd_parse_no_args_is_error() {
+        let r = PfAdd::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pfadd_with_non_bulk_key_is_wrong_type() {
+        let r = PfAdd::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_pfadd_to_resp_args_round_trips() {
+        let frames = make_frame(&["hllkey", "e1", "e2", "e3"]);
+        let cmd = PfAdd::parse(&frames).unwrap();
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], Bytes::from_static(b"hllkey"));
     }
 }

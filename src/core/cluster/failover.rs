@@ -16,6 +16,15 @@ use tracing::{info, warn};
 /// The base delay before a replica initiates a failover election.
 /// A random delay is added to this to prevent multiple replicas from starting an election simultaneously.
 const FAILOVER_BASE_DELAY_MS: u64 = 500;
+/// Minimum number of masters that must be reachable (or whose FAIL we have not
+/// confirmed) before a replica is even allowed to *start* an election.
+/// A single-master cluster falls back to a value of 1.
+const MIN_QUORUM_TO_ELECT: usize = 1;
+/// Cooldown (in ms) after a successful election for a given master. A new
+/// election for the same master cannot start within this window, preventing
+/// rapid oscillation that could otherwise cause split-brain during a flaky
+/// network.
+const ELECTION_COOLDOWN_MS: u64 = 30_000;
 
 /// This function is called periodically by the cluster cron job (`probe_tick` in gossip.rs).
 /// It checks if this node is a replica and if its master is in a failure state.
@@ -30,6 +39,20 @@ pub async fn handle_failover_cron(state: &Arc<ServerState>, socket: &Arc<UdpSock
         .cluster
         .as_ref()
         .expect("Failover cron must run in cluster mode");
+
+    // **Split-brain defense:** do not even start an election unless the
+    // cluster is large enough to provide a quorum, or we have explicitly
+    // observed a FAIL flag (not just PFAIL) for the master. In a single-master
+    // setup the cron job is effectively a no-op until the master is reported
+    // FAIL by a peer.
+    let online_masters = cluster.count_online_masters();
+    if online_masters < MIN_QUORUM_TO_ELECT {
+        warn!(
+            "Skipping failover cron: only {} online master(s) seen, below minimum {}.",
+            online_masters, MIN_QUORUM_TO_ELECT
+        );
+        return;
+    }
 
     if let Some(my_master_id) = &cluster.get_my_config().node_info.replica_of
         && let Some(master_node) = cluster.nodes.get(my_master_id)
@@ -96,6 +119,28 @@ async fn start_election(state: &Arc<ServerState>, socket: &Arc<UdpSocket>) {
     {
         info!("Master is back online. Aborting election.");
         return;
+    }
+
+    // **Split-brain defense:** if the previous election for this master has
+    // *already* been completed or vetoed within the last
+    // `ELECTION_COOLDOWN_MS` window, refuse to start a new one. This stops a
+    // flapping network from triggering multiple competing promotions.
+    if let Some(my_master_id) = &cluster.get_my_config().node_info.replica_of
+        && let Some(last_epoch) = cluster.last_completed_election_epoch(my_master_id)
+        && cluster.failover_auth_epoch.load(Ordering::Relaxed) == last_epoch
+    {
+        let since_ms = cluster.last_completed_election_ms.load(Ordering::Relaxed);
+        if now_unix_ms.saturating_sub(since_ms) < ELECTION_COOLDOWN_MS {
+            warn!(
+                "Election for master {} was completed at epoch {} only {} ms ago; \
+                 refusing to start another one (cooldown {} ms).",
+                my_master_id,
+                last_epoch,
+                now_unix_ms.saturating_sub(since_ms),
+                ELECTION_COOLDOWN_MS
+            );
+            return;
+        }
     }
 
     let new_epoch = cluster.get_new_config_epoch();
@@ -245,6 +290,12 @@ pub async fn handle_auth_ack(state: &Arc<ServerState>, sender_id: String, ack_ep
             "Won the election with {} votes. Promoting to master.",
             current_votes
         );
+        // Record the election result so subsequent cron ticks can honor the
+        // cooldown. We do this *before* calling promote_to_master so that any
+        // retry that races with the disk persistence still sees the cooldown.
+        if let Some(master_id) = cluster.get_my_config().node_info.replica_of.clone() {
+            cluster.record_completed_election(master_id, my_election_epoch);
+        }
         promote_to_master(state).await;
         cluster.failover_auth_count.store(0, Ordering::Relaxed);
     }

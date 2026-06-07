@@ -108,3 +108,63 @@ impl CommandSpec for XDel {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xdel_parses_key_and_single_id() {
+        let c = XDel::parse(&[bs("k"), bs("1-0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_xdel_parses_multiple_ids() {
+        let c = XDel::parse(&[bs("k"), bs("1-0"), bs("2-0"), bs("3-1")]).unwrap();
+        assert_eq!(c.ids.len(), 3);
+    }
+
+    #[test]
+    fn test_xdel_with_too_few_args_is_error() {
+        let r = XDel::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xdel_with_no_args_is_error() {
+        let r = XDel::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xdel_with_non_bulk_key_is_wrong_type() {
+        let r = XDel::parse(&[RespFrame::Integer(1), bs("1-0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_xdel_with_invalid_id_is_error() {
+        let r = XDel::parse(&[bs("k"), bs("invalid")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xdel_dedups_ids() {
+        let c = XDel::parse(&[bs("k"), bs("1-0"), bs("1-0")]).unwrap();
+        assert_eq!(c.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_xdel_to_resp_args_round_trips() {
+        let c = XDel::parse(&[bs("k"), bs("1-0")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

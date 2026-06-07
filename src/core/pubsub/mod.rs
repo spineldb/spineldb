@@ -146,3 +146,173 @@ impl PubSubManager {
         self.pattern_channels.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::broadcast::error::TryRecvError;
+
+    #[test]
+    fn test_new_manager_is_empty() {
+        let mgr = PubSubManager::new();
+        assert!(mgr.get_all_channels().is_empty());
+        assert_eq!(mgr.get_pattern_subscriber_count(), 0);
+    }
+
+    #[test]
+    fn test_subscribe_creates_channel() {
+        let mgr = PubSubManager::new();
+        let channel = Bytes::from_static(b"news");
+        let _rx = mgr.subscribe(&channel);
+        assert_eq!(mgr.get_subscriber_count(&channel), 1);
+        assert_eq!(mgr.get_all_channels().len(), 1);
+    }
+
+    #[test]
+    fn test_subscribe_multiple_to_same_channel() {
+        let mgr = PubSubManager::new();
+        let channel = Bytes::from_static(b"news");
+        let _r1 = mgr.subscribe(&channel);
+        let _r2 = mgr.subscribe(&channel);
+        assert_eq!(mgr.get_subscriber_count(&channel), 2);
+    }
+
+    #[test]
+    fn test_subscribe_different_channels() {
+        let mgr = PubSubManager::new();
+        let _r1 = mgr.subscribe(&Bytes::from_static(b"a"));
+        let _r2 = mgr.subscribe(&Bytes::from_static(b"b"));
+        assert_eq!(mgr.get_all_channels().len(), 2);
+    }
+
+    #[test]
+    fn test_unsubscribe_does_not_remove_channel() {
+        let mgr = PubSubManager::new();
+        let channel = Bytes::from_static(b"news");
+        let _rx = mgr.subscribe(&channel);
+        mgr.unsubscribe(&channel);
+        // The unsubscribe method is currently a no-op for removal;
+        // channel exists in map but receiver count goes to 0 when `_rx` is dropped.
+        assert_eq!(mgr.get_all_channels().len(), 1);
+    }
+
+    #[test]
+    fn test_subscribe_pattern_creates_pattern() {
+        let mgr = PubSubManager::new();
+        let pat = Bytes::from_static(b"news.*");
+        let _rx = mgr.subscribe_pattern(&pat);
+        assert_eq!(mgr.get_pattern_subscriber_count(), 1);
+    }
+
+    #[test]
+    fn test_unsubscribe_pattern_is_noop() {
+        let mgr = PubSubManager::new();
+        let pat = Bytes::from_static(b"news.*");
+        let _rx = mgr.subscribe_pattern(&pat);
+        mgr.unsubscribe_pattern(&pat);
+        assert_eq!(mgr.get_pattern_subscriber_count(), 1);
+    }
+
+    #[test]
+    fn test_get_subscriber_count_for_unknown_channel_is_zero() {
+        let mgr = PubSubManager::new();
+        assert_eq!(mgr.get_subscriber_count(&Bytes::from_static(b"nope")), 0);
+    }
+
+    #[test]
+    fn test_get_pattern_subscriber_count_default_zero() {
+        let mgr = PubSubManager::new();
+        assert_eq!(mgr.get_pattern_subscriber_count(), 0);
+    }
+
+    #[test]
+    fn test_purge_empty_channels_no_op() {
+        let mgr = PubSubManager::new();
+        assert_eq!(mgr.purge_empty_channels(), 0);
+    }
+
+    #[test]
+    fn test_purge_empty_channels_removes_empty_entries() {
+        let mgr = PubSubManager::new();
+        // Subscribe and immediately drop the receiver so the channel becomes empty.
+        {
+            let _rx = mgr.subscribe(&Bytes::from_static(b"a"));
+            let _rx2 = mgr.subscribe_pattern(&Bytes::from_static(b"a.*"));
+        }
+        // Now both channels should have 0 receivers.
+        let purged = mgr.purge_empty_channels();
+        assert_eq!(purged, 2);
+        assert!(mgr.get_all_channels().is_empty());
+        assert_eq!(mgr.get_pattern_subscriber_count(), 0);
+    }
+
+    #[test]
+    fn test_purge_keeps_active_channels() {
+        let mgr = PubSubManager::new();
+        let _rx = mgr.subscribe(&Bytes::from_static(b"active"));
+        // drop nothing; the receiver is still alive in the test
+        let purged = mgr.purge_empty_channels();
+        assert_eq!(purged, 0);
+        assert_eq!(mgr.get_all_channels().len(), 1);
+    }
+
+    #[test]
+    fn test_publish_to_empty_channel_returns_zero() {
+        let mgr = PubSubManager::new();
+        let count = mgr.publish(&Bytes::from_static(b"nobody"), Bytes::from_static(b"hi"));
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_publish_to_subscriber_delivers_message() {
+        let mgr = PubSubManager::new();
+        let channel = Bytes::from_static(b"c");
+        let mut rx = mgr.subscribe(&channel);
+        let count = mgr.publish(&channel, Bytes::from_static(b"hello"));
+        assert_eq!(count, 1);
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received, Bytes::from_static(b"hello"));
+    }
+
+    #[tokio::test]
+    async fn test_publish_to_pattern_subscriber_delivers_pmessage() {
+        let mgr = PubSubManager::new();
+        let pat = Bytes::from_static(b"news.*");
+        let mut rx = mgr.subscribe_pattern(&pat);
+        let channel = Bytes::from_static(b"news.weather");
+        let count = mgr.publish(&channel, Bytes::from_static(b"sunny"));
+        assert_eq!(count, 1);
+        let (matched_pat, orig_channel, msg) = rx.recv().await.unwrap();
+        assert_eq!(matched_pat, Bytes::from_static(b"news.*"));
+        assert_eq!(orig_channel, Bytes::from_static(b"news.weather"));
+        assert_eq!(msg, Bytes::from_static(b"sunny"));
+    }
+
+    #[tokio::test]
+    async fn test_publish_to_both_direct_and_pattern() {
+        let mgr = PubSubManager::new();
+        let channel = Bytes::from_static(b"news.weather");
+        let pat = Bytes::from_static(b"news.*");
+
+        let _direct_rx = mgr.subscribe(&channel);
+        let mut pattern_rx = mgr.subscribe_pattern(&pat);
+
+        let count = mgr.publish(&channel, Bytes::from_static(b"rain"));
+        assert_eq!(count, 2);
+        // Drain one message; the other is still in the pattern_rx queue.
+        let received = pattern_rx.recv().await.unwrap();
+        assert_eq!(received.2, Bytes::from_static(b"rain"));
+    }
+
+    #[test]
+    fn test_try_recv_on_empty_channel_returns_error() {
+        let mgr = PubSubManager::new();
+        let channel = Bytes::from_static(b"c");
+        let mut rx = mgr.subscribe(&channel);
+        // No message published yet.
+        match rx.try_recv() {
+            Err(TryRecvError::Empty) => {}
+            other => panic!("expected Empty, got {other:?}"),
+        }
+    }
+}

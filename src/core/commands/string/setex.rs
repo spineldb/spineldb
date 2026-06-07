@@ -85,3 +85,61 @@ impl CommandSpec for SetEx {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_setex_parses_key_seconds_value() {
+        let s = SetEx::parse(&[bs("k"), bs("60"), bs("v")]).unwrap();
+        assert_eq!(s.key, Bytes::from_static(b"k"));
+        assert_eq!(s.seconds, 60);
+        assert_eq!(s.value, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_setex_with_zero_seconds_is_error() {
+        // SETEX requires seconds > 0.
+        let r = SetEx::parse(&[bs("k"), bs("0"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_setex_with_too_few_args_is_error() {
+        let r = SetEx::parse(&[bs("k"), bs("60")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_setex_with_too_many_args_is_error() {
+        let r = SetEx::parse(&[bs("k"), bs("60"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_setex_with_non_integer_seconds_is_error() {
+        let r = SetEx::parse(&[bs("k"), bs("soon"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_setex_with_non_bulk_value_is_wrong_type() {
+        let r = SetEx::parse(&[bs("k"), bs("60"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_setex_to_resp_args_round_trips() {
+        let s = SetEx::parse(&[bs("k"), bs("120"), bs("payload")]).unwrap();
+        let args = s.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"120"));
+        assert_eq!(args[2], Bytes::from_static(b"payload"));
+    }
+}

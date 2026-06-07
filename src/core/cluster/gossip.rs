@@ -655,3 +655,187 @@ fn select_nodes_for_gossip(state: &Arc<ServerState>) -> Vec<ClusterNode> {
     nodes_to_gossip.truncate(GOSSIP_MAX_NODES_IN_PACKET);
     nodes_to_gossip
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_meet(ts: u64) -> GossipMessage {
+        GossipMessage::Meet { timestamp_ms: ts }
+    }
+
+    fn make_ping(ts: u64) -> GossipMessage {
+        GossipMessage::Ping {
+            sender_id: "s".to_string(),
+            gossip_nodes: vec![],
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_pong(ts: u64) -> GossipMessage {
+        GossipMessage::Pong {
+            sender_id: "s".to_string(),
+            gossip_nodes: vec![],
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_far(ts: u64) -> GossipMessage {
+        GossipMessage::FailoverAuthRequest {
+            sender_id: "s".to_string(),
+            config_epoch: 1,
+            replication_offset: 0,
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_faa(ts: u64) -> GossipMessage {
+        GossipMessage::FailoverAuthAck {
+            sender_id: "s".to_string(),
+            config_epoch: 1,
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_fail_report(ts: u64) -> GossipMessage {
+        GossipMessage::FailReport {
+            sender_id: "s".to_string(),
+            failed_node_id: "n".to_string(),
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_publish(ts: u64) -> GossipMessage {
+        GossipMessage::Publish {
+            sender_id: "s".to_string(),
+            channel: b"ch".to_vec(),
+            message: b"msg".to_vec(),
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_purge_tags(ts: u64) -> GossipMessage {
+        GossipMessage::PurgeTags {
+            sender_id: "s".to_string(),
+            tags_with_epoch: vec![(b"t".to_vec(), 1)],
+            timestamp_ms: ts,
+        }
+    }
+
+    fn make_config_update(ts: u64) -> GossipMessage {
+        GossipMessage::ConfigUpdate {
+            sender_id: "s".to_string(),
+            param: "p".to_string(),
+            value: "v".to_string(),
+            timestamp_ms: ts,
+        }
+    }
+
+    #[test]
+    fn test_gossip_message_meet_timestamp() {
+        assert_eq!(make_meet(100).timestamp(), 100);
+    }
+
+    #[test]
+    fn test_gossip_message_ping_timestamp() {
+        assert_eq!(make_ping(200).timestamp(), 200);
+    }
+
+    #[test]
+    fn test_gossip_message_pong_timestamp() {
+        assert_eq!(make_pong(300).timestamp(), 300);
+    }
+
+    #[test]
+    fn test_gossip_message_failover_auth_request_timestamp() {
+        assert_eq!(make_far(400).timestamp(), 400);
+    }
+
+    #[test]
+    fn test_gossip_message_failover_auth_ack_timestamp() {
+        assert_eq!(make_faa(500).timestamp(), 500);
+    }
+
+    #[test]
+    fn test_gossip_message_fail_report_timestamp() {
+        assert_eq!(make_fail_report(600).timestamp(), 600);
+    }
+
+    #[test]
+    fn test_gossip_message_publish_timestamp() {
+        assert_eq!(make_publish(700).timestamp(), 700);
+    }
+
+    #[test]
+    fn test_gossip_message_purge_tags_timestamp() {
+        assert_eq!(make_purge_tags(800).timestamp(), 800);
+    }
+
+    #[test]
+    fn test_gossip_message_config_update_timestamp() {
+        assert_eq!(make_config_update(900).timestamp(), 900);
+    }
+
+    #[test]
+    fn test_gossip_message_serde_roundtrip_meet() {
+        let msg = make_meet(1234);
+        let bincode_config = bincode::config::standard();
+        let bytes = bincode::encode_to_vec(&msg, bincode_config).unwrap();
+        let (decoded, _): (GossipMessage, _) =
+            bincode::decode_from_slice(&bytes, bincode_config).unwrap();
+        assert_eq!(decoded.timestamp(), 1234);
+    }
+
+    #[test]
+    fn test_gossip_message_serde_roundtrip_ping() {
+        let msg = make_ping(5555);
+        let bincode_config = bincode::config::standard();
+        let bytes = bincode::encode_to_vec(&msg, bincode_config).unwrap();
+        let (decoded, _): (GossipMessage, _) =
+            bincode::decode_from_slice(&bytes, bincode_config).unwrap();
+        assert_eq!(decoded.timestamp(), 5555);
+    }
+
+    #[test]
+    fn test_gossip_message_serde_roundtrip_publish_preserves_payload() {
+        let msg = GossipMessage::Publish {
+            sender_id: "node-1".to_string(),
+            channel: b"news".to_vec(),
+            message: b"hello".to_vec(),
+            timestamp_ms: 42,
+        };
+        let bincode_config = bincode::config::standard();
+        let bytes = bincode::encode_to_vec(&msg, bincode_config).unwrap();
+        let (decoded, _): (GossipMessage, _) =
+            bincode::decode_from_slice(&bytes, bincode_config).unwrap();
+        if let GossipMessage::Publish {
+            sender_id,
+            channel,
+            message,
+            timestamp_ms,
+        } = decoded
+        {
+            assert_eq!(sender_id, "node-1");
+            assert_eq!(channel, b"news");
+            assert_eq!(message, b"hello");
+            assert_eq!(timestamp_ms, 42);
+        } else {
+            panic!("expected Publish variant");
+        }
+    }
+
+    #[test]
+    fn test_now_ms_returns_recent_time() {
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let n = now_ms();
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(n >= before);
+        assert!(n <= after + 1);
+    }
+}

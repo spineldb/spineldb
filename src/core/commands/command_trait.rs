@@ -123,3 +123,107 @@ pub trait ParseCommand: Sized {
     /// Parses the arguments and returns an instance of the command struct.
     fn parse(args: &[RespFrame]) -> Result<Self, SpinelDBError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_command_flags_combination() {
+        let flags = CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::MOVABLEKEYS;
+        assert!(flags.contains(CommandFlags::WRITE));
+        assert!(flags.contains(CommandFlags::DENY_OOM));
+        assert!(flags.contains(CommandFlags::MOVABLEKEYS));
+        assert!(!flags.contains(CommandFlags::ADMIN));
+        assert!(!flags.contains(CommandFlags::PUBSUB));
+    }
+
+    #[test]
+    fn test_command_flags_empty() {
+        let flags = CommandFlags::empty();
+        assert!(flags.is_empty());
+        assert_eq!(flags.bits(), 0);
+    }
+
+    #[test]
+    fn test_command_flags_all_bits_distinct() {
+        let all = [
+            CommandFlags::WRITE,
+            CommandFlags::READONLY,
+            CommandFlags::DENY_OOM,
+            CommandFlags::ADMIN,
+            CommandFlags::PUBSUB,
+            CommandFlags::NO_PROPAGATE,
+            CommandFlags::TRANSACTION,
+            CommandFlags::MOVABLEKEYS,
+            CommandFlags::SCRIPTING,
+        ];
+        // Each flag should have exactly one bit set, and the bits should be unique.
+        let mut seen = std::collections::HashSet::new();
+        for f in all {
+            assert_eq!(f.bits().count_ones(), 1, "flag {f:?} should have one bit");
+            assert!(seen.insert(f.bits()), "bit collision for {f:?}");
+        }
+    }
+
+    #[test]
+    fn test_command_flags_intersection() {
+        let a = CommandFlags::WRITE | CommandFlags::READONLY;
+        let b = CommandFlags::WRITE | CommandFlags::DENY_OOM;
+        let inter = a & b;
+        assert_eq!(inter, CommandFlags::WRITE);
+    }
+
+    #[test]
+    fn test_write_outcome_merge_flush_is_dominant() {
+        let r = WriteOutcome::Flush.merge(WriteOutcome::Write { keys_modified: 5 });
+        assert_eq!(r, WriteOutcome::Flush);
+        let r = WriteOutcome::Write { keys_modified: 5 }.merge(WriteOutcome::Flush);
+        assert_eq!(r, WriteOutcome::Flush);
+    }
+
+    #[test]
+    fn test_write_outcome_merge_delete_delete_sums() {
+        let a = WriteOutcome::Delete { keys_deleted: 3 };
+        let b = WriteOutcome::Delete { keys_deleted: 2 };
+        assert_eq!(a.merge(b), WriteOutcome::Delete { keys_deleted: 5 });
+    }
+
+    #[test]
+    fn test_write_outcome_merge_delete_write_is_delete() {
+        let a = WriteOutcome::Delete { keys_deleted: 2 };
+        let b = WriteOutcome::Write { keys_modified: 4 };
+        let r = a.merge(b);
+        assert_eq!(r, WriteOutcome::Delete { keys_deleted: 6 });
+    }
+
+    #[test]
+    fn test_write_outcome_merge_write_write_sums() {
+        let a = WriteOutcome::Write { keys_modified: 2 };
+        let b = WriteOutcome::Write { keys_modified: 3 };
+        assert_eq!(a.merge(b), WriteOutcome::Write { keys_modified: 5 });
+    }
+
+    #[test]
+    fn test_write_outcome_merge_did_not_write_is_identity_for_write() {
+        let a = WriteOutcome::DidNotWrite;
+        let b = WriteOutcome::Write { keys_modified: 4 };
+        assert_eq!(a.merge(b), WriteOutcome::Write { keys_modified: 4 });
+        assert_eq!(b.merge(a), WriteOutcome::Write { keys_modified: 4 });
+    }
+
+    #[test]
+    fn test_write_outcome_merge_did_not_write_passes_through_delete() {
+        let a = WriteOutcome::DidNotWrite;
+        let b = WriteOutcome::Delete { keys_deleted: 7 };
+        assert_eq!(a.merge(b), WriteOutcome::Delete { keys_deleted: 7 });
+    }
+
+    #[test]
+    fn test_write_outcome_merge_did_not_write_with_did_not_write() {
+        assert_eq!(
+            WriteOutcome::DidNotWrite.merge(WriteOutcome::DidNotWrite),
+            WriteOutcome::DidNotWrite
+        );
+    }
+}

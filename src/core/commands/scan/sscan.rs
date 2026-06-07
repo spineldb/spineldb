@@ -126,3 +126,82 @@ impl CommandSpec for SScan {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_sscan_parses_key_and_cursor() {
+        let c = SScan::parse(&[bs("k"), bs("0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.cursor, 0);
+        assert!(c.pattern.is_none());
+        assert!(c.count.is_none());
+    }
+
+    #[test]
+    fn test_sscan_with_match_pattern() {
+        let c = SScan::parse(&[bs("k"), bs("0"), bs("MATCH"), bs("a*")]).unwrap();
+        assert_eq!(c.pattern, Some(Bytes::from_static(b"a*")));
+    }
+
+    #[test]
+    fn test_sscan_with_count() {
+        let c = SScan::parse(&[bs("k"), bs("0"), bs("COUNT"), bs("100")]).unwrap();
+        assert_eq!(c.count, Some(100));
+    }
+
+    #[test]
+    fn test_sscan_with_match_and_count() {
+        let c = SScan::parse(&[
+            bs("k"),
+            bs("0"),
+            bs("MATCH"),
+            bs("a*"),
+            bs("COUNT"),
+            bs("20"),
+        ])
+        .unwrap();
+        assert_eq!(c.pattern, Some(Bytes::from_static(b"a*")));
+        assert_eq!(c.count, Some(20));
+    }
+
+    #[test]
+    fn test_sscan_with_too_few_args_is_error() {
+        let r = SScan::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sscan_with_no_args_is_error() {
+        let r = SScan::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sscan_with_non_bulk_key_is_wrong_type() {
+        let r = SScan::parse(&[RespFrame::Integer(1), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_sscan_to_resp_args_round_trips() {
+        let c = SScan::parse(&[bs("k"), bs("5"), bs("MATCH"), bs("a*")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"5"));
+        assert_eq!(args[2], Bytes::from_static(b"MATCH"));
+        assert_eq!(args[3], Bytes::from_static(b"a*"));
+    }
+
+    #[test]
+    fn test_sscan_with_nonzero_cursor() {
+        let c = SScan::parse(&[bs("k"), bs("42")]).unwrap();
+        assert_eq!(c.cursor, 42);
+    }
+}

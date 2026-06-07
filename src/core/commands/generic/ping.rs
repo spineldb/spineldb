@@ -68,3 +68,50 @@ impl CommandSpec for Ping {
         self.message.clone().map_or(vec![], |msg| vec![msg])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_ping_no_args_yields_no_message() {
+        let p = Ping::parse(&[]).unwrap();
+        assert!(p.message.is_none());
+    }
+
+    #[test]
+    fn test_ping_with_message_captures_payload() {
+        let p = Ping::parse(&[bs("hello")]).unwrap();
+        assert_eq!(p.message.as_deref(), Some(b"hello".as_ref()));
+    }
+
+    #[test]
+    fn test_ping_with_too_many_args_is_error() {
+        let r = Ping::parse(&[bs("a"), bs("b")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_ping_with_non_bulk_message_is_wrong_type() {
+        let r = Ping::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_ping_to_resp_args_with_no_message_is_empty() {
+        let p = Ping::default();
+        assert!(p.to_resp_args().is_empty());
+    }
+
+    #[test]
+    fn test_ping_to_resp_args_with_message_round_trips() {
+        let p = Ping::parse(&[bs("hi")]).unwrap();
+        let args = p.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"hi"));
+    }
+}

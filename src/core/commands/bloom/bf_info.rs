@@ -87,3 +87,43 @@ impl CommandSpec for BfInfo {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfinfo_parses_key() {
+        let c = BfInfo::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+    }
+
+    #[test]
+    fn test_bfinfo_with_too_few_args_is_error() {
+        let r = BfInfo::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfinfo_with_too_many_args_is_error() {
+        let r = BfInfo::parse(&[bs("k"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfinfo_with_non_bulk_key_is_wrong_type() {
+        let r = BfInfo::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bfinfo_to_resp_args_round_trips() {
+        let c = BfInfo::parse(&[bs("k")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k")]);
+    }
+}

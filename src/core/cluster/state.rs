@@ -84,6 +84,156 @@ impl ClusterNode {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_node() -> ClusterNode {
+        ClusterNode {
+            id: "node-1".to_string(),
+            addr: "127.0.0.1:6379".to_string(),
+            bus_addr: "127.0.0.1:16379".to_string(),
+            flags_raw: 0,
+            replica_of: None,
+            slots: BTreeSet::new(),
+            config_epoch: 0,
+            replication_offset: 0,
+            migrating_slots: BTreeMap::new(),
+            importing_slots: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_node_role_distinct() {
+        assert_ne!(NodeRole::Primary, NodeRole::Replica);
+    }
+
+    #[test]
+    fn test_node_flags_set_get_roundtrip() {
+        let mut n = empty_node();
+        n.set_flags(NodeFlags::MYSELF | NodeFlags::PRIMARY);
+        let got = n.get_flags();
+        assert!(got.contains(NodeFlags::MYSELF));
+        assert!(got.contains(NodeFlags::PRIMARY));
+        assert!(!got.contains(NodeFlags::REPLICA));
+        assert!(!got.contains(NodeFlags::PFAIL));
+    }
+
+    #[test]
+    fn test_node_flags_overwrite() {
+        let mut n = empty_node();
+        n.set_flags(NodeFlags::MYSELF | NodeFlags::PRIMARY);
+        n.set_flags(NodeFlags::MYSELF | NodeFlags::REPLICA);
+        let got = n.get_flags();
+        assert!(got.contains(NodeFlags::MYSELF));
+        assert!(!got.contains(NodeFlags::PRIMARY));
+        assert!(got.contains(NodeFlags::REPLICA));
+    }
+
+    #[test]
+    fn test_node_flags_pfail_fail_distinct() {
+        let f1 = NodeFlags::PFAIL;
+        let f2 = NodeFlags::FAIL;
+        assert_ne!(f1, f2);
+    }
+
+    #[test]
+    fn test_node_flags_from_bits_truncate_drops_unknown_bits() {
+        // 0xFFFF contains bits not defined in NodeFlags.
+        let f = NodeFlags::from_bits_truncate(0xFFFF);
+        // MYSELF (bit 0) should still be set.
+        assert!(f.contains(NodeFlags::MYSELF));
+        // The result should be the intersection with defined bits.
+        let defined = NodeFlags::MYSELF
+            | NodeFlags::PRIMARY
+            | NodeFlags::REPLICA
+            | NodeFlags::PFAIL
+            | NodeFlags::FAIL
+            | NodeFlags::HANDSHAKE
+            | NodeFlags::NOADDR
+            | NodeFlags::MIGRATING
+            | NodeFlags::IMPORTING;
+        assert_eq!(f, defined);
+    }
+
+    #[test]
+    fn test_node_flags_migrating_importing_distinct() {
+        assert_ne!(NodeFlags::MIGRATING, NodeFlags::IMPORTING);
+    }
+
+    #[test]
+    fn test_cluster_node_default_fields() {
+        let n = empty_node();
+        assert_eq!(n.id, "node-1");
+        assert_eq!(n.addr, "127.0.0.1:6379");
+        assert_eq!(n.bus_addr, "127.0.0.1:16379");
+        assert_eq!(n.flags_raw, 0);
+        assert!(n.replica_of.is_none());
+        assert!(n.slots.is_empty());
+        assert_eq!(n.config_epoch, 0);
+        assert_eq!(n.replication_offset, 0);
+        assert!(n.migrating_slots.is_empty());
+        assert!(n.importing_slots.is_empty());
+    }
+
+    #[test]
+    fn test_cluster_node_with_slots() {
+        let mut n = empty_node();
+        n.slots.insert(0);
+        n.slots.insert(1);
+        n.slots.insert(16383);
+        n.replica_of = Some("primary-id".to_string());
+        n.config_epoch = 5;
+        n.replication_offset = 1024;
+        assert_eq!(n.slots.len(), 3);
+        assert!(n.slots.contains(&0));
+        assert!(n.slots.contains(&16383));
+        assert_eq!(n.replica_of.as_deref(), Some("primary-id"));
+        assert_eq!(n.config_epoch, 5);
+        assert_eq!(n.replication_offset, 1024);
+    }
+
+    #[test]
+    fn test_cluster_node_serde_roundtrip() {
+        let mut n = empty_node();
+        n.set_flags(NodeFlags::MYSELF | NodeFlags::PRIMARY);
+        n.slots.insert(100);
+        n.migrating_slots.insert(100, "other-node".to_string());
+        let s = serde_json::to_string(&n).unwrap();
+        let d: ClusterNode = serde_json::from_str(&s).unwrap();
+        assert_eq!(d.id, n.id);
+        assert_eq!(d.addr, n.addr);
+        assert_eq!(d.flags_raw, n.flags_raw);
+        assert_eq!(d.slots, n.slots);
+        assert_eq!(d.migrating_slots, n.migrating_slots);
+    }
+
+    #[test]
+    fn test_node_runtime_state_construction() {
+        let r = NodeRuntimeState {
+            node_info: empty_node(),
+            ping_sent: None,
+            pong_received: Some(Instant::now()),
+            pfail_reports: HashMap::new(),
+        };
+        assert!(r.ping_sent.is_none());
+        assert!(r.pong_received.is_some());
+        assert!(r.pfail_reports.is_empty());
+    }
+
+    #[test]
+    fn test_serializable_cluster_state_construction() {
+        let s = SerializableClusterState {
+            my_id: "abc".to_string(),
+            current_epoch: 0,
+            nodes: vec![],
+        };
+        assert_eq!(s.my_id, "abc");
+        assert_eq!(s.current_epoch, 0);
+        assert!(s.nodes.is_empty());
+    }
+}
+
 /// Represents the runtime state of a node, which is not persisted or gossiped.
 #[derive(Debug, Clone)]
 pub struct NodeRuntimeState {
@@ -123,6 +273,14 @@ pub struct ClusterState {
     pub failover_auth_count: AtomicU64,
     pub failover_auth_rank: AtomicU64,
     pub failover_auth_epoch: AtomicU64,
+    /// Unix millis of the last successfully completed election, regardless
+    /// of master. Used in combination with `last_completed_election_per_master`
+    /// to enforce an election cooldown.
+    pub last_completed_election_ms: AtomicU64,
+    /// Per-master map of (master_id, election_epoch) for the last successful
+    /// election against that master. Inserted when `promote_to_master` runs
+    /// and consulted by the cron job to prevent immediate re-elections.
+    pub last_completed_election_per_master: DashMap<String, u64>,
 }
 
 impl ClusterState {
@@ -189,6 +347,8 @@ impl ClusterState {
             failover_auth_count: AtomicU64::new(0),
             failover_auth_rank: AtomicU64::new(0),
             failover_auth_epoch: AtomicU64::new(0),
+            last_completed_election_ms: AtomicU64::new(0),
+            last_completed_election_per_master: DashMap::new(),
         })
     }
 
@@ -283,6 +443,8 @@ impl ClusterState {
             failover_auth_count: AtomicU64::new(0),
             failover_auth_rank: AtomicU64::new(0),
             failover_auth_epoch: AtomicU64::new(s_state.current_epoch),
+            last_completed_election_ms: AtomicU64::new(0),
+            last_completed_election_per_master: DashMap::new(),
         })
     }
 
@@ -657,5 +819,27 @@ impl ClusterState {
         let owner_id = self.slots_map[slot as usize].read();
         let owner_id_str = owner_id.as_deref()?;
         self.nodes.get(owner_id_str)
+    }
+
+    /// Records that an election for `master_id` has just completed with the
+    /// given `epoch`. Stores the timestamp so subsequent cron ticks can
+    /// honor the cooldown window. Idempotent.
+    pub fn record_completed_election(&self, master_id: String, epoch: u64) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.last_completed_election_per_master
+            .insert(master_id, epoch);
+        self.last_completed_election_ms
+            .store(now_ms, Ordering::Relaxed);
+    }
+
+    /// Returns the epoch of the last completed election for the given master,
+    /// or `None` if no election has been recorded for that master.
+    pub fn last_completed_election_epoch(&self, master_id: &str) -> Option<u64> {
+        self.last_completed_election_per_master
+            .get(master_id)
+            .map(|entry| *entry.value())
     }
 }

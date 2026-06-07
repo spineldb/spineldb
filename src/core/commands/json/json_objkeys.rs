@@ -105,3 +105,50 @@ impl CommandSpec for JsonObjKeys {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_objkeys_key_only() {
+        let c = JsonObjKeys::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!(c.path.is_none());
+    }
+
+    #[test]
+    fn test_json_objkeys_with_path() {
+        let c = JsonObjKeys::parse(&[bs("k"), bs("$.o")]).unwrap();
+        assert_eq!(c.path, Some("$.o".to_string()));
+    }
+
+    #[test]
+    fn test_json_objkeys_no_args_is_error() {
+        let r = JsonObjKeys::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_objkeys_too_many_args_is_error() {
+        let r = JsonObjKeys::parse(&[bs("k"), bs("$.o"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_objkeys_with_non_bulk_key_is_wrong_type() {
+        let r = JsonObjKeys::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_objkeys_to_resp_args_round_trips() {
+        let c = JsonObjKeys::parse(&[bs("k"), bs("$.o")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.o")]);
+    }
+}

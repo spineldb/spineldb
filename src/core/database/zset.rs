@@ -448,3 +448,346 @@ impl SortedSet {
         count
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    fn make_zset() -> SortedSet {
+        // Scores: a=1, b=2, c=3, d=4, e=5
+        let mut zs = SortedSet::new();
+        zs.add(1.0, b("a"));
+        zs.add(2.0, b("b"));
+        zs.add(3.0, b("c"));
+        zs.add(4.0, b("d"));
+        zs.add(5.0, b("e"));
+        zs
+    }
+
+    #[test]
+    fn test_new_zset_is_empty() {
+        let zs = SortedSet::new();
+        assert_eq!(zs.len(), 0);
+        assert!(zs.is_empty());
+    }
+
+    #[test]
+    fn test_add_new_member() {
+        let mut zs = SortedSet::new();
+        assert!(zs.add(1.0, b("a")));
+        assert_eq!(zs.len(), 1);
+    }
+
+    #[test]
+    fn test_add_existing_member_with_new_score() {
+        let mut zs = SortedSet::new();
+        assert!(zs.add(1.0, b("a")));
+        assert!(zs.add(2.0, b("a"))); // changed score
+        assert_eq!(zs.len(), 1);
+        assert_eq!(zs.get_score(&b("a")), Some(2.0));
+    }
+
+    #[test]
+    fn test_add_existing_member_with_same_score_returns_false() {
+        let mut zs = SortedSet::new();
+        zs.add(1.0, b("a"));
+        assert!(!zs.add(1.0, b("a")));
+    }
+
+    #[test]
+    fn test_remove_existing_member() {
+        let mut zs = make_zset();
+        assert!(zs.remove(&b("c")));
+        assert_eq!(zs.len(), 4);
+        assert!(!zs.contains_member(&b("c")));
+    }
+
+    #[test]
+    fn test_remove_nonexistent_member() {
+        let mut zs = make_zset();
+        assert!(!zs.remove(&b("zzz")));
+        assert_eq!(zs.len(), 5);
+    }
+
+    #[test]
+    fn test_increment_score_new_member() {
+        let mut zs = SortedSet::new();
+        let new_score = zs.increment_score(&b("a"), 5.0);
+        assert_eq!(new_score, 5.0);
+        assert_eq!(zs.get_score(&b("a")), Some(5.0));
+    }
+
+    #[test]
+    fn test_increment_score_existing_member() {
+        let mut zs = make_zset();
+        let new_score = zs.increment_score(&b("a"), 10.0);
+        assert_eq!(new_score, 11.0);
+        assert_eq!(zs.get_score(&b("a")), Some(11.0));
+    }
+
+    #[test]
+    fn test_get_rank_ascending() {
+        let zs = make_zset();
+        assert_eq!(zs.get_rank(&b("a")), Some(0));
+        assert_eq!(zs.get_rank(&b("c")), Some(2));
+        assert_eq!(zs.get_rank(&b("e")), Some(4));
+        assert_eq!(zs.get_rank(&b("missing")), None);
+    }
+
+    #[test]
+    fn test_get_rev_rank_descending() {
+        let zs = make_zset();
+        assert_eq!(zs.get_rev_rank(&b("a")), Some(4));
+        assert_eq!(zs.get_rev_rank(&b("c")), Some(2));
+        assert_eq!(zs.get_rev_rank(&b("e")), Some(0));
+    }
+
+    #[test]
+    fn test_pop_first_returns_min() {
+        let mut zs = make_zset();
+        let entry = zs.pop_first().unwrap();
+        assert_eq!(entry.member, b("a"));
+        assert_eq!(entry.score, 1.0);
+        assert_eq!(zs.len(), 4);
+    }
+
+    #[test]
+    fn test_pop_last_returns_max() {
+        let mut zs = make_zset();
+        let entry = zs.pop_last().unwrap();
+        assert_eq!(entry.member, b("e"));
+        assert_eq!(entry.score, 5.0);
+        assert_eq!(zs.len(), 4);
+    }
+
+    #[test]
+    fn test_pop_empty_returns_none() {
+        let mut zs = SortedSet::new();
+        assert!(zs.pop_first().is_none());
+        assert!(zs.pop_last().is_none());
+    }
+
+    #[test]
+    fn test_get_range_full() {
+        let zs = make_zset();
+        let entries = zs.get_range(0, -1);
+        assert_eq!(entries.len(), 5);
+        assert_eq!(entries[0].member, b("a"));
+        assert_eq!(entries[4].member, b("e"));
+    }
+
+    #[test]
+    fn test_get_range_partial() {
+        let zs = make_zset();
+        let entries = zs.get_range(1, 3);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].member, b("b"));
+        assert_eq!(entries[2].member, b("d"));
+    }
+
+    #[test]
+    fn test_get_range_negative_indices() {
+        let zs = make_zset();
+        let entries = zs.get_range(-2, -1);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].member, b("d"));
+        assert_eq!(entries[1].member, b("e"));
+    }
+
+    #[test]
+    fn test_get_range_empty_zset() {
+        let zs = SortedSet::new();
+        assert!(zs.get_range(0, -1).is_empty());
+    }
+
+    #[test]
+    fn test_get_range_out_of_bounds() {
+        let zs = make_zset();
+        // start > stop after normalization
+        assert!(zs.get_range(3, 1).is_empty());
+    }
+
+    #[test]
+    fn test_get_rev_range() {
+        let zs = make_zset();
+        let entries = zs.get_rev_range(0, 2);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].member, b("e"));
+        assert_eq!(entries[2].member, b("c"));
+    }
+
+    #[test]
+    fn test_get_range_by_score_inclusive() {
+        let zs = make_zset();
+        let entries =
+            zs.get_range_by_score(ScoreBoundary::Inclusive(2.0), ScoreBoundary::Inclusive(4.0));
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].member, b("b"));
+        assert_eq!(entries[2].member, b("d"));
+    }
+
+    #[test]
+    fn test_get_range_by_score_exclusive() {
+        let zs = make_zset();
+        // 2 < score < 4
+        let entries =
+            zs.get_range_by_score(ScoreBoundary::Exclusive(2.0), ScoreBoundary::Exclusive(4.0));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].member, b("c"));
+    }
+
+    #[test]
+    fn test_get_range_by_score_neg_infinity() {
+        let zs = make_zset();
+        let entries =
+            zs.get_range_by_score(ScoreBoundary::NegInfinity, ScoreBoundary::Inclusive(2.0));
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_get_range_by_score_pos_infinity_returns_empty() {
+        // PosInfinity as min: short-circuit
+        let zs = make_zset();
+        let entries = zs.get_range_by_score(ScoreBoundary::PosInfinity, ScoreBoundary::PosInfinity);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_remove_range_by_score() {
+        let mut zs = make_zset();
+        let removed =
+            zs.remove_range_by_score(ScoreBoundary::Inclusive(2.0), ScoreBoundary::Inclusive(3.0));
+        assert_eq!(removed, 2);
+        assert_eq!(zs.len(), 3);
+        assert!(!zs.contains_member(&b("b")));
+        assert!(!zs.contains_member(&b("c")));
+    }
+
+    #[test]
+    fn test_get_range_by_lex() {
+        // All members must have the same score for lex queries to be meaningful.
+        let mut zs = SortedSet::new();
+        for m in ["alpha", "beta", "delta", "gamma"] {
+            zs.add(0.0, b(m));
+        }
+        // Inclusive [beta, gamma] spans beta, delta, gamma (delta is lex-less than gamma).
+        let entries = zs.get_range_by_lex(
+            &LexBoundary::Inclusive(b("beta")),
+            &LexBoundary::Inclusive(b("gamma")),
+        );
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].member, b("beta"));
+        assert_eq!(entries[1].member, b("delta"));
+        assert_eq!(entries[2].member, b("gamma"));
+    }
+
+    #[test]
+    fn test_get_range_by_lex_exclusive() {
+        let mut zs = SortedSet::new();
+        for m in ["a", "b", "c"] {
+            zs.add(0.0, b(m));
+        }
+        let entries = zs.get_range_by_lex(
+            &LexBoundary::Exclusive(b("a")),
+            &LexBoundary::Exclusive(b("c")),
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].member, b("b"));
+    }
+
+    #[test]
+    fn test_remove_range_by_rank() {
+        let mut zs = make_zset();
+        let removed = zs.remove_range_by_rank(1, 3);
+        assert_eq!(removed, 3);
+        assert_eq!(zs.len(), 2);
+        assert!(zs.contains_member(&b("a")));
+        assert!(zs.contains_member(&b("e")));
+    }
+
+    #[test]
+    fn test_remove_range_by_rank_empty() {
+        let mut zs = SortedSet::new();
+        assert_eq!(zs.remove_range_by_rank(0, 5), 0);
+    }
+
+    #[test]
+    fn test_remove_range_by_rank_negative() {
+        let mut zs = make_zset();
+        // Remove last two: d and e
+        let removed = zs.remove_range_by_rank(-2, -1);
+        assert_eq!(removed, 2);
+        assert_eq!(zs.len(), 3);
+    }
+
+    #[test]
+    fn test_scores_are_all_equal_edge_cases() {
+        let mut zs = SortedSet::new();
+        assert!(zs.scores_are_all_equal()); // empty
+        zs.add(1.0, b("a"));
+        assert!(zs.scores_are_all_equal()); // single
+        zs.add(1.0, b("b"));
+        assert!(zs.scores_are_all_equal()); // all 1.0
+        zs.add(2.0, b("c"));
+        assert!(!zs.scores_are_all_equal()); // mixed
+    }
+
+    #[test]
+    fn test_memory_usage_sums_member_bytes() {
+        let mut zs = SortedSet::new();
+        zs.add(1.0, b("a"));
+        zs.add(2.0, b("bb"));
+        zs.add(3.0, b("ccc"));
+        // member bytes total: 1 + 2 + 3 = 6
+        // plus 3 * 8 bytes for f64 scores = 24
+        let mem = zs.memory_usage();
+        assert_eq!(mem, 6 + 3 * std::mem::size_of::<f64>());
+    }
+
+    #[test]
+    fn test_sort_by_score_then_member() {
+        // Same score: members are ordered lexicographically.
+        let mut zs = SortedSet::new();
+        zs.add(1.0, b("c"));
+        zs.add(1.0, b("a"));
+        zs.add(1.0, b("b"));
+        let entries: Vec<_> = zs.iter().map(|e| e.member.clone()).collect();
+        assert_eq!(entries, vec![b("a"), b("b"), b("c")]);
+    }
+
+    #[test]
+    fn test_iter_returns_sorted_entries() {
+        let zs = make_zset();
+        let entries: Vec<_> = zs.iter().map(|e| (e.score, e.member.clone())).collect();
+        assert_eq!(
+            entries,
+            vec![
+                (1.0, b("a")),
+                (2.0, b("b")),
+                (3.0, b("c")),
+                (4.0, b("d")),
+                (5.0, b("e")),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_score_boundary_display() {
+        assert_eq!(ScoreBoundary::NegInfinity.to_string(), "-inf");
+        assert_eq!(ScoreBoundary::PosInfinity.to_string(), "+inf");
+        assert_eq!(ScoreBoundary::Inclusive(1.5).to_string(), "1.5");
+        assert_eq!(ScoreBoundary::Exclusive(2.5).to_string(), "(2.5");
+    }
+
+    #[test]
+    fn test_lex_boundary_display() {
+        assert_eq!(LexBoundary::Min.to_string(), "-");
+        assert_eq!(LexBoundary::Max.to_string(), "+");
+        assert_eq!(LexBoundary::Inclusive(b("foo")).to_string(), "[foo");
+        assert_eq!(LexBoundary::Exclusive(b("bar")).to_string(), "(bar");
+    }
+}

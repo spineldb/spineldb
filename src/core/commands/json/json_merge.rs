@@ -141,3 +141,55 @@ impl CommandSpec for JsonMerge {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_merge_parses() {
+        let c = JsonMerge::parse(&[bs("k"), bs("$.o"), bs("{\"a\":1}")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.o");
+        assert_eq!(c.value, Bytes::from_static(b"{\"a\":1}"));
+    }
+
+    #[test]
+    fn test_json_merge_too_few_args_is_error() {
+        let r = JsonMerge::parse(&[bs("k"), bs("$.o")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_merge_too_many_args_is_error() {
+        let r = JsonMerge::parse(&[bs("k"), bs("$.o"), bs("{}"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_merge_no_args_is_error() {
+        let r = JsonMerge::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_merge_with_non_bulk_key_is_wrong_type() {
+        let r = JsonMerge::parse(&[RespFrame::Integer(1), bs("$.o"), bs("{}")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_merge_to_resp_args_round_trips() {
+        let c = JsonMerge::parse(&[bs("k"), bs("$.o"), bs("{}")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"$.o"),
+            Bytes::from_static(b"{}"),
+        ]);
+    }
+}

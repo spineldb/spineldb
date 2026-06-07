@@ -95,3 +95,150 @@ impl TtlManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::database::Db;
+    use crate::core::storage::data_types::{DataValue, StoredValue};
+    use bytes::Bytes;
+    use std::time::Instant;
+
+    fn make_expired_sv(value: &str) -> StoredValue {
+        let mut sv = StoredValue::new(DataValue::String(Bytes::copy_from_slice(value.as_bytes())));
+        sv.expiry = Some(Instant::now() - Duration::from_secs(60));
+        sv
+    }
+
+    fn make_fresh_sv(value: &str) -> StoredValue {
+        let mut sv = StoredValue::new(DataValue::String(Bytes::copy_from_slice(value.as_bytes())));
+        sv.expiry = Some(Instant::now() + Duration::from_secs(3600));
+        sv
+    }
+
+    #[test]
+    fn test_new_stores_databases() {
+        let db = Arc::new(Db::new());
+        let mgr = TtlManager::new(vec![db.clone()]);
+        // We can't observe dbs directly, but the constructor must accept the list.
+        // This is a smoke test that the struct is constructible.
+        let _ = mgr;
+    }
+
+    #[test]
+    fn test_new_with_empty_list() {
+        let mgr = TtlManager::new(vec![]);
+        let _ = mgr;
+    }
+
+    #[tokio::test]
+    async fn test_purge_on_empty_db_is_a_noop() {
+        let db = Arc::new(Db::new());
+        let mgr = TtlManager::new(vec![db.clone()]);
+        mgr.purge_expired_keys_with_sampling().await;
+        assert_eq!(db.get_key_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_purge_removes_expired_keys() {
+        let db = Arc::new(Db::new());
+        // Insert 200 expired keys with varied prefixes so they spread across
+        // all 16 shards; the random sampler must reliably find them.
+        for i in 0..200 {
+            let key = Bytes::copy_from_slice(format!("exp:{i}").as_bytes());
+            db.insert_value_from_load(key, make_expired_sv("v")).await;
+        }
+        assert_eq!(db.get_key_count(), 200);
+
+        let mgr = TtlManager::new(vec![db.clone()]);
+        // Run multiple cycles to account for the probabilistic sampler.
+        for _ in 0..32 {
+            mgr.purge_expired_keys_with_sampling().await;
+            if db.get_key_count() == 0 {
+                break;
+            }
+        }
+        assert_eq!(db.get_key_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_purge_keeps_fresh_keys() {
+        let db = Arc::new(Db::new());
+        // 100 fresh + 100 expired, all spread across shards.
+        for i in 0..100 {
+            let key = Bytes::copy_from_slice(format!("fresh:{i}").as_bytes());
+            db.insert_value_from_load(key, make_fresh_sv("v")).await;
+        }
+        for i in 0..100 {
+            let key = Bytes::copy_from_slice(format!("exp:{i}").as_bytes());
+            db.insert_value_from_load(key, make_expired_sv("v")).await;
+        }
+        assert_eq!(db.get_key_count(), 200);
+
+        let mgr = TtlManager::new(vec![db.clone()]);
+        // Run a fixed number of cycles — far more than needed for 200 keys
+        // spread across 16 shards.
+        for _ in 0..64 {
+            mgr.purge_expired_keys_with_sampling().await;
+        }
+        // All expired should be gone; all 100 fresh should remain.
+        assert_eq!(db.get_key_count(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_purge_iterates_all_databases() {
+        let db1 = Arc::new(Db::new());
+        let db2 = Arc::new(Db::new());
+        for i in 0..200 {
+            let k1 = Bytes::copy_from_slice(format!("a:{i}").as_bytes());
+            let k2 = Bytes::copy_from_slice(format!("b:{i}").as_bytes());
+            db1.insert_value_from_load(k1, make_expired_sv("v")).await;
+            db2.insert_value_from_load(k2, make_expired_sv("v")).await;
+        }
+        assert_eq!(db1.get_key_count(), 200);
+        assert_eq!(db2.get_key_count(), 200);
+
+        let mgr = TtlManager::new(vec![db1.clone(), db2.clone()]);
+        for _ in 0..32 {
+            mgr.purge_expired_keys_with_sampling().await;
+            if db1.get_key_count() == 0 && db2.get_key_count() == 0 {
+                break;
+            }
+        }
+        assert_eq!(db1.get_key_count(), 0);
+        assert_eq!(db2.get_key_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_purge_with_no_expired_keys_exits_immediately() {
+        let db = Arc::new(Db::new());
+        for i in 0..10 {
+            let k = Bytes::copy_from_slice(format!("k:{i}").as_bytes());
+            db.insert_value_from_load(k, make_fresh_sv("v")).await;
+        }
+        let mgr = TtlManager::new(vec![db.clone()]);
+        mgr.purge_expired_keys_with_sampling().await;
+        // All keys remain.
+        assert_eq!(db.get_key_count(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_purge_with_many_expired_keys_clears_them() {
+        // More keys than the sample size to exercise the repeat-while-expired loop.
+        let db = Arc::new(Db::new());
+        for i in 0..500 {
+            let k = Bytes::copy_from_slice(format!("e:{i}").as_bytes());
+            db.insert_value_from_load(k, make_expired_sv("v")).await;
+        }
+        assert_eq!(db.get_key_count(), 500);
+
+        let mgr = TtlManager::new(vec![db.clone()]);
+        for _ in 0..64 {
+            mgr.purge_expired_keys_with_sampling().await;
+            if db.get_key_count() == 0 {
+                break;
+            }
+        }
+        assert_eq!(db.get_key_count(), 0);
+    }
+}

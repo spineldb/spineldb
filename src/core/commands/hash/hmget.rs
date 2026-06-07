@@ -89,3 +89,49 @@ impl CommandSpec for HmGet {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hmget_parses_key_and_fields() {
+        let c = HmGet::parse(&[bs("h"), bs("f1"), bs("f2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"h"));
+        assert_eq!(c.fields.len(), 2);
+        assert_eq!(c.fields[0], Bytes::from_static(b"f1"));
+        assert_eq!(c.fields[1], Bytes::from_static(b"f2"));
+    }
+
+    #[test]
+    fn test_hmget_with_too_few_args_is_error() {
+        let r = HmGet::parse(&[bs("h")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hmget_with_non_bulk_key_is_wrong_type() {
+        let r = HmGet::parse(&[RespFrame::Integer(1), bs("f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hmget_with_non_bulk_field_is_wrong_type() {
+        let r = HmGet::parse(&[bs("h"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hmget_to_resp_args_round_trips() {
+        let c = HmGet::parse(&[bs("h"), bs("a"), bs("b"), bs("c")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], Bytes::from_static(b"h"));
+        assert_eq!(args[1], Bytes::from_static(b"a"));
+        assert_eq!(args[3], Bytes::from_static(b"c"));
+    }
+}

@@ -261,3 +261,114 @@ impl CommandSpec for XAutoClaim {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xautoclaim_parses_required_args() {
+        let c = XAutoClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("100"), bs("0-0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.group_name, Bytes::from_static(b"g1"));
+        assert_eq!(c.consumer_name, Bytes::from_static(b"c1"));
+        assert_eq!(c.min_idle_time, Duration::from_millis(100));
+        assert_eq!(c.start_id, StreamId::new(0, 0));
+    }
+
+    #[test]
+    fn test_xautoclaim_parses_explicit_start_id() {
+        let c = XAutoClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("100"), bs("1-0")]).unwrap();
+        assert_eq!(c.start_id, StreamId::new(1, 0));
+    }
+
+    #[test]
+    fn test_xautoclaim_parses_count() {
+        let c = XAutoClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("100"),
+            bs("0-0"),
+            bs("COUNT"),
+            bs("5"),
+        ])
+        .unwrap();
+        assert_eq!(c.count, Some(5));
+    }
+
+    #[test]
+    fn test_xautoclaim_parses_justid() {
+        let c = XAutoClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("100"),
+            bs("0-0"),
+            bs("JUSTID"),
+        ])
+        .unwrap();
+        assert!(c.justid);
+    }
+
+    #[test]
+    fn test_xautoclaim_count_missing_value_is_syntax_error() {
+        let r = XAutoClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("100"), bs("0-0"), bs("COUNT")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xautoclaim_too_few_args_is_error() {
+        let r = XAutoClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xautoclaim_no_args_is_error() {
+        let r = XAutoClaim::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xautoclaim_unknown_option_is_syntax_error() {
+        let r = XAutoClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("100"), bs("0-0"), bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xautoclaim_with_non_bulk_key_is_wrong_type() {
+        let r = XAutoClaim::parse(&[
+            RespFrame::Integer(1),
+            bs("g1"),
+            bs("c1"),
+            bs("100"),
+            bs("0-0"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_xautoclaim_to_resp_args_round_trips() {
+        let c = XAutoClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("100"),
+            bs("0-0"),
+            bs("COUNT"),
+            bs("5"),
+            bs("JUSTID"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[4], Bytes::from_static(b"0-0"));
+        assert_eq!(args[5], Bytes::from_static(b"COUNT"));
+        assert_eq!(args[6], Bytes::from_static(b"5"));
+        assert_eq!(args[7], Bytes::from_static(b"JUSTID"));
+    }
+}

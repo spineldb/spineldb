@@ -77,3 +77,52 @@ impl CommandSpec for HGet {
         vec![self.key.clone(), self.field.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hget_parses_key_and_field() {
+        let c = HGet::parse(&[bs("myhash"), bs("f1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"myhash"));
+        assert_eq!(c.field, Bytes::from_static(b"f1"));
+    }
+
+    #[test]
+    fn test_hget_with_too_few_args_is_error() {
+        let r = HGet::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hget_with_too_many_args_is_error() {
+        let r = HGet::parse(&[bs("k"), bs("f"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hget_with_non_bulk_key_is_wrong_type() {
+        let r = HGet::parse(&[RespFrame::Integer(1), bs("f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hget_with_non_bulk_field_is_wrong_type() {
+        let r = HGet::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hget_to_resp_args_round_trips() {
+        let c = HGet::parse(&[bs("k"), bs("f")]).unwrap();
+        assert_eq!(
+            c.to_resp_args(),
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"f")]
+        );
+    }
+}

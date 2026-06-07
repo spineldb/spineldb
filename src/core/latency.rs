@@ -209,3 +209,196 @@ impl Default for LatencyMonitor {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_monitor_is_empty() {
+        let m = LatencyMonitor::new();
+        let r = m.get_slow_log_len();
+        assert_eq!(r, RespValue::Integer(0));
+    }
+
+    #[test]
+    fn test_add_sample_grows_history() {
+        let m = LatencyMonitor::new();
+        m.add_sample(
+            "GET",
+            vec![Bytes::from_static(b"k")],
+            Duration::from_millis(5),
+        );
+        m.add_sample(
+            "SET",
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")],
+            Duration::from_millis(10),
+        );
+        let r = m.get_slow_log_len();
+        assert_eq!(r, RespValue::Integer(2));
+    }
+
+    #[test]
+    fn test_add_sample_circular_buffer_eviction() {
+        let m = LatencyMonitor::new();
+        // Insert LATENCY_HISTORY_LEN + 50 samples to trigger eviction.
+        for i in 0..(LATENCY_HISTORY_LEN + 50) {
+            m.add_sample(
+                "PING",
+                vec![Bytes::from(format!("{i}"))],
+                Duration::from_micros(i as u64),
+            );
+        }
+        let r = m.get_slow_log_len();
+        assert_eq!(r, RespValue::Integer(LATENCY_HISTORY_LEN as i64));
+    }
+
+    #[test]
+    fn test_get_slow_log_returns_newest_first() {
+        let m = LatencyMonitor::new();
+        m.add_sample("A", vec![], Duration::from_micros(1));
+        m.add_sample("B", vec![], Duration::from_micros(2));
+        m.add_sample("C", vec![], Duration::from_micros(3));
+        // SLOWLOG returns newest first: C, B, A.
+        let r = m.get_slow_log(None);
+        if let RespValue::Array(logs) = r {
+            assert_eq!(logs.len(), 3);
+            // Each entry: [id, ts, latency_us, [cmd, args...]]
+            let extract_cmd = |entry: &RespValue| -> String {
+                if let RespValue::Array(parts) = entry
+                    && let RespValue::Array(cmd_arr) = &parts[3]
+                    && let RespValue::BulkString(name) = &cmd_arr[0]
+                {
+                    return String::from_utf8_lossy(name).to_string();
+                }
+                panic!("unexpected entry shape: {entry:?}");
+            };
+            assert_eq!(extract_cmd(&logs[0]), "C");
+            assert_eq!(extract_cmd(&logs[1]), "B");
+            assert_eq!(extract_cmd(&logs[2]), "A");
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn test_get_slow_log_count_capped_by_history() {
+        let m = LatencyMonitor::new();
+        for i in 0..20 {
+            m.add_sample(
+                "X",
+                vec![Bytes::from(format!("{i}"))],
+                Duration::from_micros(i as u64),
+            );
+        }
+        let r = m.get_slow_log(Some(5));
+        if let RespValue::Array(logs) = r {
+            assert_eq!(logs.len(), 5);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_get_slow_log_count_larger_than_history() {
+        let m = LatencyMonitor::new();
+        m.add_sample("X", vec![], Duration::from_micros(1));
+        m.add_sample("Y", vec![], Duration::from_micros(2));
+        let r = m.get_slow_log(Some(100));
+        if let RespValue::Array(logs) = r {
+            assert_eq!(logs.len(), 2);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_slow_log_resets_history() {
+        let m = LatencyMonitor::new();
+        m.add_sample("A", vec![], Duration::from_micros(1));
+        m.add_sample("B", vec![], Duration::from_micros(2));
+        let r = m.reset_slow_log();
+        assert_eq!(r, RespValue::SimpleString("OK".into()));
+        assert_eq!(m.get_slow_log_len(), RespValue::Integer(0));
+    }
+
+    #[test]
+    fn test_get_history_filters_by_event() {
+        let m = LatencyMonitor::new();
+        m.add_sample("GET", vec![], Duration::from_micros(10));
+        m.add_sample("SET", vec![], Duration::from_micros(20));
+        m.add_sample("GET", vec![], Duration::from_micros(30));
+        let r = m.get_history("GET").unwrap();
+        if let RespValue::Array(entries) = r {
+            assert_eq!(entries.len(), 2);
+        } else {
+            panic!();
+        }
+        let r = m.get_history("SET").unwrap();
+        if let RespValue::Array(entries) = r {
+            assert_eq!(entries.len(), 1);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_get_history_for_unknown_event_is_empty() {
+        let m = LatencyMonitor::new();
+        m.add_sample("GET", vec![], Duration::from_micros(10));
+        let r = m.get_history("NEVER_HAPPENED").unwrap();
+        if let RespValue::Array(entries) = r {
+            assert!(entries.is_empty());
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn test_doctor_report_when_empty() {
+        let m = LatencyMonitor::new();
+        let s = m.get_doctor_report();
+        assert!(s.contains("No latency samples"));
+    }
+
+    #[test]
+    fn test_doctor_report_contains_max_latency() {
+        let m = LatencyMonitor::new();
+        m.add_sample("X", vec![], Duration::from_micros(100));
+        m.add_sample("X", vec![], Duration::from_micros(50_000));
+        m.add_sample("X", vec![], Duration::from_micros(75));
+        let s = m.get_doctor_report();
+        assert!(s.contains("50000"));
+    }
+
+    #[test]
+    fn test_long_argument_is_truncated() {
+        let m = LatencyMonitor::new();
+        let big = Bytes::from(vec![b'x'; SLOWLOG_MAX_ARG_LEN + 50]);
+        m.add_sample(
+            "SET",
+            vec![Bytes::from_static(b"k"), big.clone()],
+            Duration::from_micros(1),
+        );
+        // The arg should be SLOWLOG_MAX_ARG_LEN bytes of 'x' plus the suffix.
+        let r = m.get_slow_log(None);
+        if let RespValue::Array(logs) = r
+            && let RespValue::Array(parts) = &logs[0]
+            && let RespValue::Array(cmd_arr) = &parts[3]
+        {
+            // [cmd, k, truncated_value]
+            assert_eq!(cmd_arr.len(), 3);
+            if let RespValue::BulkString(b) = &cmd_arr[2] {
+                // The truncated arg has SLOWLOG_MAX_ARG_LEN x's + 15 bytes of suffix.
+                let expected_len = SLOWLOG_MAX_ARG_LEN + b"... (truncated)".len();
+                assert_eq!(b.len(), expected_len);
+                let suffix = &b[SLOWLOG_MAX_ARG_LEN..];
+                assert_eq!(suffix, b"... (truncated)");
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+}

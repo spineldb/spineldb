@@ -110,3 +110,69 @@ impl CommandSpec for BfAdd {
         vec![self.key.clone(), self.item.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(parts: &[&str]) -> Vec<RespFrame> {
+        parts
+            .iter()
+            .map(|s| RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes())))
+            .collect()
+    }
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfadd_parse_valid() {
+        let frames = make_frame(&["mykey", "item1"]);
+        let cmd = BfAdd::parse(&frames).unwrap();
+        assert_eq!(cmd.key, Bytes::copy_from_slice(b"mykey"));
+        assert_eq!(cmd.item, Bytes::copy_from_slice(b"item1"));
+    }
+
+    #[test]
+    fn test_bfadd_parse_invalid() {
+        let frames = make_frame(&["mykey"]);
+        assert!(BfAdd::parse(&frames).is_err());
+    }
+
+    #[test]
+    fn test_bfadd_too_few_args_is_error() {
+        let frames = make_frame(&["k"]);
+        let r = BfAdd::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfadd_too_many_args_is_error() {
+        let frames = make_frame(&["k", "item", "extra"]);
+        let r = BfAdd::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfadd_no_args_is_error() {
+        let r = BfAdd::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfadd_with_non_bulk_key_is_wrong_type() {
+        let r = BfAdd::parse(&[RespFrame::Integer(1), bs("item")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bfadd_to_resp_args_round_trips() {
+        let frames = make_frame(&["mykey", "item1"]);
+        let c = BfAdd::parse(&frames).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"mykey"));
+        assert_eq!(args[1], Bytes::from_static(b"item1"));
+    }
+}

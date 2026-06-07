@@ -137,3 +137,46 @@ impl CommandSpec for RenameNx {
         vec![self.source.clone(), self.destination.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_renamenx_parses_source_and_destination() {
+        let r = RenameNx::parse(&[bs("src"), bs("dst")]).unwrap();
+        assert_eq!(r.source, Bytes::from_static(b"src"));
+        assert_eq!(r.destination, Bytes::from_static(b"dst"));
+    }
+
+    #[test]
+    fn test_renamenx_with_too_few_args_is_error() {
+        let r = RenameNx::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_renamenx_with_too_many_args_is_error() {
+        let r = RenameNx::parse(&[bs("a"), bs("b"), bs("c")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_renamenx_with_non_bulk_is_wrong_type() {
+        let r = RenameNx::parse(&[RespFrame::Integer(1), bs("b")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_renamenx_to_resp_args_round_trips() {
+        let r = RenameNx::parse(&[bs("a"), bs("b")]).unwrap();
+        let args = r.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"a"));
+        assert_eq!(args[1], Bytes::from_static(b"b"));
+    }
+}

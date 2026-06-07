@@ -106,3 +106,66 @@ impl CommandSpec for BLPop {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_blpop_parses_single_key_with_timeout() {
+        let c = BLPop::parse(&[bs("k1"), bs("5")]).unwrap();
+        assert_eq!(c.keys.len(), 1);
+        assert_eq!(c.keys[0], Bytes::from_static(b"k1"));
+        assert_eq!(c.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_blpop_parses_multiple_keys() {
+        let c = BLPop::parse(&[bs("k1"), bs("k2"), bs("k3"), bs("0")]).unwrap();
+        assert_eq!(c.keys.len(), 3);
+    }
+
+    #[test]
+    fn test_blpop_zero_timeout_becomes_max() {
+        // 0 means block forever in Redis.
+        let c = BLPop::parse(&[bs("k1"), bs("0")]).unwrap();
+        assert_eq!(c.timeout, Duration::from_secs(u64::MAX));
+    }
+
+    #[test]
+    fn test_blpop_negative_timeout_becomes_max() {
+        let c = BLPop::parse(&[bs("k1"), bs("-1")]).unwrap();
+        assert_eq!(c.timeout, Duration::from_secs(u64::MAX));
+    }
+
+    #[test]
+    fn test_blpop_with_too_few_args_is_error() {
+        let r = BLPop::parse(&[bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_blpop_with_no_args_is_error() {
+        let r = BLPop::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_blpop_with_non_integer_timeout_is_error() {
+        let r = BLPop::parse(&[bs("k1"), bs("forever")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_blpop_to_resp_args_round_trips() {
+        let c = BLPop::parse(&[bs("k1"), bs("k2"), bs("2.5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k1"));
+        assert_eq!(args[1], Bytes::from_static(b"k2"));
+    }
+}

@@ -144,3 +144,56 @@ impl CommandSpec for JsonArrAppend {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_arrappend_parses() {
+        let c = JsonArrAppend::parse(&[bs("k"), bs("$.a"), bs("1"), bs("2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.a");
+        assert_eq!(c.values.len(), 2);
+    }
+
+    #[test]
+    fn test_json_arrappend_single_value() {
+        let c = JsonArrAppend::parse(&[bs("k"), bs("$.a"), bs("1")]).unwrap();
+        assert_eq!(c.values.len(), 1);
+    }
+
+    #[test]
+    fn test_json_arrappend_too_few_args_is_error() {
+        let r = JsonArrAppend::parse(&[bs("k"), bs("$.a")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrappend_no_args_is_error() {
+        let r = JsonArrAppend::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrappend_with_non_bulk_key_is_wrong_type() {
+        let r = JsonArrAppend::parse(&[RespFrame::Integer(1), bs("$.a"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_arrappend_to_resp_args_round_trips() {
+        let c = JsonArrAppend::parse(&[bs("k"), bs("$.a"), bs("1"), bs("2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"$.a"),
+            Bytes::from_static(b"1"),
+            Bytes::from_static(b"2"),
+        ]);
+    }
+}

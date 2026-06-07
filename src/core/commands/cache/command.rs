@@ -300,3 +300,54 @@ impl CommandSpec for Cache {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_no_args_is_error() {
+        let r = Cache::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_unknown_subcommand_is_error() {
+        let r = Cache::parse(&[bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_cache_set_dispatch() {
+        let r = Cache::parse(&[bs("SET"), bs("k"), bs("v")]);
+        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Set(_) })));
+    }
+
+    #[test]
+    fn test_cache_get_dispatch() {
+        let r = Cache::parse(&[bs("GET"), bs("k")]);
+        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Get(_) })));
+    }
+
+    #[test]
+    fn test_cache_stats_dispatch() {
+        let r = Cache::parse(&[bs("STATS")]);
+        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Stats(_) })));
+    }
+
+    #[test]
+    fn test_cache_info_dispatch() {
+        let r = Cache::parse(&[bs("INFO"), bs("k")]);
+        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Info(_) })));
+    }
+
+    #[test]
+    fn test_cache_subcommand_case_insensitive() {
+        let r = Cache::parse(&[bs("stats")]);
+        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Stats(_) })));
+    }
+}

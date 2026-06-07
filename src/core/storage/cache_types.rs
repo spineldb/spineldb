@@ -150,3 +150,140 @@ pub struct ManifestEntry {
     /// The key associated with this file, used for eviction.
     pub key: Bytes,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_body_in_memory_len() {
+        let b = CacheBody::InMemory(Bytes::from_static(b"hello"));
+        assert_eq!(b.len(), 5);
+        assert!(!b.is_empty());
+    }
+
+    #[test]
+    fn test_cache_body_in_memory_empty() {
+        let b = CacheBody::InMemory(Bytes::new());
+        assert_eq!(b.len(), 0);
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn test_cache_body_on_disk_len() {
+        let b = CacheBody::OnDisk {
+            path: PathBuf::from("/tmp/cache/x"),
+            size: 1024,
+        };
+        assert_eq!(b.len(), 1024);
+        assert!(!b.is_empty());
+    }
+
+    #[test]
+    fn test_cache_body_negative_with_body() {
+        let b = CacheBody::Negative {
+            status: 404,
+            body: Some(Bytes::from_static(b"Not Found")),
+        };
+        assert_eq!(b.len(), 9);
+    }
+
+    #[test]
+    fn test_cache_body_negative_without_body() {
+        let b = CacheBody::Negative {
+            status: 500,
+            body: None,
+        };
+        assert_eq!(b.len(), 0);
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn test_cache_body_compressed_len_uses_original_size() {
+        let b = CacheBody::CompressedInMemory {
+            original_size: 2000,
+            data: Bytes::from_static(b"zstd"), // compressed payload is tiny
+        };
+        // len() reports the original (uncompressed) size, not the on-wire size.
+        assert_eq!(b.len(), 2000);
+    }
+
+    #[test]
+    fn test_http_metadata_default_is_empty() {
+        let m = HttpMetadata::default();
+        assert!(m.etag.is_none());
+        assert!(m.last_modified.is_none());
+        assert!(m.revalidate_url.is_none());
+        assert!(m.content_encoding.is_none());
+        assert_eq!(m.memory_usage(), 0);
+    }
+
+    #[test]
+    fn test_http_metadata_memory_usage() {
+        let m = HttpMetadata {
+            etag: Some(Bytes::from_static(b"\"abc\"")),
+            last_modified: Some(Bytes::from_static(b"Today")),
+            revalidate_url: Some("https://x/y".to_string()),
+            content_encoding: Some(Bytes::from_static(b"zstd")),
+        };
+        // 5 ("abc") + 5 (Today) + 11 (https://x/y) + 4 (zstd) = 25
+        assert_eq!(m.memory_usage(), 25);
+    }
+
+    #[test]
+    fn test_cache_variant_equality() {
+        let v1 = CacheVariant {
+            body: CacheBody::InMemory(Bytes::from_static(b"x")),
+            metadata: HttpMetadata::default(),
+            last_accessed: Instant::now(),
+        };
+        let v2 = v1.clone();
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_cache_policy_defaults() {
+        let p = CachePolicy {
+            name: "p".to_string(),
+            key_pattern: "k:*".to_string(),
+            url_template: "u".to_string(),
+            ttl: None,
+            swr: None,
+            grace: None,
+            tags: vec![],
+            prewarm: false,
+            disallow_status_codes: vec![],
+            max_size_bytes: None,
+            vary_on: vec![],
+            respect_origin_headers: false,
+            negative_ttl: None,
+            priority: 0,
+            compression: false,
+            force_disk: false,
+        };
+        assert_eq!(p.name, "p");
+        assert!(p.tags.is_empty());
+        assert!(!p.prewarm);
+        assert_eq!(p.priority, 0);
+    }
+
+    #[test]
+    fn test_manifest_state_eq() {
+        assert_eq!(ManifestState::Pending, ManifestState::Pending);
+        assert_ne!(ManifestState::Pending, ManifestState::Committed);
+        assert_ne!(ManifestState::Committed, ManifestState::PendingDelete);
+    }
+
+    #[test]
+    fn test_manifest_entry_construction() {
+        let e = ManifestEntry {
+            timestamp: 1700000000,
+            state: ManifestState::Committed,
+            path: PathBuf::from("/var/cache/k.bin"),
+            key: Bytes::from_static(b"k"),
+        };
+        assert_eq!(e.timestamp, 1700000000);
+        assert_eq!(e.state, ManifestState::Committed);
+        assert_eq!(e.key, Bytes::from_static(b"k"));
+    }
+}

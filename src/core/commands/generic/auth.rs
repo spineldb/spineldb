@@ -66,3 +66,49 @@ impl CommandSpec for Auth {
         vec![self.password.clone().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_auth_parses_password() {
+        let a = Auth::parse(&[bs("secret")]).unwrap();
+        assert_eq!(a.password, "secret");
+    }
+
+    #[test]
+    fn test_auth_with_no_args_is_error() {
+        let r = Auth::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_auth_with_too_many_args_is_error() {
+        let r = Auth::parse(&[bs("u"), bs("p")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_auth_with_non_bulk_is_wrong_type() {
+        let r = Auth::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_auth_with_empty_password_is_ok() {
+        let a = Auth::parse(&[bs("")]).unwrap();
+        assert_eq!(a.password, "");
+    }
+
+    #[test]
+    fn test_auth_to_resp_args_round_trips() {
+        let a = Auth::parse(&[bs("hunter2")]).unwrap();
+        let args = a.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"hunter2")]);
+    }
+}

@@ -91,3 +91,51 @@ impl CommandSpec for HSetNx {
         vec![self.key.clone(), self.field.clone(), self.value.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hsetnx_parses_key_field_value() {
+        let c = HSetNx::parse(&[bs("k"), bs("f"), bs("v")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.field, Bytes::from_static(b"f"));
+        assert_eq!(c.value, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_hsetnx_with_too_few_args_is_error() {
+        let r = HSetNx::parse(&[bs("k"), bs("f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hsetnx_with_too_many_args_is_error() {
+        let r = HSetNx::parse(&[bs("k"), bs("f"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hsetnx_with_non_bulk_key_is_wrong_type() {
+        let r = HSetNx::parse(&[RespFrame::Integer(1), bs("f"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hsetnx_to_resp_args_round_trips() {
+        let c = HSetNx::parse(&[bs("k"), bs("f"), bs("v")]).unwrap();
+        assert_eq!(
+            c.to_resp_args(),
+            vec![
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"f"),
+                Bytes::from_static(b"v"),
+            ]
+        );
+    }
+}

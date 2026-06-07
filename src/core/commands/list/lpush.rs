@@ -63,3 +63,54 @@ impl CommandSpec for LPush {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lpush_parses_single_value() {
+        let c = LPush::parse(&[bs("k"), bs("v1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.values.len(), 1);
+        assert_eq!(c.values[0], Bytes::from_static(b"v1"));
+    }
+
+    #[test]
+    fn test_lpush_parses_multiple_values() {
+        let c = LPush::parse(&[bs("k"), bs("a"), bs("b"), bs("c")]).unwrap();
+        assert_eq!(c.values.len(), 3);
+    }
+
+    #[test]
+    fn test_lpush_with_too_few_args_is_error() {
+        let r = LPush::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lpush_with_non_bulk_key_is_wrong_type() {
+        let r = LPush::parse(&[RespFrame::Integer(1), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_lpush_with_non_bulk_value_is_wrong_type() {
+        let r = LPush::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_lpush_to_resp_args_round_trips() {
+        let c = LPush::parse(&[bs("k"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"a"));
+        assert_eq!(args[2], Bytes::from_static(b"b"));
+    }
+}

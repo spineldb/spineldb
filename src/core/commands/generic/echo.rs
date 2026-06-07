@@ -64,3 +64,50 @@ impl CommandSpec for Echo {
         vec![self.message.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_echo_parses_message() {
+        let e = Echo::parse(&[bs("hello world")]).unwrap();
+        assert_eq!(e.message, Bytes::from_static(b"hello world"));
+    }
+
+    #[test]
+    fn test_echo_with_no_args_is_error() {
+        let r = Echo::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_echo_with_too_many_args_is_error() {
+        let r = Echo::parse(&[bs("a"), bs("b")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_echo_with_non_bulk_is_wrong_type() {
+        let r = Echo::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_echo_with_empty_string_is_ok() {
+        let e = Echo::parse(&[bs("")]).unwrap();
+        assert!(e.message.is_empty());
+    }
+
+    #[test]
+    fn test_echo_to_resp_args_round_trips() {
+        let e = Echo::parse(&[bs("payload")]).unwrap();
+        let args = e.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"payload"));
+    }
+}

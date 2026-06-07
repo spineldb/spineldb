@@ -67,3 +67,93 @@ impl SecureGossipMessage {
         Ok(mac.verify_slice(&self.signature).is_ok())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_meet() -> GossipMessage {
+        GossipMessage::Meet { timestamp_ms: 1000 }
+    }
+
+    #[test]
+    fn test_no_password_produces_zero_signature() {
+        let msg = make_meet();
+        let signed = SecureGossipMessage::new(msg, &None).unwrap();
+        assert_eq!(signed.signature, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_no_password_verifies_zero_signature() {
+        let msg = make_meet();
+        let signed = SecureGossipMessage::new(msg, &None).unwrap();
+        assert!(signed.verify(&None).unwrap());
+    }
+
+    #[test]
+    fn test_no_password_rejects_nonzero_signature() {
+        let msg = make_meet();
+        // Tamper with the signature.
+        let mut signed = SecureGossipMessage::new(msg, &None).unwrap();
+        signed.signature[0] = 1;
+        assert!(!signed.verify(&None).unwrap());
+    }
+
+    #[test]
+    fn test_password_produces_nonzero_signature() {
+        let msg = make_meet();
+        let signed = SecureGossipMessage::new(msg, &Some("secret".to_string())).unwrap();
+        assert_ne!(signed.signature, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_password_verifies_correct_signature() {
+        let msg = make_meet();
+        let pass = Some("secret".to_string());
+        let signed = SecureGossipMessage::new(msg, &pass).unwrap();
+        assert!(signed.verify(&pass).unwrap());
+    }
+
+    #[test]
+    fn test_password_rejects_tampered_signature() {
+        let msg = make_meet();
+        let pass = Some("secret".to_string());
+        let mut signed = SecureGossipMessage::new(msg, &pass).unwrap();
+        signed.signature[0] ^= 0xFF;
+        assert!(!signed.verify(&pass).unwrap());
+    }
+
+    #[test]
+    fn test_password_rejects_tampered_message() {
+        let msg1 = GossipMessage::Meet { timestamp_ms: 1000 };
+        let pass = Some("secret".to_string());
+        let signed = SecureGossipMessage::new(msg1, &pass).unwrap();
+        // Build a wrapper with a different message but the original signature.
+        let msg2 = GossipMessage::Meet { timestamp_ms: 9999 };
+        let tampered = SecureGossipMessage {
+            message: msg2,
+            signature: signed.signature,
+        };
+        assert!(!tampered.verify(&pass).unwrap());
+    }
+
+    #[test]
+    fn test_password_rejects_wrong_password() {
+        let msg = make_meet();
+        let signed = SecureGossipMessage::new(msg, &Some("secret".to_string())).unwrap();
+        assert!(!signed.verify(&Some("different".to_string())).unwrap());
+    }
+
+    #[test]
+    fn test_password_rejects_zero_signature() {
+        // Build a message with a zero signature; verification should fail
+        // because a password was configured but the signature is zero.
+        let msg = make_meet();
+        let tampered = SecureGossipMessage {
+            message: msg,
+            signature: [0u8; 32],
+        };
+        let pass = Some("secret".to_string());
+        assert!(!tampered.verify(&pass).unwrap());
+    }
+}

@@ -116,3 +116,66 @@ impl CommandSpec for LInsert {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_linsert_parses_before() {
+        let c = LInsert::parse(&[bs("k"), bs("BEFORE"), bs("p"), bs("e")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.position, InsertPosition::Before);
+        assert_eq!(c.pivot, Bytes::from_static(b"p"));
+        assert_eq!(c.element, Bytes::from_static(b"e"));
+    }
+
+    #[test]
+    fn test_linsert_parses_after() {
+        let c = LInsert::parse(&[bs("k"), bs("AFTER"), bs("p"), bs("e")]).unwrap();
+        assert_eq!(c.position, InsertPosition::After);
+    }
+
+    #[test]
+    fn test_linsert_case_insensitive() {
+        let c = LInsert::parse(&[bs("k"), bs("before"), bs("p"), bs("e")]).unwrap();
+        assert_eq!(c.position, InsertPosition::Before);
+    }
+
+    #[test]
+    fn test_linsert_with_too_few_args_is_error() {
+        let r = LInsert::parse(&[bs("k"), bs("BEFORE"), bs("p")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_linsert_with_too_many_args_is_error() {
+        let r = LInsert::parse(&[bs("k"), bs("BEFORE"), bs("p"), bs("e"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_linsert_with_invalid_position_is_syntax_error() {
+        let r = LInsert::parse(&[bs("k"), bs("INSIDE"), bs("p"), bs("e")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_linsert_to_resp_args_round_trips() {
+        let c = LInsert::parse(&[bs("k"), bs("AFTER"), bs("p"), bs("e")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"AFTER"),
+                Bytes::from_static(b"p"),
+                Bytes::from_static(b"e"),
+            ]
+        );
+    }
+}

@@ -127,3 +127,59 @@ impl CommandSpec for XAck {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xack_parses_key_group_and_ids() {
+        let c = XAck::parse(&[bs("k"), bs("g1"), bs("1-0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.group_name, Bytes::from_static(b"g1"));
+        assert_eq!(c.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_xack_parses_multiple_ids() {
+        let c = XAck::parse(&[bs("k"), bs("g1"), bs("1-0"), bs("2-0")]).unwrap();
+        assert_eq!(c.ids.len(), 2);
+    }
+
+    #[test]
+    fn test_xack_with_too_few_args_is_error() {
+        let r = XAck::parse(&[bs("k"), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xack_with_no_ids_is_error() {
+        let r = XAck::parse(&[bs("k"), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xack_with_non_bulk_key_is_wrong_type() {
+        let r = XAck::parse(&[RespFrame::Integer(1), bs("g1"), bs("1-0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_xack_with_invalid_id_is_error() {
+        let r = XAck::parse(&[bs("k"), bs("g1"), bs("invalid")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xack_to_resp_args_round_trips() {
+        let c = XAck::parse(&[bs("k"), bs("g1"), bs("1-0")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"g1"));
+    }
+}

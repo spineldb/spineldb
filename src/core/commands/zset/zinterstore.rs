@@ -137,3 +137,66 @@ impl CommandSpec for ZInterStore {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zinterstore_parses_dest_numkeys_keys() {
+        let c = ZInterStore::parse(&[bs("dst"), bs("2"), bs("k1"), bs("k2")]).unwrap();
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.keys.len(), 2);
+    }
+
+    #[test]
+    fn test_zinterstore_parses_with_weights() {
+        let c = ZInterStore::parse(&[
+            bs("dst"),
+            bs("2"),
+            bs("k1"),
+            bs("k2"),
+            bs("WEIGHTS"),
+            bs("0.5"),
+            bs("2.0"),
+        ])
+        .unwrap();
+        assert_eq!(c.weights.len(), 2);
+    }
+
+    #[test]
+    fn test_zinterstore_parses_with_aggregate() {
+        let c = ZInterStore::parse(&[bs("dst"), bs("1"), bs("k1"), bs("AGGREGATE"), bs("MIN")])
+            .unwrap();
+        assert!(matches!(c.aggregate, Aggregate::Min));
+    }
+
+    #[test]
+    fn test_zinterstore_with_too_few_args_is_error() {
+        let r = ZInterStore::parse(&[bs("dst")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zinterstore_with_zero_numkeys_is_syntax_error() {
+        let r = ZInterStore::parse(&[bs("dst"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zinterstore_with_non_integer_numkeys_is_error() {
+        let r = ZInterStore::parse(&[bs("dst"), bs("all"), bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_zinterstore_to_resp_args_round_trips() {
+        let c = ZInterStore::parse(&[bs("dst"), bs("1"), bs("k1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+    }
+}

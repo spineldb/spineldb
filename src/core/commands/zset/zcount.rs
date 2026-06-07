@@ -84,3 +84,56 @@ impl CommandSpec for ZCount {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zcount_parses_args() {
+        let c = ZCount::parse(&[bs("z"), bs("1"), bs("10")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+    }
+
+    #[test]
+    fn test_zcount_parses_inclusive_bounds() {
+        let c = ZCount::parse(&[bs("z"), bs("(1"), bs("(10")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+    }
+
+    #[test]
+    fn test_zcount_parses_negative_min() {
+        let c = ZCount::parse(&[bs("z"), bs("-inf"), bs("10")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+    }
+
+    #[test]
+    fn test_zcount_with_too_few_args_is_error() {
+        let r = ZCount::parse(&[bs("z"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zcount_with_too_many_args_is_error() {
+        let r = ZCount::parse(&[bs("z"), bs("1"), bs("10"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zcount_with_non_bulk_key_is_wrong_type() {
+        let r = ZCount::parse(&[RespFrame::Integer(1), bs("1"), bs("10")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_zcount_to_resp_args_round_trips() {
+        let c = ZCount::parse(&[bs("z"), bs("1"), bs("10")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"z"));
+    }
+}

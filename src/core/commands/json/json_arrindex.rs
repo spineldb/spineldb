@@ -155,3 +155,74 @@ impl CommandSpec for JsonArrIndex {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_arrindex_three_args() {
+        let c = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("\"x\"")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.a");
+        assert_eq!(c.value_to_find, Value::String("x".to_string()));
+        assert_eq!(c.start_index, 0);
+        assert_eq!(c.end_index, None);
+    }
+
+    #[test]
+    fn test_json_arrindex_four_args_with_start() {
+        let c = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("1"), bs("2")]).unwrap();
+        assert_eq!(c.start_index, 2);
+        assert_eq!(c.end_index, None);
+    }
+
+    #[test]
+    fn test_json_arrindex_five_args_with_end() {
+        let c = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("1"), bs("2"), bs("5")]).unwrap();
+        assert_eq!(c.start_index, 2);
+        assert_eq!(c.end_index, Some(5));
+    }
+
+    #[test]
+    fn test_json_arrindex_negative_start() {
+        let c = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("1"), bs("-1")]).unwrap();
+        assert_eq!(c.start_index, -1);
+    }
+
+    #[test]
+    fn test_json_arrindex_too_few_args_is_error() {
+        let r = JsonArrIndex::parse(&[bs("k"), bs("$.a")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrindex_too_many_args_is_error() {
+        let r = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("1"), bs("0"), bs("0"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrindex_invalid_json_value_is_error() {
+        let r = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("not_json")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_json_arrindex_invalid_start_index_is_error() {
+        let r = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("1"), bs("not_a_number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_json_arrindex_to_resp_args_round_trips() {
+        let c = JsonArrIndex::parse(&[bs("k"), bs("$.a"), bs("\"x\"")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

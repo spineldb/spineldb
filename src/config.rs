@@ -65,6 +65,19 @@ pub struct SafetyConfig {
     /// Rejects BITOP if the largest source string exceeds this limit. `0` disables the check.
     #[serde(default = "default_max_bitop_alloc_size")]
     pub max_bitop_alloc_size: usize,
+    /// Maximum size in bytes of a single bulk string in the RESP protocol.
+    /// `0` falls back to the hard-coded default of 512 MB. Hard cap at 16 GB.
+    #[serde(default)]
+    pub max_bulk_string_size: usize,
+    /// Number of Lua VMs in the pool. Each VM can execute a script independently
+    /// so the engine does not become a serialized bottleneck. `0` falls back to
+    /// the default of `max(1, num_cpus::get() / 2)`.
+    #[serde(default)]
+    pub lua_vm_pool_size: usize,
+    /// If `true`, NaN scores sent to `ZADD` are rejected with an error rather than
+    /// being stored as "equal to all other NaN scores".
+    #[serde(default = "default_reject_nan_scores")]
+    pub reject_nan_scores: bool,
 }
 
 impl Default for SafetyConfig {
@@ -76,6 +89,9 @@ impl Default for SafetyConfig {
             script_memory_limit_mb: default_script_memory_limit_mb(),
             auto_unlink_on_del_threshold: default_auto_unlink_threshold(),
             max_bitop_alloc_size: default_max_bitop_alloc_size(),
+            max_bulk_string_size: 0,
+            lua_vm_pool_size: 0,
+            reject_nan_scores: default_reject_nan_scores(),
         }
     }
 }
@@ -114,6 +130,9 @@ fn default_auto_unlink_threshold() -> usize {
 }
 fn default_max_bitop_alloc_size() -> usize {
     128 * 1024 * 1024 // 128 MB
+}
+fn default_reject_nan_scores() -> bool {
+    true
 }
 
 /// Configuration for Access Control List (ACL).
@@ -308,6 +327,11 @@ pub struct CacheConfig {
     /// The maximum number of concurrent file reads from the on-disk cache.
     #[serde(default = "default_on_disk_max_open_files")]
     pub on_disk_max_open_files: usize,
+    /// How often (in seconds) the on-disk cache GC/compaction cycle runs.
+    /// Lower values reduce the window in which orphan files can accumulate
+    /// after a crash. Default: 600 (10 minutes).
+    #[serde(default = "default_on_disk_gc_interval_secs")]
+    pub on_disk_gc_interval_secs: u64,
 }
 
 fn default_streaming_threshold() -> usize {
@@ -328,6 +352,9 @@ fn default_negative_cache_ttl() -> u64 {
 fn default_on_disk_max_open_files() -> usize {
     1024
 }
+fn default_on_disk_gc_interval_secs() -> u64 {
+    600 // 10 minutes
+}
 
 impl Default for CacheConfig {
     fn default() -> Self {
@@ -338,6 +365,7 @@ impl Default for CacheConfig {
             max_variants_per_key: default_max_variants_per_key(),
             negative_cache_ttl_seconds: default_negative_cache_ttl(),
             on_disk_max_open_files: default_on_disk_max_open_files(),
+            on_disk_gc_interval_secs: default_on_disk_gc_interval_secs(),
         }
     }
 }
@@ -412,6 +440,16 @@ pub struct PersistenceConfig {
     pub auto_aof_rewrite_min_size: u64,
     #[serde(default = "default_aof_rewrite_buffer_limit")]
     pub aof_rewrite_buffer_limit: usize,
+    /// The size of the AOF event channel. When the channel fills up, the
+    /// command handler waits up to `aof_enqueue_timeout_ms` before either
+    /// falling back to direct write or surfacing a backpressure error.
+    /// `0` uses the default of 65 536.
+    #[serde(default)]
+    pub aof_channel_capacity: usize,
+    /// Maximum time, in milliseconds, the command handler is willing to
+    /// block while enqueuing an AOF event. `0` disables the timeout.
+    #[serde(default = "default_aof_enqueue_timeout_ms")]
+    pub aof_enqueue_timeout_ms: u64,
     pub spldb_enabled: bool,
     pub spldb_path: String,
     pub save_rules: Vec<SaveRule>,
@@ -425,6 +463,9 @@ fn default_auto_aof_rewrite_min_size() -> u64 {
 }
 fn default_aof_rewrite_buffer_limit() -> usize {
     256 * 1024 * 1024 // 256MB
+}
+fn default_aof_enqueue_timeout_ms() -> u64 {
+    100
 }
 
 /// A rule defining when to automatically save the SPLDB file.
@@ -457,6 +498,11 @@ pub struct ReplicationPrimaryConfig {
     /// The timeout in seconds for the replica quorum fencing mechanism.
     #[serde(default = "default_replica_quorum_timeout")]
     pub replica_quorum_timeout_secs: u64,
+    /// Capacity of the replication backlog in bytes. Larger values allow
+    /// replicas to be disconnected longer before requiring a full resync.
+    /// `0` uses the default of 2 MiB.
+    #[serde(default)]
+    pub backlog_capacity: usize,
 }
 
 fn default_min_replicas_to_write() -> usize {
@@ -497,6 +543,8 @@ impl Default for PersistenceConfig {
             auto_aof_rewrite_percentage: default_auto_aof_rewrite_percentage(),
             auto_aof_rewrite_min_size: default_auto_aof_rewrite_min_size(),
             aof_rewrite_buffer_limit: default_aof_rewrite_buffer_limit(),
+            aof_channel_capacity: 0,
+            aof_enqueue_timeout_ms: default_aof_enqueue_timeout_ms(),
             spldb_enabled: true,
             spldb_path: default_spldb_path(),
             save_rules: default_save_rules(),
@@ -667,6 +715,14 @@ impl Config {
                 ));
             }
         }
+
+        if self.safety.max_bulk_string_size > 16 * 1024 * 1024 * 1024 {
+            return Err(anyhow!(
+                "safety.max_bulk_string_size cannot exceed 16 GiB (got {} bytes)",
+                self.safety.max_bulk_string_size
+            ));
+        }
+
         Ok(())
     }
 
@@ -750,4 +806,244 @@ fn parse_memory_string(
         ));
     }
     Ok(Some(result_u64 as usize))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eviction_policy_default_is_noeviction() {
+        assert_eq!(EvictionPolicy::default(), EvictionPolicy::NoEviction);
+    }
+
+    #[test]
+    fn test_safety_config_default_has_known_values() {
+        let s = SafetyConfig::default();
+        assert_eq!(s.max_collection_scan_keys, 0);
+        assert_eq!(s.max_set_operation_keys, 0);
+        assert_eq!(s.max_bulk_string_size, 0);
+        assert!(s.reject_nan_scores);
+    }
+
+    #[test]
+    fn test_security_config_default_has_no_password() {
+        let s = SecurityConfig::default();
+        assert!(s.password.is_none());
+        assert!(s.allowed_fetch_domains.is_empty());
+        assert!(!s.allow_private_fetch_ips);
+    }
+
+    #[test]
+    fn test_acl_users_file_default() {
+        let f = AclUsersFile::default();
+        assert!(f.users.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_bytes_passthrough() {
+        let cfg = MaxMemoryConfig::Bytes(1024);
+        let r = resolve_maxmemory(cfg, 1_000_000).unwrap();
+        assert_eq!(r, Some(1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_plain_number() {
+        let cfg = MaxMemoryConfig::String("2048".to_string());
+        let r = resolve_maxmemory(cfg, 1_000_000).unwrap();
+        assert_eq!(r, Some(2048));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_kb_suffix() {
+        let cfg = MaxMemoryConfig::String("512kb".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(512 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_k_suffix() {
+        let cfg = MaxMemoryConfig::String("8k".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(8 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_mb_suffix() {
+        let cfg = MaxMemoryConfig::String("128mb".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(128 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_m_suffix() {
+        let cfg = MaxMemoryConfig::String("16m".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(16 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_gb_suffix() {
+        let cfg = MaxMemoryConfig::String("2gb".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(2 * 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_g_suffix() {
+        let cfg = MaxMemoryConfig::String("1g".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_uppercase_suffix() {
+        let cfg = MaxMemoryConfig::String("256MB".to_string());
+        let r = resolve_maxmemory(cfg, 0).unwrap();
+        assert_eq!(r, Some(256 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_percentage() {
+        let cfg = MaxMemoryConfig::String("50%".to_string());
+        let r = resolve_maxmemory(cfg, 1000).unwrap();
+        assert_eq!(r, Some(500));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_percentage_zero() {
+        let cfg = MaxMemoryConfig::String("0%".to_string());
+        let r = resolve_maxmemory(cfg, 1000).unwrap();
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_percentage_hundred() {
+        let cfg = MaxMemoryConfig::String("100%".to_string());
+        let r = resolve_maxmemory(cfg, 4096).unwrap();
+        assert_eq!(r, Some(4096));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_percentage_out_of_range_high() {
+        let cfg = MaxMemoryConfig::String("150%".to_string());
+        assert!(resolve_maxmemory(cfg, 1000).is_err());
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_percentage_out_of_range_negative() {
+        let cfg = MaxMemoryConfig::String("-5%".to_string());
+        assert!(resolve_maxmemory(cfg, 1000).is_err());
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_garbage_input_fails() {
+        let cfg = MaxMemoryConfig::String("not-a-number".to_string());
+        assert!(resolve_maxmemory(cfg, 0).is_err());
+    }
+
+    #[test]
+    fn test_parse_memory_string_saturates_at_u64_max_on_overflow() {
+        // The implementation uses saturating_mul then checks `> usize::MAX as u64`.
+        // On 64-bit systems, usize::MAX == u64::MAX, so the saturated result is
+        // accepted (but the returned value is the saturated maximum, not the
+        // intended product). This test documents that behavior.
+        let r = parse_memory_string("18000000000gb", "18000000000", 1024 * 1024 * 1024).unwrap();
+        assert_eq!(r, Some(usize::MAX));
+    }
+
+    #[test]
+    fn test_parse_memory_string_invalid_number() {
+        let r = parse_memory_string("Xmb", "not-a-number", 1024 * 1024);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_appendfsync_values_are_distinct() {
+        assert_ne!(AppendFsync::Always, AppendFsync::EverySec);
+        assert_ne!(AppendFsync::EverySec, AppendFsync::No);
+        assert_ne!(AppendFsync::Always, AppendFsync::No);
+    }
+
+    #[test]
+    fn test_save_rule_construction() {
+        let r = SaveRule {
+            seconds: 60,
+            changes: 1000,
+        };
+        assert_eq!(r.seconds, 60);
+        assert_eq!(r.changes, 1000);
+    }
+
+    #[test]
+    fn test_eviction_policy_variants_all_distinct() {
+        use EvictionPolicy::*;
+        let all = [
+            NoEviction,
+            AllkeysLru,
+            VolatileLru,
+            AllkeysRandom,
+            VolatileRandom,
+            VolatileTtl,
+            AllkeysLfu,
+            VolatileLfu,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_eviction_policy_serde_kebab_case() {
+        // The enum serializes as kebab-case strings.
+        let s = serde_json::to_string(&EvictionPolicy::AllkeysLru).unwrap();
+        assert_eq!(s, "\"allkeys-lru\"");
+
+        let s = serde_json::to_string(&EvictionPolicy::VolatileTtl).unwrap();
+        assert_eq!(s, "\"volatile-ttl\"");
+
+        let s = serde_json::to_string(&EvictionPolicy::NoEviction).unwrap();
+        assert_eq!(s, "\"no-eviction\"");
+
+        // Roundtrip
+        let d: EvictionPolicy = serde_json::from_str("\"allkeys-lfu\"").unwrap();
+        assert_eq!(d, EvictionPolicy::AllkeysLfu);
+    }
+
+    #[test]
+    fn test_appendfsync_variants_all_distinct() {
+        use AppendFsync::*;
+        assert_ne!(Always, EverySec);
+        assert_ne!(EverySec, No);
+        assert_ne!(Always, No);
+    }
+
+    #[test]
+    fn test_into_mutex_creates_arc_mutex() {
+        let cfg = Config::default();
+        let m = cfg.into_mutex();
+        // Mutex is reachable and Config is preserved.
+        let guard = m.lock().unwrap();
+        assert_eq!(guard.maxmemory_policy, EvictionPolicy::NoEviction);
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_zero_bytes_yields_zero() {
+        let cfg = MaxMemoryConfig::Bytes(0);
+        let r = resolve_maxmemory(cfg, 1_000_000).unwrap();
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn test_resolve_maxmemory_tb_suffix_unsupported() {
+        // The current implementation only supports kb/k, mb/m, gb/g (not tb).
+        let cfg = MaxMemoryConfig::String("1tb".to_string());
+        assert!(resolve_maxmemory(cfg, 0).is_err());
+    }
 }

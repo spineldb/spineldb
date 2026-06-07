@@ -131,3 +131,59 @@ impl CommandSpec for HSet {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hset_parses_single_field() {
+        let c = HSet::parse(&[bs("k"), bs("f1"), bs("v1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.fields.len(), 1);
+        assert_eq!(c.fields[0].0, Bytes::from_static(b"f1"));
+        assert_eq!(c.fields[0].1, Bytes::from_static(b"v1"));
+    }
+
+    #[test]
+    fn test_hset_parses_multiple_fields() {
+        let c = HSet::parse(&[bs("k"), bs("f1"), bs("v1"), bs("f2"), bs("v2")]).unwrap();
+        assert_eq!(c.fields.len(), 2);
+        assert_eq!(c.fields[1].0, Bytes::from_static(b"f2"));
+        assert_eq!(c.fields[1].1, Bytes::from_static(b"v2"));
+    }
+
+    #[test]
+    fn test_hset_with_no_pairs_is_error() {
+        let r = HSet::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hset_with_odd_args_is_error() {
+        let r = HSet::parse(&[bs("k"), bs("f1"), bs("v1"), bs("f2")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hset_with_non_bulk_key_is_wrong_type() {
+        let r = HSet::parse(&[RespFrame::Integer(1), bs("f"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hset_to_resp_args_round_trips() {
+        let c = HSet::parse(&[bs("k"), bs("a"), bs("1"), bs("b"), bs("2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"a"));
+        assert_eq!(args[2], Bytes::from_static(b"1"));
+        assert_eq!(args[3], Bytes::from_static(b"b"));
+        assert_eq!(args[4], Bytes::from_static(b"2"));
+    }
+}

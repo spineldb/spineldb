@@ -133,3 +133,76 @@ impl CommandSpec for BfReserve {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfreserve_parses_valid() {
+        let c = BfReserve::parse(&[bs("k"), bs("0.01"), bs("1000")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!((c.error_rate - 0.01).abs() < f64::EPSILON);
+        assert_eq!(c.capacity, 1000);
+    }
+
+    #[test]
+    fn test_bfreserve_with_too_few_args_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("0.01")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfreserve_with_too_many_args_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("0.01"), bs("1000"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfreserve_no_args_is_error() {
+        let r = BfReserve::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfreserve_invalid_error_rate_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("not_a_float"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_bfreserve_invalid_capacity_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("0.01"), bs("not_an_int")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_bfreserve_error_rate_zero_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("0"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidRequest(_))));
+    }
+
+    #[test]
+    fn test_bfreserve_error_rate_one_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("1"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidRequest(_))));
+    }
+
+    #[test]
+    fn test_bfreserve_capacity_zero_is_error() {
+        let r = BfReserve::parse(&[bs("k"), bs("0.01"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidRequest(_))));
+    }
+
+    #[test]
+    fn test_bfreserve_to_resp_args_round_trips() {
+        let c = BfReserve::parse(&[bs("k"), bs("0.01"), bs("1000")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

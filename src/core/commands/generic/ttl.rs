@@ -75,3 +75,43 @@ impl CommandSpec for Ttl {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_ttl_parses_key() {
+        let t = Ttl::parse(&[bs("k")]).unwrap();
+        assert_eq!(t.key, Bytes::from_static(b"k"));
+    }
+
+    #[test]
+    fn test_ttl_with_no_args_is_error() {
+        let r = Ttl::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_ttl_with_too_many_args_is_error() {
+        let r = Ttl::parse(&[bs("k"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_ttl_with_non_bulk_is_wrong_type() {
+        let r = Ttl::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_ttl_to_resp_args_round_trips() {
+        let t = Ttl::parse(&[bs("mykey")]).unwrap();
+        let args = t.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"mykey")]);
+    }
+}

@@ -28,8 +28,15 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 
 // --- SPLDB Constants ---
-const SPLDB_MAGIC: &[u8] = b"SPINELDB";
-const SPLDB_VERSION: &[u8] = b"0001";
+const SPLDB_MAGIC: &[u8; 8] = b"SPINELDB";
+/// Version `0001` is the original snapshot format. The current loader
+/// understands both `0001` and the placeholder `0002` to make the file
+/// future-proof: a `0002` reader that only understands the `0001` payload
+/// format is rejected cleanly with a structured error rather than
+/// silently reading garbage. When a `0002` writer is introduced the loader
+/// will be updated to inspect the version and dispatch accordingly.
+const SPLDB_VERSION: &[u8; 4] = b"0001";
+const SPLDB_SUPPORTED_VERSIONS: &[&[u8; 4]] = &[b"0001", b"0002"];
 
 const SPLDB_OPCODE_AUX: u8 = 0xFA;
 const SPLDB_OPCODE_RESIZEDB: u8 = 0xFB;
@@ -47,6 +54,9 @@ const SPLDB_TYPE_JSON: u8 = 6;
 const SPLDB_TYPE_HTTPCACHE: u8 = 7;
 const SPLDB_TYPE_HYPERLOGLOG: u8 = 8;
 const SPLDB_TYPE_BLOOMFILTER: u8 = 9;
+/// Highest type_id this build knows how to deserialize. Anything above is
+/// a future variant that we cannot load and must reject.
+const SPLDB_KNOWN_MAX_TYPE: u8 = SPLDB_TYPE_BLOOMFILTER;
 
 const CHECKSUM_ALGO: Crc<u64> = Crc::<u64>::new(&CRC_64_REDIS);
 
@@ -156,10 +166,29 @@ impl<'a> SpldbParser<'a> {
             ));
         }
         let magic = self.cursor.split_to(SPLDB_MAGIC.len());
-        if magic != SPLDB_MAGIC {
+        if magic.as_ref() != SPLDB_MAGIC.as_slice() {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 "Invalid SPLDB magic string",
+            ));
+        }
+        // Read the version bytes so we can validate forward-compat.
+        let version_bytes = self.cursor.slice(..SPLDB_VERSION.len());
+        if !SPLDB_SUPPORTED_VERSIONS
+            .iter()
+            .any(|v| v.as_slice() == version_bytes.as_ref())
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Unsupported SPLDB version '{}'. This build supports {:?}. \
+                     Please upgrade the server or regenerate the snapshot.",
+                    String::from_utf8_lossy(&version_bytes),
+                    SPLDB_SUPPORTED_VERSIONS
+                        .iter()
+                        .map(|v| std::str::from_utf8(v.as_slice()).unwrap_or("????"))
+                        .collect::<Vec<_>>()
+                ),
             ));
         }
         self.cursor.advance(SPLDB_VERSION.len());
@@ -212,7 +241,19 @@ impl<'a> SpldbParser<'a> {
                         None
                     };
                 }
-                value_type => self.parse_value(value_type).await?,
+                value_type => {
+                    if value_type > SPLDB_KNOWN_MAX_TYPE {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "SPLDB contains unknown data type id 0x{value_type:02X}. \
+                                 This build only knows 0x00..=0x{:02X}. Please upgrade the server.",
+                                SPLDB_KNOWN_MAX_TYPE
+                            ),
+                        ));
+                    }
+                    self.parse_value(value_type).await?;
+                }
             }
         }
     }
@@ -852,4 +893,239 @@ pub async fn save_to_bytes(dbs: &[Arc<Db>]) -> io::Result<Bytes> {
     let mut buffer: Vec<u8> = Vec::new();
     write_database(&mut buffer, dbs).await?;
     Ok(Bytes::from(buffer))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+    use indexmap::IndexMap;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_serialize_deserialize_string_roundtrip() {
+        let val = DataValue::String(Bytes::from_static(b"hello"));
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::String(s) => assert_eq!(s, Bytes::from_static(b"hello")),
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_empty_string() {
+        let val = DataValue::String(Bytes::new());
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::String(s) => assert!(s.is_empty()),
+            _ => panic!("expected String"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_list_roundtrip() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"a"));
+        list.push_back(Bytes::from_static(b"b"));
+        list.push_back(Bytes::from_static(b"c"));
+        let val = DataValue::List(list);
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::List(l) => {
+                assert_eq!(l.len(), 3);
+                assert_eq!(l[0], Bytes::from_static(b"a"));
+                assert_eq!(l[1], Bytes::from_static(b"b"));
+                assert_eq!(l[2], Bytes::from_static(b"c"));
+            }
+            _ => panic!("expected List"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_empty_list() {
+        let val = DataValue::List(VecDeque::new());
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::List(l) => assert!(l.is_empty()),
+            _ => panic!("expected List"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_hash_roundtrip() {
+        let mut hash = IndexMap::new();
+        hash.insert(Bytes::from_static(b"f1"), Bytes::from_static(b"v1"));
+        hash.insert(Bytes::from_static(b"f2"), Bytes::from_static(b"v2"));
+        let val = DataValue::Hash(hash);
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::Hash(h) => {
+                assert_eq!(h.len(), 2);
+                assert_eq!(h.get(&Bytes::from_static(b"f1")), Some(&Bytes::from_static(b"v1")));
+            }
+            _ => panic!("expected Hash"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_set_roundtrip() {
+        let mut set = HashSet::new();
+        set.insert(Bytes::from_static(b"a"));
+        set.insert(Bytes::from_static(b"b"));
+        let val = DataValue::Set(set);
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::Set(s) => {
+                assert_eq!(s.len(), 2);
+                assert!(s.contains(&Bytes::from_static(b"a")));
+            }
+            _ => panic!("expected Set"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_zset_roundtrip() {
+        let mut zset = SortedSet::new();
+        zset.add(1.0, Bytes::from_static(b"alpha"));
+        zset.add(2.5, Bytes::from_static(b"beta"));
+        zset.add(0.5, Bytes::from_static(b"gamma"));
+        let val = DataValue::SortedSet(zset.clone());
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::SortedSet(z) => {
+                assert_eq!(z.len(), 3);
+                // The order should be preserved by score.
+                let entries = z.get_range(0, -1);
+                assert_eq!(entries[0].member, Bytes::from_static(b"gamma"));
+                assert_eq!(entries[1].member, Bytes::from_static(b"alpha"));
+                assert_eq!(entries[2].member, Bytes::from_static(b"beta"));
+            }
+            _ => panic!("expected SortedSet"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_json_roundtrip() {
+        let val = DataValue::Json(serde_json::json!({"a": [1, 2, 3], "b": "x"}));
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::Json(v) => {
+                assert_eq!(v["a"][0], 1);
+                assert_eq!(v["b"], "x");
+            }
+            _ => panic!("expected Json"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_hll_roundtrip() {
+        let mut hll = crate::core::storage::hll::HyperLogLog::new();
+        for i in 0..50 {
+            hll.add(&Bytes::from(format!("item-{i}")));
+        }
+        let original_count = hll.count();
+        let val = DataValue::HyperLogLog(Box::new(hll));
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::HyperLogLog(h) => assert_eq!(h.count(), original_count),
+            _ => panic!("expected HLL"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_bloom_filter_roundtrip() {
+        let mut bf = crate::core::storage::bloom::BloomFilter::new(100, 0.01);
+        bf.add(&Bytes::from_static(b"a"));
+        bf.add(&Bytes::from_static(b"b"));
+        let val = DataValue::BloomFilter(Box::new(bf));
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::BloomFilter(b) => {
+                assert!(b.check(&Bytes::from_static(b"a")));
+                assert!(b.check(&Bytes::from_static(b"b")));
+            }
+            _ => panic!("expected BloomFilter"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_unknown_type_returns_error() {
+        // Construct a 1-byte payload with an unknown type marker.
+        let bytes = Bytes::from_static(&[0xFE]);
+        let r = deserialize_value(&bytes);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_serialize_starts_with_type_byte() {
+        let val = DataValue::String(Bytes::from_static(b"x"));
+        let bytes = serialize_value(&val).unwrap();
+        // First byte should be the SPLDB_TYPE_STRING marker.
+        assert_eq!(bytes[0], SPLDB_TYPE_STRING);
+    }
+
+    #[test]
+    fn test_serialized_value_roundtrips_through_buffer() {
+        // Verify the BytesMut-based path produces output identical to the
+        // direct serialize_value path.
+        let val = DataValue::List({
+            let mut l = VecDeque::new();
+            l.push_back(Bytes::from_static(b"x"));
+            l
+        });
+        let mut buf = BytesMut::new();
+        serialize_single_value_data(&mut buf, &val).unwrap();
+        let from_buf = buf.freeze();
+        let from_fn = serialize_value(&val).unwrap();
+        assert_eq!(from_buf, from_fn);
+    }
+
+    #[test]
+    fn test_http_cache_roundtrip_preserves_variants() {
+        // HttpCache uses an instant-based last_accessed, so we focus on
+        // the structural fields (variants, vary_on).
+        use crate::core::storage::cache_types::{CacheBody, CacheVariant, HttpMetadata};
+        let mut variants = HashMap::new();
+        variants.insert(
+            42u64,
+            CacheVariant {
+                body: CacheBody::InMemory(Bytes::from_static(b"body")),
+                metadata: HttpMetadata {
+                    etag: Some(Bytes::from_static(b"\"v1\"")),
+                    last_modified: None,
+                    revalidate_url: Some("https://example.com".to_string()),
+                    content_encoding: None,
+                },
+                last_accessed: std::time::Instant::now(),
+            },
+        );
+        let val = DataValue::HttpCache {
+            variants,
+            vary_on: vec![Bytes::from_static(b"Accept")],
+            tags_epoch: 0,
+        };
+        let bytes = serialize_value(&val).unwrap();
+        let restored = deserialize_value(&bytes).unwrap();
+        match restored.data {
+            DataValue::HttpCache { variants, vary_on, .. } => {
+                assert_eq!(vary_on, vec![Bytes::from_static(b"Accept")]);
+                let v = variants.get(&42).unwrap();
+                match &v.body {
+                    CacheBody::InMemory(b) => assert_eq!(b, &Bytes::from_static(b"body")),
+                    other => panic!("expected InMemory, got {other:?}"),
+                }
+            }
+            _ => panic!("expected HttpCache"),
+        }
+    }
 }

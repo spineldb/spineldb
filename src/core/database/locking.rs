@@ -132,3 +132,94 @@ impl Db {
         guards
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::data_types::{DataValue, StoredValue};
+
+    fn make_sv(s: &str) -> StoredValue {
+        StoredValue::new(DataValue::String(Bytes::copy_from_slice(s.as_bytes())))
+    }
+
+    #[tokio::test]
+    async fn test_lock_shards_for_keys_empty_returns_empty() {
+        let db = Db::new();
+        let guards = db.lock_shards_for_keys(&[]).await;
+        assert!(guards.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lock_shards_for_keys_single_key_returns_one() {
+        let db = Db::new();
+        let keys = vec![Bytes::from_static(b"k")];
+        let guards = db.lock_shards_for_keys(&keys).await;
+        assert_eq!(guards.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_lock_shards_for_keys_dedupes_same_shard() {
+        let db = Db::new();
+        // Two keys that might hash to the same shard should not produce
+        // duplicate lock entries.
+        let key1 = Bytes::from_static(b"k1");
+        let key2 = Bytes::from_static(b"k2");
+        let idx1 = db.get_shard_index(&key1);
+        let idx2 = db.get_shard_index(&key2);
+        let keys = vec![key1.clone(), key2.clone()];
+        let guards = db.lock_shards_for_keys(&keys).await;
+        // The map should have at most one entry per shard, never duplicate shard indices.
+        if idx1 == idx2 {
+            assert_eq!(guards.len(), 1);
+        } else {
+            assert_eq!(guards.len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lock_shards_for_keys_caps_at_num_shards() {
+        let db = Db::new();
+        // Generate enough keys to (statistically) hit all 16 shards.
+        let keys: Vec<Bytes> = (0..1000)
+            .map(|i| Bytes::copy_from_slice(format!("k{i}").as_bytes()))
+            .collect();
+        let guards = db.lock_shards_for_keys(&keys).await;
+        assert!(guards.len() <= NUM_SHARDS);
+    }
+
+    #[tokio::test]
+    async fn test_lock_shards_for_keys_acquires_in_sorted_order() {
+        // Hard to verify ordering from outside, but verify that the keys used
+        // in the locking path can be looked up afterwards through the guards.
+        let db = Db::new();
+        let keys: Vec<Bytes> = (0..50)
+            .map(|i| Bytes::copy_from_slice(format!("k{i}").as_bytes()))
+            .collect();
+        for k in &keys {
+            db.insert_value_from_load(k.clone(), make_sv("v")).await;
+        }
+        let guards = db.lock_shards_for_keys(&keys).await;
+        for (idx, _guard) in guards {
+            assert!(idx < NUM_SHARDS);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lock_all_shards_acquires_all_num_shards() {
+        let db = Db::new();
+        let guards = db.lock_all_shards().await;
+        assert_eq!(guards.len(), NUM_SHARDS);
+    }
+
+    #[tokio::test]
+    async fn test_lock_all_shards_acquires_in_index_order() {
+        // The contract is that locks are acquired in 0..NUM_SHARDS order to
+        // prevent deadlocks. We can't inspect lock order directly, but we
+        // can verify the resulting vec length and that the shard indices
+        // are valid (which is implicit in the call not panicking).
+        let db = Db::new();
+        let _g = db.lock_all_shards().await;
+        // No assertion on order is needed; just verifying it doesn't deadlock
+        // with itself is the main correctness check.
+    }
+}

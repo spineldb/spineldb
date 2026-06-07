@@ -105,3 +105,53 @@ impl CommandSpec for ZRemRangeByRank {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zremrangebyrank_parses_args() {
+        let c = ZRemRangeByRank::parse(&[bs("z"), bs("0"), bs("5")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert_eq!(c.start, 0);
+        assert_eq!(c.stop, 5);
+    }
+
+    #[test]
+    fn test_zremrangebyrank_parses_negative_indices() {
+        let c = ZRemRangeByRank::parse(&[bs("z"), bs("-2"), bs("-1")]).unwrap();
+        assert_eq!(c.start, -2);
+        assert_eq!(c.stop, -1);
+    }
+
+    #[test]
+    fn test_zremrangebyrank_with_too_few_args_is_error() {
+        let r = ZRemRangeByRank::parse(&[bs("z"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zremrangebyrank_with_too_many_args_is_error() {
+        let r = ZRemRangeByRank::parse(&[bs("z"), bs("0"), bs("5"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zremrangebyrank_with_non_integer_start_is_error() {
+        let r = ZRemRangeByRank::parse(&[bs("z"), bs("start"), bs("5")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_zremrangebyrank_to_resp_args_round_trips() {
+        let c = ZRemRangeByRank::parse(&[bs("z"), bs("0"), bs("5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"z"));
+    }
+}

@@ -314,3 +314,165 @@ impl CommandSpec for XClaim {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xclaim_parses_key_group_consumer_idle() {
+        let c = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0"), bs("1-0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.group, Bytes::from_static(b"g1"));
+        assert_eq!(c.consumer, Bytes::from_static(b"c1"));
+        assert_eq!(c.min_idle_time, 0);
+        assert_eq!(c.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_xclaim_parses_justid() {
+        let c = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0"), bs("JUSTID"), bs("1-0")]).unwrap();
+        assert!(c.justid);
+    }
+
+    #[test]
+    fn test_xclaim_parses_idle() {
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("IDLE"),
+            bs("1000"),
+            bs("1-0"),
+        ])
+        .unwrap();
+        assert_eq!(c.idle, Some(1000));
+    }
+
+    #[test]
+    fn test_xclaim_parses_time() {
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("TIME"),
+            bs("1000"),
+            bs("1-0"),
+        ])
+        .unwrap();
+        assert_eq!(c.time, Some(1000));
+    }
+
+    #[test]
+    fn test_xclaim_parses_retrycount() {
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("RETRYCOUNT"),
+            bs("5"),
+            bs("1-0"),
+        ])
+        .unwrap();
+        assert_eq!(c.retrycount, Some(5));
+    }
+
+    #[test]
+    fn test_xclaim_parses_force() {
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("FORCE"),
+            bs("1-0"),
+        ])
+        .unwrap();
+        assert!(c.force);
+    }
+
+    #[test]
+    fn test_xclaim_idle_and_time_mutually_exclusive() {
+        let r = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("IDLE"),
+            bs("100"),
+            bs("TIME"),
+            bs("200"),
+            bs("1-0"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xclaim_idle_missing_value_is_syntax_error() {
+        let r = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0"), bs("IDLE")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xclaim_too_few_args_is_error() {
+        let r = XClaim::parse(&[bs("k"), bs("g1"), bs("c1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xclaim_no_ids_is_error() {
+        let r = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xclaim_invalid_min_idle_time_is_error() {
+        let r = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("not_a_number"), bs("1-0")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_xclaim_invalid_id_is_error() {
+        let r = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0"), bs("invalid")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xclaim_to_resp_args_round_trips_with_justid() {
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("JUSTID"),
+            bs("1-0"),
+            bs("2-0"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert!(args.contains(&Bytes::from_static(b"JUSTID")));
+        assert_eq!(args[args.len() - 1], Bytes::from_static(b"2-0"));
+    }
+
+    #[test]
+    fn test_xclaim_parses_multiple_ids() {
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("1-0"),
+            bs("2-0"),
+            bs("3-0"),
+        ])
+        .unwrap();
+        assert_eq!(c.ids.len(), 3);
+    }
+}

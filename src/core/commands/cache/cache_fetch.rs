@@ -18,6 +18,7 @@ use crate::core::storage::cache_types::{CacheBody, ManifestState};
 use crate::core::{Command, RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
+use dashmap::DashMap;
 use futures::future::{BoxFuture, FutureExt};
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -288,11 +289,27 @@ impl CacheFetch {
             }
         };
 
+        // RAII guard that removes the future from `fetch_locks` once this
+        // scope exits — including the case where the future is cancelled
+        // (e.g. the client disconnects mid-fetch). Without this guard the
+        // entry would leak for the lifetime of the next leader, since the
+        // DashMap remove happens only on the success path.
+        struct FetchLockGuard {
+            map: Arc<DashMap<Bytes, crate::core::state::cache::SharedFetch>>,
+            key: Bytes,
+        }
+        impl Drop for FetchLockGuard {
+            fn drop(&mut self) {
+                self.map.remove(&self.key);
+            }
+        }
+        let _guard = FetchLockGuard {
+            map: state.cache.fetch_locks.clone(),
+            key: key.clone(),
+        };
+
         // All clients (leader and followers) await the shared result here.
         let fetch_result = future_to_await.await;
-
-        // The operation is complete; remove the future from the map to prevent memory leaks.
-        state.cache.fetch_locks.remove(&key);
 
         match fetch_result {
             Ok(outcome) => {

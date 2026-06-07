@@ -134,3 +134,59 @@ impl CommandSpec for HIncrByFloat {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hincrbyfloat_parses_positive_increment() {
+        let c = HIncrByFloat::parse(&[bs("h"), bs("f"), bs("1.5")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"h"));
+        assert_eq!(c.field, Bytes::from_static(b"f"));
+        assert!((c.increment - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hincrbyfloat_parses_negative_increment() {
+        let c = HIncrByFloat::parse(&[bs("h"), bs("f"), bs("-2.5")]).unwrap();
+        assert!((c.increment - -2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hincrbyfloat_parses_integer_as_float() {
+        let c = HIncrByFloat::parse(&[bs("h"), bs("f"), bs("10")]).unwrap();
+        assert!((c.increment - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hincrbyfloat_with_too_few_args_is_error() {
+        let r = HIncrByFloat::parse(&[bs("h"), bs("f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hincrbyfloat_with_too_many_args_is_error() {
+        let r = HIncrByFloat::parse(&[bs("h"), bs("f"), bs("1.0"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hincrbyfloat_with_non_float_increment_is_error() {
+        let r = HIncrByFloat::parse(&[bs("h"), bs("f"), bs("abc")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_hincrbyfloat_to_resp_args_round_trips() {
+        let c = HIncrByFloat::parse(&[bs("h"), bs("f"), bs("3.14")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"h"));
+        assert_eq!(args[1], Bytes::from_static(b"f"));
+    }
+}

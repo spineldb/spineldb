@@ -247,3 +247,140 @@ pub fn estimate_json_memory(val: &serde_json::Value) -> usize {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_path_empty_is_error() {
+        assert!(matches!(parse_path(""), Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_path_root_dollar() {
+        let p = parse_path("$").unwrap();
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn test_parse_path_root_dot() {
+        let p = parse_path(".").unwrap();
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn test_parse_path_single_key() {
+        let p = parse_path("$.foo").unwrap();
+        assert_eq!(p.len(), 1);
+        match &p[0] {
+            PathSegment::Key(k) => assert_eq!(k, "foo"),
+            _ => panic!("expected Key"),
+        }
+    }
+
+    #[test]
+    fn test_parse_path_nested_keys() {
+        let p = parse_path("$.a.b.c").unwrap();
+        assert_eq!(p.len(), 3);
+        for (i, expected) in ["a", "b", "c"].iter().enumerate() {
+            match &p[i] {
+                PathSegment::Key(k) => assert_eq!(k, expected),
+                _ => panic!("expected Key at {i}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_path_with_index() {
+        let p = parse_path("$.a[0]").unwrap();
+        assert_eq!(p.len(), 2);
+        match &p[0] {
+            PathSegment::Key(k) => assert_eq!(k, "a"),
+            _ => panic!("expected Key"),
+        }
+        match &p[1] {
+            PathSegment::Index(i) => assert_eq!(*i, 0),
+            _ => panic!("expected Index"),
+        }
+    }
+
+    #[test]
+    fn test_parse_path_with_multiple_indices() {
+        let p = parse_path("$.a[1][2]").unwrap();
+        assert_eq!(p.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_path_key_then_index() {
+        let p = parse_path("key[0]").unwrap();
+        assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_path_unclosed_bracket_is_error() {
+        assert!(matches!(parse_path("$.a["), Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_path_non_numeric_index_is_error() {
+        assert!(matches!(parse_path("$.a[abc]"), Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_path_double_dot_is_error() {
+        assert!(matches!(parse_path("$..a"), Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_format_json_number_whole() {
+        let n = serde_json::Number::from(42);
+        assert_eq!(format_json_number(&n), "42");
+    }
+
+    #[test]
+    fn test_format_json_number_float() {
+        let n = serde_json::Number::from_f64(1.5).unwrap();
+        assert_eq!(format_json_number(&n), "1.5");
+    }
+
+    #[test]
+    fn test_format_json_number_whole_as_float() {
+        // 5.0 stored as f64 should format as "5"
+        let n = serde_json::Number::from_f64(5.0).unwrap();
+        assert_eq!(format_json_number(&n), "5");
+    }
+
+    #[test]
+    fn test_format_json_number_negative() {
+        let n = serde_json::Number::from(-7);
+        assert_eq!(format_json_number(&n), "-7");
+    }
+
+    #[test]
+    fn test_estimate_json_memory_null() {
+        assert!(estimate_json_memory(&json!(null)) > 0);
+    }
+
+    #[test]
+    fn test_estimate_json_memory_string_includes_capacity() {
+        let v = json!("hello");
+        let m = estimate_json_memory(&v);
+        assert!(m >= "hello".len());
+    }
+
+    #[test]
+    fn test_estimate_json_memory_array() {
+        let v = json!([1, 2, 3]);
+        let m = estimate_json_memory(&v);
+        assert!(m > 0);
+    }
+
+    #[test]
+    fn test_estimate_json_memory_object() {
+        let v = json!({"a": 1, "b": "x"});
+        let m = estimate_json_memory(&v);
+        assert!(m > 0);
+    }
+}

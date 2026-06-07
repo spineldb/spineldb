@@ -63,3 +63,45 @@ impl CommandSpec for RPush {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_rpush_parses_single_value() {
+        let c = RPush::parse(&[bs("k"), bs("v1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.values.len(), 1);
+    }
+
+    #[test]
+    fn test_rpush_parses_multiple_values() {
+        let c = RPush::parse(&[bs("k"), bs("a"), bs("b"), bs("c")]).unwrap();
+        assert_eq!(c.values.len(), 3);
+    }
+
+    #[test]
+    fn test_rpush_with_too_few_args_is_error() {
+        let r = RPush::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_rpush_with_non_bulk_key_is_wrong_type() {
+        let r = RPush::parse(&[RespFrame::Integer(1), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_rpush_to_resp_args_round_trips() {
+        let c = RPush::parse(&[bs("k"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

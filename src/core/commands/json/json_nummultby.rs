@@ -140,3 +140,64 @@ impl CommandSpec for JsonNumMultBy {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_nummultby_parses() {
+        let c = JsonNumMultBy::parse(&[bs("k"), bs("$.n"), bs("2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.n");
+        assert_eq!(c.value, 2.0);
+    }
+
+    #[test]
+    fn test_json_nummultby_with_negative() {
+        let c = JsonNumMultBy::parse(&[bs("k"), bs("$.n"), bs("-1.5")]).unwrap();
+        assert_eq!(c.value, -1.5);
+    }
+
+    #[test]
+    fn test_json_nummultby_too_few_args_is_error() {
+        let r = JsonNumMultBy::parse(&[bs("k"), bs("$.n")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_nummultby_too_many_args_is_error() {
+        let r = JsonNumMultBy::parse(&[bs("k"), bs("$.n"), bs("2"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_nummultby_no_args_is_error() {
+        let r = JsonNumMultBy::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_nummultby_invalid_value_is_error() {
+        let r = JsonNumMultBy::parse(&[bs("k"), bs("$.n"), bs("not_a_number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_json_nummultby_with_non_bulk_key_is_wrong_type() {
+        let r = JsonNumMultBy::parse(&[RespFrame::Integer(1), bs("$.n"), bs("2")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_nummultby_to_resp_args_round_trips() {
+        let c = JsonNumMultBy::parse(&[bs("k"), bs("$.n"), bs("2.5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

@@ -94,3 +94,92 @@ impl CommandSpec for GeoAdd {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(parts: &[&str]) -> Vec<RespFrame> {
+        parts
+            .iter()
+            .map(|s| RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes())))
+            .collect()
+    }
+
+    #[test]
+    fn test_geoadd_parse_valid() {
+        let frames = make_frame(&["key", "10.0", "20.0", "member1"]);
+        let cmd = GeoAdd::parse(&frames).unwrap();
+        assert_eq!(cmd.key, Bytes::copy_from_slice(b"key"));
+        assert_eq!(cmd.members.len(), 1);
+    }
+
+    #[test]
+    fn test_geoadd_parse_invalid_arity() {
+        let frames = make_frame(&["key"]);
+        assert!(GeoAdd::parse(&frames).is_err());
+    }
+
+    #[test]
+    fn test_geoadd_parses_multiple_members() {
+        let frames = make_frame(&[
+            "key",
+            "10.0",
+            "20.0",
+            "m1",
+            "30.0",
+            "40.0",
+            "m2",
+        ]);
+        let c = GeoAdd::parse(&frames).unwrap();
+        assert_eq!(c.members.len(), 2);
+        assert_eq!(c.members[0].2, Bytes::from_static(b"m1"));
+        assert_eq!(c.members[1].2, Bytes::from_static(b"m2"));
+    }
+
+    #[test]
+    fn test_geoadd_with_negative_coords() {
+        let frames = make_frame(&["key", "-122.41", "37.77", "sf"]);
+        let c = GeoAdd::parse(&frames).unwrap();
+        assert!((c.members[0].0 - -122.41).abs() < f64::EPSILON);
+        assert!((c.members[0].1 - 37.77).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_geoadd_odd_member_count_is_error() {
+        // After the key, we need multiples of 3 (lon, lat, member).
+        let frames = make_frame(&["key", "10.0", "20.0", "m1", "30.0"]);
+        let r = GeoAdd::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_geoadd_invalid_lon_is_error() {
+        let frames = make_frame(&["key", "not_a_float", "20.0", "m1"]);
+        let r = GeoAdd::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_geoadd_invalid_lat_is_error() {
+        let frames = make_frame(&["key", "10.0", "not_a_float", "m1"]);
+        let r = GeoAdd::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_geoadd_no_args_is_error() {
+        let r = GeoAdd::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_geoadd_to_resp_args_round_trips() {
+        let frames = make_frame(&["key", "10.0", "20.0", "m1"]);
+        let c = GeoAdd::parse(&frames).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+        assert_eq!(args[3], Bytes::from_static(b"m1"));
+    }
+}

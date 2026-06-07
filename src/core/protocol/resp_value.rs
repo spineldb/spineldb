@@ -39,3 +39,59 @@ impl From<RespValue> for super::RespFrame {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::protocol::RespFrame;
+
+    #[test]
+    fn test_simple_string_conversion() {
+        let v = RespValue::SimpleString("OK".to_string());
+        let f: RespFrame = v.into();
+        assert_eq!(f, RespFrame::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn test_bulk_string_conversion() {
+        let v = RespValue::BulkString(Bytes::from_static(b"hello"));
+        let f: RespFrame = v.into();
+        assert_eq!(f, RespFrame::BulkString(Bytes::from_static(b"hello")));
+    }
+
+    #[test]
+    fn test_integer_conversion() {
+        let v = RespValue::Integer(-42);
+        let f: RespFrame = v.into();
+        assert_eq!(f, RespFrame::Integer(-42));
+    }
+
+    #[test]
+    fn test_null_variants_conversion() {
+        assert_eq!(RespFrame::from(RespValue::Null), RespFrame::Null);
+        assert_eq!(RespFrame::from(RespValue::NullArray), RespFrame::NullArray);
+    }
+
+    #[test]
+    fn test_error_conversion() {
+        let v = RespValue::Error("ERR oops".to_string());
+        let f: RespFrame = v.into();
+        assert_eq!(f, RespFrame::Error("ERR oops".to_string()));
+    }
+
+    #[test]
+    fn test_array_conversion_is_recursive() {
+        let v = RespValue::Array(vec![
+            RespValue::Integer(1),
+            RespValue::BulkString(Bytes::from_static(b"two")),
+            RespValue::Array(vec![RespValue::Null, RespValue::Integer(3)]),
+        ]);
+        let f: RespFrame = v.into();
+        let expected = RespFrame::Array(vec![
+            RespFrame::Integer(1),
+            RespFrame::BulkString(Bytes::from_static(b"two")),
+            RespFrame::Array(vec![RespFrame::Null, RespFrame::Integer(3)]),
+        ]);
+        assert_eq!(f, expected);
+    }
+}

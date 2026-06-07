@@ -91,3 +91,50 @@ impl CommandSpec for LIndex {
         vec![self.key.clone(), self.index.to_string().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lindex_parses_key_and_index() {
+        let c = LIndex::parse(&[bs("k"), bs("0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.index, 0);
+    }
+
+    #[test]
+    fn test_lindex_parses_negative_index() {
+        let c = LIndex::parse(&[bs("k"), bs("-1")]).unwrap();
+        assert_eq!(c.index, -1);
+    }
+
+    #[test]
+    fn test_lindex_with_too_few_args_is_error() {
+        let r = LIndex::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lindex_with_too_many_args_is_error() {
+        let r = LIndex::parse(&[bs("k"), bs("0"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lindex_with_non_integer_index_is_error() {
+        let r = LIndex::parse(&[bs("k"), bs("first")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_lindex_to_resp_args_round_trips() {
+        let c = LIndex::parse(&[bs("k"), bs("5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"5")]);
+    }
+}

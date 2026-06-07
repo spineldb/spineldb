@@ -97,3 +97,46 @@ impl CommandSpec for Sadd {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_sadd_parses_key_and_members() {
+        let c = Sadd::parse(&[bs("k"), bs("m1"), bs("m2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.members.len(), 2);
+        assert_eq!(c.members[0], Bytes::from_static(b"m1"));
+    }
+
+    #[test]
+    fn test_sadd_with_too_few_args_is_error() {
+        let r = Sadd::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sadd_with_non_bulk_key_is_wrong_type() {
+        let r = Sadd::parse(&[RespFrame::Integer(1), bs("m")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_sadd_with_non_bulk_member_is_wrong_type() {
+        let r = Sadd::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_sadd_to_resp_args_round_trips() {
+        let c = Sadd::parse(&[bs("k"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

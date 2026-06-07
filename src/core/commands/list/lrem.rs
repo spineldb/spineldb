@@ -155,3 +155,60 @@ impl CommandSpec for LRem {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lrem_parses_positive_count() {
+        let c = LRem::parse(&[bs("k"), bs("2"), bs("v")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.count, 2);
+        assert_eq!(c.element, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_lrem_parses_negative_count() {
+        let c = LRem::parse(&[bs("k"), bs("-1"), bs("v")]).unwrap();
+        assert_eq!(c.count, -1);
+    }
+
+    #[test]
+    fn test_lrem_parses_zero_count() {
+        let c = LRem::parse(&[bs("k"), bs("0"), bs("v")]).unwrap();
+        assert_eq!(c.count, 0);
+    }
+
+    #[test]
+    fn test_lrem_with_too_few_args_is_error() {
+        let r = LRem::parse(&[bs("k"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lrem_with_too_many_args_is_error() {
+        let r = LRem::parse(&[bs("k"), bs("0"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lrem_with_non_integer_count_is_error() {
+        let r = LRem::parse(&[bs("k"), bs("all"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_lrem_to_resp_args_round_trips() {
+        let c = LRem::parse(&[bs("k"), bs("3"), bs("v")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"3"));
+        assert_eq!(args[2], Bytes::from_static(b"v"));
+    }
+}

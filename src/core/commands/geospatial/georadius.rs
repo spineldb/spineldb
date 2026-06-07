@@ -490,3 +490,193 @@ impl CommandSpec for GeoRadiusByMemberCmd {
         vec![self.0.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_georadius_parses_basic() {
+        let c = GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100"), bs("km")]).unwrap();
+        assert_eq!(c.0.key, Bytes::from_static(b"k"));
+        assert!(matches!(c.0.center, GeoRadiusCenter::Coord(lon, lat) if (lon - 10.0).abs() < f64::EPSILON && (lat - 20.0).abs() < f64::EPSILON));
+        assert!((c.0.radius - 100.0).abs() < f64::EPSILON);
+        assert!(matches!(c.0.unit, GeoUnit::Kilometers));
+    }
+
+    #[test]
+    fn test_georadius_with_withcoord() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("WITHCOORD"),
+        ])
+        .unwrap();
+        assert!(c.0.options.with_coord);
+    }
+
+    #[test]
+    fn test_georadius_with_withdist() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("WITHDIST"),
+        ])
+        .unwrap();
+        assert!(c.0.options.with_dist);
+    }
+
+    #[test]
+    fn test_georadius_with_withhash() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("WITHHASH"),
+        ])
+        .unwrap();
+        assert!(c.0.options.with_hash);
+    }
+
+    #[test]
+    fn test_georadius_with_count() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("COUNT"),
+            bs("5"),
+        ])
+        .unwrap();
+        assert_eq!(c.0.options.count, Some(5));
+    }
+
+    #[test]
+    fn test_georadius_with_asc() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("ASC"),
+        ])
+        .unwrap();
+        assert!(c.0.options.sort_asc);
+    }
+
+    #[test]
+    fn test_georadius_with_desc() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("DESC"),
+        ])
+        .unwrap();
+        assert!(!c.0.options.sort_asc);
+    }
+
+    #[test]
+    fn test_georadius_with_store() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("STORE"),
+            bs("dst"),
+        ])
+        .unwrap();
+        assert_eq!(c.0.options.store, Some(Bytes::from_static(b"dst")));
+    }
+
+    #[test]
+    fn test_georadius_with_storedist() {
+        let c = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("STOREDIST"),
+            bs("dst"),
+        ])
+        .unwrap();
+        assert_eq!(c.0.options.store_dist, Some(Bytes::from_static(b"dst")));
+    }
+
+    #[test]
+    fn test_georadius_with_too_few_args_is_error() {
+        let r = GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_georadius_unknown_option_is_error() {
+        let r = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("FOO"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_georadius_count_without_value_is_syntax_error() {
+        let r = GeoRadiusCmd::parse(&[
+            bs("k"),
+            bs("10.0"),
+            bs("20.0"),
+            bs("100"),
+            bs("km"),
+            bs("COUNT"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_georadius_invalid_lon_is_error() {
+        let r = GeoRadiusCmd::parse(&[bs("k"), bs("not_a_float"), bs("20.0"), bs("100"), bs("km")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_georadius_radiusbymember_parses() {
+        let c = GeoRadiusByMemberCmd::parse(&[bs("k"), bs("m1"), bs("100"), bs("km")]).unwrap();
+        assert!(matches!(c.0.center, GeoRadiusCenter::Member(m) if m == Bytes::from_static(b"m1")));
+    }
+
+    #[test]
+    fn test_georadius_radiusbymember_too_few_args_is_error() {
+        let r = GeoRadiusByMemberCmd::parse(&[bs("k"), bs("m1"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_georadius_to_resp_args_includes_source_key() {
+        let c = GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100"), bs("km")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k")]);
+    }
+}

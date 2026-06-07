@@ -223,3 +223,93 @@ impl CommandSpec for XRevRange {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xrange_parses_key_start_end() {
+        let c = XRange::parse(&[bs("k"), bs("1-0"), bs("+")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!(!c.is_rev);
+        assert_eq!(c.count, None);
+    }
+
+    #[test]
+    fn test_xrange_parses_minus_to_plus_range() {
+        let c = XRange::parse(&[bs("k"), bs("-"), bs("+")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+    }
+
+    #[test]
+    fn test_xrange_parses_with_count() {
+        let c = XRange::parse(&[bs("k"), bs("1-0"), bs("+"), bs("COUNT"), bs("5")]).unwrap();
+        assert_eq!(c.count, Some(5));
+    }
+
+    #[test]
+    fn test_xrange_count_case_insensitive() {
+        let c = XRange::parse(&[bs("k"), bs("1-0"), bs("+"), bs("count"), bs("5")]).unwrap();
+        assert_eq!(c.count, Some(5));
+    }
+
+    #[test]
+    fn test_xrange_with_too_few_args_is_error() {
+        let r = XRange::parse(&[bs("k"), bs("1-0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xrange_with_count_missing_value_is_syntax_error() {
+        let r = XRange::parse(&[bs("k"), bs("1-0"), bs("+"), bs("COUNT")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xrange_with_unknown_option_is_syntax_error() {
+        let r = XRange::parse(&[bs("k"), bs("1-0"), bs("+"), bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xrange_with_invalid_start_is_error() {
+        let r = XRange::parse(&[bs("k"), bs("invalid"), bs("+")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xrange_to_resp_args_round_trips() {
+        let c = XRange::parse(&[bs("k"), bs("1-0"), bs("+"), bs("COUNT"), bs("3")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[3], Bytes::from_static(b"COUNT"));
+    }
+
+    #[test]
+    fn test_xrevrange_parses_key_end_start() {
+        let c = XRevRange::parse(&[bs("k"), bs("+"), bs("1-0")]).unwrap();
+        assert!(c.0.is_rev);
+    }
+
+    #[test]
+    fn test_xrevrange_to_resp_args_swaps_start_end() {
+        let c = XRevRange::parse(&[bs("k"), bs("+"), bs("1-0")]).unwrap();
+        let args = c.to_resp_args();
+        // Output should have end first, then start.
+        let end_str: Bytes = c.0.end.to_string().into();
+        let start_str: Bytes = c.0.start.to_string().into();
+        assert_eq!(args[1], end_str);
+        assert_eq!(args[2], start_str);
+    }
+
+    #[test]
+    fn test_xrevrange_with_count() {
+        let c = XRevRange::parse(&[bs("k"), bs("+"), bs("1-0"), bs("COUNT"), bs("5")]).unwrap();
+        assert_eq!(c.0.count, Some(5));
+    }
+}

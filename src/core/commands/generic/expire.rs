@@ -65,3 +65,59 @@ impl CommandSpec for Expire {
         vec![self.key.clone(), self.seconds.to_string().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_expire_parses_key_and_seconds() {
+        let e = Expire::parse(&[bs("k"), bs("30")]).unwrap();
+        assert_eq!(e.key, Bytes::from_static(b"k"));
+        assert_eq!(e.seconds, 30);
+    }
+
+    #[test]
+    fn test_expire_parses_zero_seconds() {
+        let e = Expire::parse(&[bs("k"), bs("0")]).unwrap();
+        assert_eq!(e.seconds, 0);
+    }
+
+    #[test]
+    fn test_expire_with_too_few_args_is_error() {
+        let r = Expire::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_expire_with_too_many_args_is_error() {
+        let r = Expire::parse(&[bs("k"), bs("10"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_expire_with_non_integer_seconds_is_error() {
+        let r = Expire::parse(&[bs("k"), bs("thirty")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_expire_with_negative_seconds_is_error() {
+        // u64 cannot parse negative values.
+        let r = Expire::parse(&[bs("k"), bs("-1")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_expire_to_resp_args_round_trips() {
+        let e = Expire::parse(&[bs("k"), bs("60")]).unwrap();
+        let args = e.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"60"));
+    }
+}

@@ -243,3 +243,81 @@ impl CommandSpec for LMove {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lmove_parses_left_to_left() {
+        let c = LMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("LEFT")]).unwrap();
+        assert_eq!(c.source, Bytes::from_static(b"src"));
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.from, Side::Left);
+        assert_eq!(c.to, Side::Left);
+    }
+
+    #[test]
+    fn test_lmove_parses_left_to_right() {
+        let c = LMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT")]).unwrap();
+        assert_eq!(c.from, Side::Left);
+        assert_eq!(c.to, Side::Right);
+    }
+
+    #[test]
+    fn test_lmove_parses_right_to_left() {
+        let c = LMove::parse(&[bs("src"), bs("dst"), bs("RIGHT"), bs("LEFT")]).unwrap();
+        assert_eq!(c.from, Side::Right);
+        assert_eq!(c.to, Side::Left);
+    }
+
+    #[test]
+    fn test_lmove_case_insensitive() {
+        let c = LMove::parse(&[bs("src"), bs("dst"), bs("left"), bs("right")]).unwrap();
+        assert_eq!(c.from, Side::Left);
+        assert_eq!(c.to, Side::Right);
+    }
+
+    #[test]
+    fn test_lmove_with_too_few_args_is_error() {
+        let r = LMove::parse(&[bs("src"), bs("dst"), bs("LEFT")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lmove_with_too_many_args_is_error() {
+        let r = LMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lmove_with_invalid_from_is_syntax_error() {
+        let r = LMove::parse(&[bs("src"), bs("dst"), bs("TOP"), bs("LEFT")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_lmove_with_invalid_to_is_syntax_error() {
+        let r = LMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("BOTTOM")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_lmove_to_resp_args_round_trips() {
+        let c = LMove::parse(&[bs("src"), bs("dst"), bs("RIGHT"), bs("LEFT")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"src"),
+                Bytes::from_static(b"dst"),
+                Bytes::from_static(b"RIGHT"),
+                Bytes::from_static(b"LEFT"),
+            ]
+        );
+    }
+}

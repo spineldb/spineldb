@@ -153,3 +153,75 @@ impl CommandSpec for JsonArrPop {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_arrpop_key_only() {
+        let c = JsonArrPop::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!(c.path.is_none());
+        assert!(c.index.is_none());
+    }
+
+    #[test]
+    fn test_json_arrpop_with_path() {
+        let c = JsonArrPop::parse(&[bs("k"), bs("$.a")]).unwrap();
+        assert_eq!(c.path, Some("$.a".to_string()));
+        assert!(c.index.is_none());
+    }
+
+    #[test]
+    fn test_json_arrpop_with_index() {
+        let c = JsonArrPop::parse(&[bs("k"), bs("$.a"), bs("2")]).unwrap();
+        assert_eq!(c.path, Some("$.a".to_string()));
+        assert_eq!(c.index, Some(2));
+    }
+
+    #[test]
+    fn test_json_arrpop_with_negative_index() {
+        let c = JsonArrPop::parse(&[bs("k"), bs("$.a"), bs("-1")]).unwrap();
+        assert_eq!(c.index, Some(-1));
+    }
+
+    #[test]
+    fn test_json_arrpop_no_args_is_error() {
+        let r = JsonArrPop::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrpop_too_many_args_is_error() {
+        let r = JsonArrPop::parse(&[bs("k"), bs("$.a"), bs("0"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrpop_invalid_index_is_error() {
+        let r = JsonArrPop::parse(&[bs("k"), bs("$.a"), bs("not_a_number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_json_arrpop_with_non_bulk_key_is_wrong_type() {
+        let r = JsonArrPop::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_arrpop_to_resp_args_round_trips() {
+        let c = JsonArrPop::parse(&[bs("k"), bs("$.a"), bs("2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"$.a"),
+            Bytes::from_static(b"2"),
+        ]);
+    }
+}

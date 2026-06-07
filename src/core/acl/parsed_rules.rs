@@ -47,3 +47,71 @@ pub struct ParsedAclRule {
     pub pubsub_channels: Vec<AclPubSubRule>,
     pub conditions: Vec<ParsedAclCondition>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::acl::rules::{ConditionOperator, ConditionTarget};
+
+    #[test]
+    fn test_acl_command_rule_variants() {
+        let allow = AclCommandRule::Allow("get".to_string());
+        let deny = AclCommandRule::Deny("flushall".to_string());
+        let allow_cat = AclCommandRule::AllowCategory(CommandFlags::WRITE);
+        let deny_cat = AclCommandRule::DenyCategory(CommandFlags::ADMIN);
+        let all = AclCommandRule::All;
+        // All variants should be constructible and not panic.
+        let _ = vec![allow, deny, allow_cat, deny_cat, all];
+    }
+
+    #[test]
+    fn test_acl_key_rule_variants() {
+        let allow = AclKeyRule::Allow(Regex::new("^user:.*$").unwrap());
+        let deny = AclKeyRule::Deny(Regex::new("^admin:.*$").unwrap());
+        let all = AclKeyRule::All;
+        let _ = vec![allow, deny, all];
+    }
+
+    #[test]
+    fn test_acl_pubsub_rule_variants() {
+        let allow = AclPubSubRule::Allow(Regex::new("^public:.*$").unwrap());
+        let deny = AclPubSubRule::Deny(Regex::new("^private:.*$").unwrap());
+        let all = AclPubSubRule::All;
+        let _ = vec![allow, deny, all];
+    }
+
+    #[test]
+    fn test_parsed_acl_condition_construction() {
+        let cond = ParsedAclCondition {
+            target: ConditionTarget::Command,
+            operator: ConditionOperator::StartsWith("xxx".to_string()),
+            rules_on_match: vec![AclCommandRule::Deny("del".to_string())],
+        };
+        assert_eq!(cond.rules_on_match.len(), 1);
+    }
+
+    #[test]
+    fn test_parsed_acl_rule_default_is_empty() {
+        let r = ParsedAclRule::default();
+        assert!(r.name.is_empty());
+        assert!(r.commands.is_empty());
+        assert!(r.keys.is_empty());
+        assert!(r.pubsub_channels.is_empty());
+        assert!(r.conditions.is_empty());
+    }
+
+    #[test]
+    fn test_parsed_acl_rule_populated() {
+        let r = ParsedAclRule {
+            name: "alice".to_string(),
+            commands: vec![AclCommandRule::All],
+            keys: vec![AclKeyRule::All],
+            pubsub_channels: vec![AclPubSubRule::All],
+            conditions: vec![],
+        };
+        assert_eq!(r.name, "alice");
+        assert_eq!(r.commands.len(), 1);
+        assert_eq!(r.keys.len(), 1);
+        assert_eq!(r.pubsub_channels.len(), 1);
+    }
+}

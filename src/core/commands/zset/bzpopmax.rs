@@ -93,3 +93,50 @@ impl CommandSpec for BZPopMax {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bzpopmax_parses_single_key_with_timeout() {
+        let c = BZPopMax::parse(&[bs("z1"), bs("5")]).unwrap();
+        assert_eq!(c.keys.len(), 1);
+        assert_eq!(c.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_bzpopmax_parses_multiple_keys() {
+        let c = BZPopMax::parse(&[bs("z1"), bs("z2"), bs("3")]).unwrap();
+        assert_eq!(c.keys.len(), 2);
+    }
+
+    #[test]
+    fn test_bzpopmax_zero_timeout_becomes_max() {
+        let c = BZPopMax::parse(&[bs("z1"), bs("0")]).unwrap();
+        assert_eq!(c.timeout, Duration::from_secs(u64::MAX));
+    }
+
+    #[test]
+    fn test_bzpopmax_with_too_few_args_is_error() {
+        let r = BZPopMax::parse(&[bs("z1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bzpopmax_with_non_integer_timeout_is_error() {
+        let r = BZPopMax::parse(&[bs("z1"), bs("forever")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_bzpopmax_to_resp_args_round_trips() {
+        let c = BZPopMax::parse(&[bs("z1"), bs("1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+    }
+}

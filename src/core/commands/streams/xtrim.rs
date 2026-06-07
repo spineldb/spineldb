@@ -218,3 +218,94 @@ impl CommandSpec for XTrim {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xtrim_maxlen_exact() {
+        let c = XTrim::parse(&[bs("k"), bs("MAXLEN"), bs("100")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!(matches!(c.strategy, TrimStrategy::MaxLen { approx: false, count: 100 }));
+        assert!(c.limit.is_none());
+    }
+
+    #[test]
+    fn test_xtrim_maxlen_approximate() {
+        let c = XTrim::parse(&[bs("k"), bs("MAXLEN"), bs("~"), bs("100")]).unwrap();
+        assert!(matches!(c.strategy, TrimStrategy::MaxLen { approx: true, count: 100 }));
+    }
+
+    #[test]
+    fn test_xtrim_minid_exact() {
+        let c = XTrim::parse(&[bs("k"), bs("MINID"), bs("1-0")]).unwrap();
+        assert!(matches!(
+            c.strategy,
+            TrimStrategy::MinId { approx: false, threshold } if threshold == StreamId::new(1, 0)
+        ));
+    }
+
+    #[test]
+    fn test_xtrim_minid_approximate() {
+        let c = XTrim::parse(&[bs("k"), bs("MINID"), bs("~"), bs("1-0")]).unwrap();
+        assert!(matches!(c.strategy, TrimStrategy::MinId { approx: true, .. }));
+    }
+
+    #[test]
+    fn test_xtrim_with_limit() {
+        let c = XTrim::parse(&[bs("k"), bs("LIMIT"), bs("5"), bs("MAXLEN"), bs("100")]).unwrap();
+        assert_eq!(c.limit, Some(5));
+    }
+
+    #[test]
+    fn test_xtrim_strategy_case_insensitive() {
+        let c = XTrim::parse(&[bs("k"), bs("maxlen"), bs("100")]).unwrap();
+        assert!(matches!(c.strategy, TrimStrategy::MaxLen { count: 100, .. }));
+    }
+
+    #[test]
+    fn test_xtrim_with_too_few_args_is_error() {
+        let r = XTrim::parse(&[bs("k"), bs("MAXLEN")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xtrim_with_no_args_is_error() {
+        let r = XTrim::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xtrim_with_unknown_strategy_is_syntax_error() {
+        let r = XTrim::parse(&[bs("k"), bs("FOO"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xtrim_with_non_bulk_key_is_wrong_type() {
+        let r = XTrim::parse(&[RespFrame::Integer(1), bs("MAXLEN"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_xtrim_to_resp_args_round_trips_maxlen() {
+        let c = XTrim::parse(&[bs("k"), bs("MAXLEN"), bs("~"), bs("50")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"MAXLEN"));
+        assert_eq!(args[2], Bytes::from_static(b"~"));
+        assert_eq!(args[3], Bytes::from_static(b"50"));
+    }
+
+    #[test]
+    fn test_xtrim_to_resp_args_round_trips_minid_with_limit() {
+        let c = XTrim::parse(&[bs("k"), bs("LIMIT"), bs("3"), bs("MINID"), bs("1-0")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"LIMIT"));
+        assert_eq!(args[3], Bytes::from_static(b"MINID"));
+    }
+}

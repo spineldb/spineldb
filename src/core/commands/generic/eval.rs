@@ -105,156 +105,159 @@ impl ExecutableCommand for Eval {
         let script_has_timeout = timeout_duration.as_millis() > 0;
         let script_has_mem_limit = memory_limit_mb > 0;
 
-        // Clone the Lua VM reference for use in spawn_blocking
+        // Clone the Lua manager handle. With the VM pool, each `EVAL`
+        // grabs its own `Lua` from the pool inside `spawn_blocking`, so
+        // multiple scripts can now execute concurrently instead of being
+        // serialized on a single mutex.
         let lua_manager = ctx.state.scripting.clone();
 
         // The Lua execution must happen within a dedicated blocking thread because
-        // `mlua::Lua` is not `Send`, and we need to lock the shared VM mutex.
-        let lua_future = tokio::task::spawn_blocking(move || {
-            // Lock the shared Lua VM for execution. This serializes script execution,
-            // ensuring atomicity and preserving global state across calls.
-            let lua_guard = lua_manager
-                .vm
-                .lock()
-                .map_err(|_| SpinelDBError::Internal("Failed to lock Lua VM".into()))?;
-            let lua = &*lua_guard;
+        // `mlua::Lua` is not `Send`. The guard returned by `acquire()` owns
+        // the VM for the duration of the closure; on drop it is returned to
+        // the pool.
+        let lua_future =
+            tokio::task::spawn_blocking(move || -> mlua::Result<(RespValue, WriteOutcome)> {
+                let mut guard = lua_manager.acquire();
+                let lua = guard.lua();
 
-            // Enforce memory limit if configured.
-            if script_has_mem_limit {
-                // `set_memory_limit` expects bytes.
-                let limit_in_bytes = memory_limit_mb * 1024 * 1024;
-                if let Err(e) = lua.set_memory_limit(limit_in_bytes) {
-                    return Err(mlua::Error::external(SpinelDBError::Internal(format!(
-                        "Failed to set Lua memory limit: {e}"
-                    ))));
-                }
-            }
-
-            let res: mlua::Result<(RespValue, WriteOutcome)> = Result::Ok({
-                let globals = lua.globals();
-
-                // Sandbox the Lua environment by removing potentially dangerous functions.
-                globals.set("loadfile", mlua::Value::Nil)?;
-                globals.set("dofile", mlua::Value::Nil)?;
-                globals.set("collectgarbage", mlua::Value::Nil)?;
-                if let Ok(mlua::Value::Table(os_table)) = globals.get::<mlua::Value>("os") {
-                    os_table.set("execute", mlua::Value::Nil)?;
-                    os_table.set("exit", mlua::Value::Nil)?;
-                }
-                if let Ok(mlua::Value::Table(io_table)) = globals.get::<mlua::Value>("io") {
-                    io_table.set("open", mlua::Value::Nil)?;
-                    io_table.set("popen", mlua::Value::Nil)?;
-                }
-
-                // Create the `spinel` table to expose the database API.
-                let spinel_table = lua.create_table()?;
-
-                // Provide `spinel.call` to execute commands that will propagate errors.
-                let call_state = Arc::clone(&server_state_clone);
-                let call_db = Arc::clone(&db_clone);
-                let call_session_id = session_id;
-                let call_user = authenticated_user.clone();
-                let call_aggregated_outcome = Arc::clone(&aggregated_outcome);
-                let call_callback =
-                    lua.create_async_function(move |lua, m_args: mlua::MultiValue| {
-                        let state = Arc::clone(&call_state);
-                        let db = Arc::clone(&call_db);
-                        let aggregated_outcome = Arc::clone(&call_aggregated_outcome);
-                        let user = call_user.clone();
-                        async move {
-                            let mut resp_args = Vec::new();
-                            for val in m_args.into_vec() {
-                                resp_args.push(lua_value_to_resp_frame(val)?);
-                            }
-                            let command = Command::try_from(RespFrame::Array(resp_args))?;
-                            let mut temp_ctx = ExecutionContext {
-                                state,
-                                locks: db.determine_locks_for_command(&command).await,
-                                db: &db,
-                                command: Some(command.clone()),
-                                session_id: call_session_id,
-                                authenticated_user: user,
-                            };
-                            let (resp_val, outcome) = command.execute(&mut temp_ctx).await?;
-                            update_aggregated_outcome(&aggregated_outcome, outcome);
-                            resp_value_to_lua_value(&lua, resp_val)
-                        }
-                    })?;
-                spinel_table.set("call", call_callback)?;
-
-                // Provide `spinel.pcall` to execute commands and capture errors.
-                let pcall_state = Arc::clone(&server_state_clone);
-                let pcall_db = Arc::clone(&db_clone);
-                let pcall_session_id = session_id;
-                let pcall_user = authenticated_user.clone();
-                let pcall_aggregated_outcome = Arc::clone(&aggregated_outcome);
-                let pcall_callback =
-                    lua.create_async_function(move |lua, m_args: mlua::MultiValue| {
-                        let state = Arc::clone(&pcall_state);
-                        let db = Arc::clone(&pcall_db);
-                        let aggregated_outcome = Arc::clone(&pcall_aggregated_outcome);
-                        let user = pcall_user.clone();
-                        async move {
-                            let mut resp_args = Vec::new();
-                            for val in m_args.into_vec() {
-                                resp_args.push(lua_value_to_resp_frame(val)?);
-                            }
-                            let command = Command::try_from(RespFrame::Array(resp_args))?;
-                            let mut temp_ctx = ExecutionContext {
-                                state,
-                                locks: db.determine_locks_for_command(&command).await,
-                                db: &db,
-                                command: Some(command.clone()),
-                                session_id: pcall_session_id,
-                                authenticated_user: user,
-                            };
-                            match command.execute(&mut temp_ctx).await {
-                                Ok((resp_val, outcome)) => {
-                                    update_aggregated_outcome(&aggregated_outcome, outcome);
-                                    resp_value_to_lua_value(&lua, resp_val)
-                                }
-                                Err(e) => Ok(LuaValue::Table(lua_error_to_table(&lua, e)?)),
-                            }
-                        }
-                    })?;
-                spinel_table.set("pcall", pcall_callback)?;
-
-                globals.set("spinel", spinel_table)?;
-
-                // Expose the KEYS table to the script.
-                let keys_table = lua
-                    .create_table_from(keys.iter().enumerate().map(|(i, k)| (i + 1, k.as_ref())))?;
-                globals.set("KEYS", keys_table)?;
-
-                // Expose the ARGV table to the script.
-                let argv_table = lua
-                    .create_table_from(args.iter().enumerate().map(|(i, a)| (i + 1, a.as_ref())))?;
-                globals.set("ARGV", argv_table)?;
-
-                drop(globals);
-
-                // Execute the async Lua script using the handle of the main Tokio runtime.
-                // This avoids creating a nested runtime, which is a major anti-pattern.
-                let result = tokio::runtime::Handle::current().block_on(async {
-                    let lua_future = lua.load(&*script).eval_async::<LuaValue>();
-
-                    if script_has_timeout {
-                        match tokio::time::timeout(timeout_duration, lua_future).await {
-                            Ok(Ok(val)) => Ok(val),
-                            Ok(Err(e)) => Err(e),
-                            Err(_) => Err(mlua::Error::external(SpinelDBError::ScriptTimeout)),
-                        }
-                    } else {
-                        lua_future.await
+                // Enforce memory limit if configured.
+                if script_has_mem_limit {
+                    // `set_memory_limit` expects bytes.
+                    let limit_in_bytes = memory_limit_mb * 1024 * 1024;
+                    if let Err(e) = lua.set_memory_limit(limit_in_bytes) {
+                        return Err(mlua::Error::external(SpinelDBError::Internal(format!(
+                            "Failed to set Lua memory limit: {e}"
+                        ))));
                     }
-                })?;
+                }
 
-                let resp_value = lua_value_to_resp_value(result)?;
-                (resp_value, *aggregated_outcome.read().unwrap())
+                let res: mlua::Result<(RespValue, WriteOutcome)> = Result::Ok({
+                    let globals = lua.globals();
+
+                    // Sandbox the Lua environment by removing potentially dangerous functions.
+                    globals.set("loadfile", mlua::Value::Nil)?;
+                    globals.set("dofile", mlua::Value::Nil)?;
+                    globals.set("collectgarbage", mlua::Value::Nil)?;
+                    if let Ok(mlua::Value::Table(os_table)) = globals.get::<mlua::Value>("os") {
+                        os_table.set("execute", mlua::Value::Nil)?;
+                        os_table.set("exit", mlua::Value::Nil)?;
+                    }
+                    if let Ok(mlua::Value::Table(io_table)) = globals.get::<mlua::Value>("io") {
+                        io_table.set("open", mlua::Value::Nil)?;
+                        io_table.set("popen", mlua::Value::Nil)?;
+                    }
+
+                    // Create the `spinel` table to expose the database API.
+                    let spinel_table = lua.create_table()?;
+
+                    // Provide `spinel.call` to execute commands that will propagate errors.
+                    let call_state = Arc::clone(&server_state_clone);
+                    let call_db = Arc::clone(&db_clone);
+                    let call_session_id = session_id;
+                    let call_user = authenticated_user.clone();
+                    let call_aggregated_outcome = Arc::clone(&aggregated_outcome);
+                    let call_callback =
+                        lua.create_async_function(move |lua, m_args: mlua::MultiValue| {
+                            let state = Arc::clone(&call_state);
+                            let db = Arc::clone(&call_db);
+                            let aggregated_outcome = Arc::clone(&call_aggregated_outcome);
+                            let user = call_user.clone();
+                            async move {
+                                let mut resp_args = Vec::new();
+                                for val in m_args.into_vec() {
+                                    resp_args.push(lua_value_to_resp_frame(val)?);
+                                }
+                                let command = Command::try_from(RespFrame::Array(resp_args))?;
+                                let mut temp_ctx = ExecutionContext {
+                                    state,
+                                    locks: db.determine_locks_for_command(&command).await,
+                                    db: &db,
+                                    command: Some(command.clone()),
+                                    session_id: call_session_id,
+                                    authenticated_user: user,
+                                };
+                                let (resp_val, outcome) = command.execute(&mut temp_ctx).await?;
+                                update_aggregated_outcome(&aggregated_outcome, outcome);
+                                resp_value_to_lua_value(&lua, resp_val)
+                            }
+                        })?;
+                    spinel_table.set("call", call_callback)?;
+
+                    // Provide `spinel.pcall` to execute commands and capture errors.
+                    let pcall_state = Arc::clone(&server_state_clone);
+                    let pcall_db = Arc::clone(&db_clone);
+                    let pcall_session_id = session_id;
+                    let pcall_user = authenticated_user.clone();
+                    let pcall_aggregated_outcome = Arc::clone(&aggregated_outcome);
+                    let pcall_callback =
+                        lua.create_async_function(move |lua, m_args: mlua::MultiValue| {
+                            let state = Arc::clone(&pcall_state);
+                            let db = Arc::clone(&pcall_db);
+                            let aggregated_outcome = Arc::clone(&pcall_aggregated_outcome);
+                            let user = pcall_user.clone();
+                            async move {
+                                let mut resp_args = Vec::new();
+                                for val in m_args.into_vec() {
+                                    resp_args.push(lua_value_to_resp_frame(val)?);
+                                }
+                                let command = Command::try_from(RespFrame::Array(resp_args))?;
+                                let mut temp_ctx = ExecutionContext {
+                                    state,
+                                    locks: db.determine_locks_for_command(&command).await,
+                                    db: &db,
+                                    command: Some(command.clone()),
+                                    session_id: pcall_session_id,
+                                    authenticated_user: user,
+                                };
+                                match command.execute(&mut temp_ctx).await {
+                                    Ok((resp_val, outcome)) => {
+                                        update_aggregated_outcome(&aggregated_outcome, outcome);
+                                        resp_value_to_lua_value(&lua, resp_val)
+                                    }
+                                    Err(e) => Ok(LuaValue::Table(lua_error_to_table(&lua, e)?)),
+                                }
+                            }
+                        })?;
+                    spinel_table.set("pcall", pcall_callback)?;
+
+                    globals.set("spinel", spinel_table)?;
+
+                    // Expose the KEYS table to the script.
+                    let keys_table = lua.create_table_from(
+                        keys.iter().enumerate().map(|(i, k)| (i + 1, k.as_ref())),
+                    )?;
+                    globals.set("KEYS", keys_table)?;
+
+                    // Expose the ARGV table to the script.
+                    let argv_table = lua.create_table_from(
+                        args.iter().enumerate().map(|(i, a)| (i + 1, a.as_ref())),
+                    )?;
+                    globals.set("ARGV", argv_table)?;
+
+                    drop(globals);
+
+                    // Execute the async Lua script using the handle of the main Tokio runtime.
+                    // This avoids creating a nested runtime, which is a major anti-pattern.
+                    let result = tokio::runtime::Handle::current().block_on(async {
+                        let lua_future = lua.load(&*script).eval_async::<LuaValue>();
+
+                        if script_has_timeout {
+                            match tokio::time::timeout(timeout_duration, lua_future).await {
+                                Ok(Ok(val)) => Ok(val),
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err(mlua::Error::external(SpinelDBError::ScriptTimeout)),
+                            }
+                        } else {
+                            lua_future.await
+                        }
+                    })?;
+
+                    let resp_value = lua_value_to_resp_value(result)?;
+                    (resp_value, *aggregated_outcome.read().unwrap())
+                });
+
+                res
             });
-
-            res
-        });
 
         match lua_future.await {
             Ok(Ok(res)) => Ok(res),

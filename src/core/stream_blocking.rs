@@ -269,3 +269,160 @@ impl StreamBlockerManager {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    fn make_waiter(session_id: u64) -> (SharedWaker, oneshot::Receiver<()>) {
+        let (tx, rx) = oneshot::channel();
+        let waker = Arc::new(Mutex::new(Some(tx)));
+        let info = WaiterInfo {
+            session_id,
+            waker: waker.clone(),
+        };
+        let _ = info;
+        (waker, rx)
+    }
+
+    fn push_waiter(
+        mgr: &StreamBlockerManager,
+        key: &Bytes,
+        session_id: u64,
+    ) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        let waker = Arc::new(Mutex::new(Some(tx)));
+        let info = WaiterInfo { session_id, waker };
+        mgr.waiters.entry(key.clone()).or_default().push_back(info);
+        rx
+    }
+
+    #[test]
+    fn test_new_manager_has_no_waiters() {
+        let mgr = StreamBlockerManager::new();
+        assert!(mgr.waiters.is_empty());
+    }
+
+    #[test]
+    fn test_default_matches_new() {
+        let m = StreamBlockerManager::default();
+        assert!(m.waiters.is_empty());
+    }
+
+    #[test]
+    fn test_notify_empty_queue_is_noop() {
+        let mgr = StreamBlockerManager::new();
+        // Should not panic.
+        mgr.notify(&Bytes::from_static(b"k"));
+    }
+
+    #[test]
+    fn test_notify_wakes_all_waiters() {
+        let mgr = StreamBlockerManager::new();
+        let key = Bytes::from_static(b"stream");
+        let mut receivers: Vec<oneshot::Receiver<()>> = vec![];
+        for sid in 0..3 {
+            receivers.push(push_waiter(&mgr, &key, sid));
+        }
+        mgr.notify(&key);
+        for mut rx in receivers {
+            assert!(rx.try_recv().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_notify_clears_queue() {
+        let mgr = StreamBlockerManager::new();
+        let key = Bytes::from_static(b"s");
+        let _r = push_waiter(&mgr, &key, 1);
+        mgr.notify(&key);
+        // After notify, the inner queue is empty.
+        let q = mgr.waiters.get(&key).unwrap();
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn test_notify_does_not_affect_other_streams() {
+        let mgr = StreamBlockerManager::new();
+        let a = Bytes::from_static(b"a");
+        let b = Bytes::from_static(b"b");
+        let mut rx_a = push_waiter(&mgr, &a, 1);
+        let mut rx_b = push_waiter(&mgr, &b, 2);
+        mgr.notify(&a);
+        assert!(rx_a.try_recv().is_ok());
+        // b is untouched.
+        assert!(rx_b.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_notify_and_remove_all_drops_entire_entry() {
+        let mgr = StreamBlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r1 = push_waiter(&mgr, &key, 1);
+        let _r2 = push_waiter(&mgr, &key, 2);
+        mgr.notify_and_remove_all(&key);
+        assert!(!mgr.waiters.contains_key(&key));
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session_filters_by_sid() {
+        let mgr = StreamBlockerManager::new();
+        let a = Bytes::from_static(b"a");
+        let b = Bytes::from_static(b"b");
+        let _r1 = push_waiter(&mgr, &a, 42);
+        let _r2 = push_waiter(&mgr, &b, 99);
+        mgr.remove_waiters_for_session(42);
+        // a's queue is gone (only had session 42), b still has session 99.
+        assert!(!mgr.waiters.contains_key(&a));
+        assert!(mgr.waiters.contains_key(&b));
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session_with_no_matches_is_noop() {
+        let mgr = StreamBlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r = push_waiter(&mgr, &key, 1);
+        mgr.remove_waiters_for_session(999);
+        assert!(mgr.waiters.contains_key(&key));
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session_keeps_other_sids() {
+        let mgr = StreamBlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r1 = push_waiter(&mgr, &key, 1);
+        let _r2 = push_waiter(&mgr, &key, 2);
+        mgr.remove_waiters_for_session(1);
+        // Queue still has session 2's waiter.
+        let q = mgr.waiters.get(&key).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].session_id, 2);
+    }
+
+    #[test]
+    fn test_notify_only_consumes_each_waker_once() {
+        // After notify, calling notify again should be a no-op (queue is empty).
+        let mgr = StreamBlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r = push_waiter(&mgr, &key, 1);
+        mgr.notify(&key);
+        mgr.notify(&key);
+        // Second notify is a no-op (inner queue already empty).
+        let q = mgr.waiters.get(&key).unwrap();
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn test_make_waiter_helper_produces_valid_waker() {
+        // Sanity check: the helper is usable.
+        let (waker, mut rx) = make_waiter(7);
+        {
+            let mut g = waker.lock().unwrap();
+            if let Some(tx) = g.take() {
+                let _ = tx.send(());
+            }
+        }
+        assert!(rx.try_recv().is_ok());
+    }
+}

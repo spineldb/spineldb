@@ -312,3 +312,153 @@ impl CommandSpec for XAdd {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xadd_parses_key_and_fields() {
+        let c = XAdd::parse(&[bs("k"), bs("*"), bs("f1"), bs("v1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!(c.options.id_spec.is_none());
+        assert_eq!(c.options.fields.len(), 1);
+        assert!(!c.options.nomkstream);
+        assert!(c.options.maxlen.is_none());
+    }
+
+    #[test]
+    fn test_xadd_parses_explicit_id() {
+        let c = XAdd::parse(&[bs("k"), bs("1-0"), bs("f1"), bs("v1")]).unwrap();
+        assert_eq!(c.options.id_spec, Some(StreamId::new(1, 0)));
+    }
+
+    #[test]
+    fn test_xadd_parses_nomkstream() {
+        let c =
+            XAdd::parse(&[bs("k"), bs("NOMKSTREAM"), bs("*"), bs("f1"), bs("v1")]).unwrap();
+        assert!(c.options.nomkstream);
+    }
+
+    #[test]
+    fn test_xadd_parses_maxlen_exact() {
+        let c = XAdd::parse(&[
+            bs("k"),
+            bs("MAXLEN"),
+            bs("100"),
+            bs("*"),
+            bs("f1"),
+            bs("v1"),
+        ])
+        .unwrap();
+        assert_eq!(c.options.maxlen, Some((false, 100)));
+    }
+
+    #[test]
+    fn test_xadd_parses_maxlen_approximate() {
+        let c = XAdd::parse(&[
+            bs("k"),
+            bs("MAXLEN"),
+            bs("~"),
+            bs("100"),
+            bs("*"),
+            bs("f1"),
+            bs("v1"),
+        ])
+        .unwrap();
+        assert_eq!(c.options.maxlen, Some((true, 100)));
+    }
+
+    #[test]
+    fn test_xadd_parses_maxlen_then_nomkstream() {
+        let c = XAdd::parse(&[
+            bs("k"),
+            bs("MAXLEN"),
+            bs("100"),
+            bs("NOMKSTREAM"),
+            bs("*"),
+            bs("f1"),
+            bs("v1"),
+        ])
+        .unwrap();
+        assert!(c.options.nomkstream);
+        assert_eq!(c.options.maxlen, Some((false, 100)));
+    }
+
+    #[test]
+    fn test_xadd_parses_multiple_fields() {
+        let c = XAdd::parse(&[
+            bs("k"),
+            bs("*"),
+            bs("f1"),
+            bs("v1"),
+            bs("f2"),
+            bs("v2"),
+        ])
+        .unwrap();
+        assert_eq!(c.options.fields.len(), 2);
+    }
+
+    #[test]
+    fn test_xadd_with_no_args_is_error() {
+        let r = XAdd::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xadd_with_too_few_args_is_error() {
+        let r = XAdd::parse(&[bs("k"), bs("*")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xadd_with_odd_field_count_is_error() {
+        let r = XAdd::parse(&[bs("k"), bs("*"), bs("f1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xadd_maxlen_without_count_is_error() {
+        let r = XAdd::parse(&[bs("k"), bs("MAXLEN"), bs("*"), bs("f1"), bs("v1")]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_xadd_with_non_bulk_key_is_wrong_type() {
+        let r = XAdd::parse(&[RespFrame::Integer(1), bs("*"), bs("f1"), bs("v1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_xadd_to_resp_args_round_trips() {
+        let c = XAdd::parse(&[
+            bs("k"),
+            bs("NOMKSTREAM"),
+            bs("MAXLEN"),
+            bs("~"),
+            bs("50"),
+            bs("1-0"),
+            bs("f1"),
+            bs("v1"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"NOMKSTREAM"));
+        assert_eq!(args[2], Bytes::from_static(b"MAXLEN"));
+        assert_eq!(args[3], Bytes::from_static(b"~"));
+        assert_eq!(args[4], Bytes::from_static(b"50"));
+        assert_eq!(args[5], Bytes::from_static(b"1-0"));
+    }
+
+    #[test]
+    fn test_xadd_to_resp_args_uses_asterisk_for_auto_id() {
+        let c = XAdd::parse(&[bs("k"), bs("*"), bs("f1"), bs("v1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"*"));
+    }
+}

@@ -124,3 +124,63 @@ impl CommandSpec for IncrByFloat {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_incrbyfloat_parses_positive() {
+        let c = IncrByFloat::parse(&[bs("k"), bs("1.5")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!((c.increment - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_incrbyfloat_parses_negative() {
+        let c = IncrByFloat::parse(&[bs("k"), bs("-2.5")]).unwrap();
+        assert!((c.increment + 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_incrbyfloat_parses_zero() {
+        let c = IncrByFloat::parse(&[bs("k"), bs("0.0")]).unwrap();
+        assert_eq!(c.increment, 0.0);
+    }
+
+    #[test]
+    fn test_incrbyfloat_parses_integer_as_float() {
+        let c = IncrByFloat::parse(&[bs("k"), bs("5")]).unwrap();
+        assert_eq!(c.increment, 5.0);
+    }
+
+    #[test]
+    fn test_incrbyfloat_with_too_few_args_is_error() {
+        let r = IncrByFloat::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_incrbyfloat_with_too_many_args_is_error() {
+        let r = IncrByFloat::parse(&[bs("k"), bs("1.0"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_incrbyfloat_with_non_float_is_error() {
+        let r = IncrByFloat::parse(&[bs("k"), bs("not-a-number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_incrbyfloat_to_resp_args_has_two_elements() {
+        let c = IncrByFloat::parse(&[bs("k"), bs("1.5")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

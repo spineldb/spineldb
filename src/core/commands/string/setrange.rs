@@ -155,3 +155,60 @@ impl CommandSpec for SetRange {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_setrange_parses_key_offset_value() {
+        let s = SetRange::parse(&[bs("k"), bs("10"), bs("v")]).unwrap();
+        assert_eq!(s.key, Bytes::from_static(b"k"));
+        assert_eq!(s.offset, 10);
+        assert_eq!(s.value, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_setrange_parses_zero_offset() {
+        let s = SetRange::parse(&[bs("k"), bs("0"), bs("v")]).unwrap();
+        assert_eq!(s.offset, 0);
+    }
+
+    #[test]
+    fn test_setrange_with_too_few_args_is_error() {
+        let r = SetRange::parse(&[bs("k"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_setrange_with_too_many_args_is_error() {
+        let r = SetRange::parse(&[bs("k"), bs("0"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_setrange_with_non_integer_offset_is_error() {
+        let r = SetRange::parse(&[bs("k"), bs("here"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_setrange_with_non_bulk_value_is_wrong_type() {
+        let r = SetRange::parse(&[bs("k"), bs("0"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_setrange_to_resp_args_round_trips() {
+        let s = SetRange::parse(&[bs("k"), bs("42"), bs("v")]).unwrap();
+        let args = s.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"42"));
+        assert_eq!(args[2], Bytes::from_static(b"v"));
+    }
+}

@@ -228,3 +228,235 @@ impl ZSetOp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::database::zset::SortedSet;
+
+    fn bs(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    fn bs_frame(s: &str) -> RespFrame {
+        RespFrame::BulkString(bs(s))
+    }
+
+    fn make_zset(pairs: &[(&str, f64)]) -> SortedSet {
+        let mut z = SortedSet::new();
+        for (m, s) in pairs {
+            z.add(*s, bs(m));
+        }
+        z
+    }
+
+    #[test]
+    fn test_aggregate_default_is_sum() {
+        assert_eq!(Aggregate::default(), Aggregate::Sum);
+    }
+
+    #[test]
+    fn test_aggregate_variants_distinct() {
+        assert_ne!(Aggregate::Sum, Aggregate::Min);
+        assert_ne!(Aggregate::Min, Aggregate::Max);
+        assert_ne!(Aggregate::Sum, Aggregate::Max);
+    }
+
+    #[test]
+    fn test_union_empty_input_yields_empty_zset() {
+        let result = ZSetOp::union(&[], &[], Aggregate::Sum);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_union_single_zset_returns_same_members() {
+        let z = make_zset(&[("a", 1.0), ("b", 2.0)]);
+        let result = ZSetOp::union(&[z], &[1.0], Aggregate::Sum);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get_score(&bs("a")), Some(1.0));
+        assert_eq!(result.get_score(&bs("b")), Some(2.0));
+    }
+
+    #[test]
+    fn test_union_two_sets_combines_scores_with_sum() {
+        let a = make_zset(&[("a", 1.0), ("b", 2.0)]);
+        let b = make_zset(&[("b", 3.0), ("c", 4.0)]);
+        let result = ZSetOp::union(&[a, b], &[1.0, 1.0], Aggregate::Sum);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.get_score(&bs("a")), Some(1.0));
+        assert_eq!(result.get_score(&bs("b")), Some(5.0));
+        assert_eq!(result.get_score(&bs("c")), Some(4.0));
+    }
+
+    #[test]
+    fn test_union_with_weights_scales_scores() {
+        let a = make_zset(&[("a", 2.0)]);
+        let b = make_zset(&[("a", 3.0)]);
+        let result = ZSetOp::union(&[a, b], &[2.0, 3.0], Aggregate::Sum);
+        assert_eq!(result.get_score(&bs("a")), Some(2.0 * 2.0 + 3.0 * 3.0));
+    }
+
+    #[test]
+    fn test_union_aggregate_min() {
+        let a = make_zset(&[("a", 5.0)]);
+        let b = make_zset(&[("a", 2.0)]);
+        let result = ZSetOp::union(&[a, b], &[1.0, 1.0], Aggregate::Min);
+        assert_eq!(result.get_score(&bs("a")), Some(2.0));
+    }
+
+    #[test]
+    fn test_union_aggregate_max() {
+        let a = make_zset(&[("a", 5.0)]);
+        let b = make_zset(&[("a", 2.0)]);
+        let result = ZSetOp::union(&[a, b], &[1.0, 1.0], Aggregate::Max);
+        assert_eq!(result.get_score(&bs("a")), Some(5.0));
+    }
+
+    #[test]
+    fn test_intersection_empty_input_yields_empty_zset() {
+        let result = ZSetOp::intersection(&[], &[], Aggregate::Sum);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_intersection_two_sets_returns_common_members() {
+        let a = make_zset(&[("a", 1.0), ("b", 2.0)]);
+        let b = make_zset(&[("b", 3.0), ("c", 4.0)]);
+        let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Sum);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_member(&bs("b")));
+    }
+
+    #[test]
+    fn test_intersection_with_sum_aggregates_scores() {
+        let a = make_zset(&[("x", 2.0)]);
+        let b = make_zset(&[("x", 3.0)]);
+        let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Sum);
+        assert_eq!(result.get_score(&bs("x")), Some(5.0));
+    }
+
+    #[test]
+    fn test_intersection_with_min_aggregates_scores() {
+        let a = make_zset(&[("x", 2.0)]);
+        let b = make_zset(&[("x", 3.0)]);
+        let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Min);
+        assert_eq!(result.get_score(&bs("x")), Some(2.0));
+    }
+
+    #[test]
+    fn test_intersection_with_max_aggregates_scores() {
+        let a = make_zset(&[("x", 2.0)]);
+        let b = make_zset(&[("x", 3.0)]);
+        let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Max);
+        assert_eq!(result.get_score(&bs("x")), Some(3.0));
+    }
+
+    #[test]
+    fn test_intersection_no_common_members_yields_empty() {
+        let a = make_zset(&[("a", 1.0)]);
+        let b = make_zset(&[("b", 2.0)]);
+        let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Sum);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_intersection_uses_smallest_set_as_base() {
+        // The smallest set (b) should be the iteration base. Only common members appear.
+        let a = make_zset(&[
+            ("a", 1.0),
+            ("b", 2.0),
+            ("c", 3.0),
+            ("d", 4.0),
+            ("e", 5.0),
+        ]);
+        let b = make_zset(&[("a", 10.0), ("c", 30.0)]);
+        let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Sum);
+        // a=1+10=11, c=3+30=33
+        assert_eq!(result.get_score(&bs("a")), Some(11.0));
+        assert_eq!(result.get_score(&bs("c")), Some(33.0));
+        assert!(!result.contains_member(&bs("b")));
+        assert!(!result.contains_member(&bs("d")));
+        assert!(!result.contains_member(&bs("e")));
+    }
+
+    #[test]
+    fn test_parse_store_args_defaults() {
+        // No WEIGHTS or AGGREGATE options => weights filled with 1.0, Aggregate::Sum.
+        let args = [];
+        let (w, agg) = parse_store_args(&args, 3).unwrap();
+        assert_eq!(w, vec![1.0, 1.0, 1.0]);
+        assert_eq!(agg, Aggregate::Sum);
+    }
+
+    #[test]
+    fn test_parse_store_args_weights_only() {
+        let args = [bs_frame("WEIGHTS"), bs_frame("1.0"), bs_frame("2.0"), bs_frame("3.0")];
+        let (w, agg) = parse_store_args(&args, 3).unwrap();
+        assert_eq!(w, vec![1.0, 2.0, 3.0]);
+        assert_eq!(agg, Aggregate::Sum);
+    }
+
+    #[test]
+    fn test_parse_store_args_aggregate_only() {
+        let args = [bs_frame("AGGREGATE"), bs_frame("MAX")];
+        let (w, agg) = parse_store_args(&args, 2).unwrap();
+        assert_eq!(w, vec![1.0, 1.0]);
+        assert_eq!(agg, Aggregate::Max);
+    }
+
+    #[test]
+    fn test_parse_store_args_weights_and_aggregate() {
+        let args = [
+            bs_frame("WEIGHTS"),
+            bs_frame("2.0"),
+            bs_frame("3.0"),
+            bs_frame("AGGREGATE"),
+            bs_frame("MIN"),
+        ];
+        let (w, agg) = parse_store_args(&args, 2).unwrap();
+        assert_eq!(w, vec![2.0, 3.0]);
+        assert_eq!(agg, Aggregate::Min);
+    }
+
+    #[test]
+    fn test_parse_store_args_aggregate_case_insensitive() {
+        let args = [bs_frame("aggregate"), bs_frame("min")];
+        let (_w, agg) = parse_store_args(&args, 1).unwrap();
+        assert_eq!(agg, Aggregate::Min);
+    }
+
+    #[test]
+    fn test_parse_store_args_weights_too_few_is_syntax_error() {
+        let args = [bs_frame("WEIGHTS"), bs_frame("1.0")];
+        let r = parse_store_args(&args, 3);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_store_args_weights_not_float_is_error() {
+        let args = [bs_frame("WEIGHTS"), bs_frame("1.0"), bs_frame("not-a-float")];
+        let r = parse_store_args(&args, 2);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_parse_store_args_aggregate_invalid_value_is_syntax_error() {
+        let args = [bs_frame("AGGREGATE"), bs_frame("AVERAGE")];
+        let r = parse_store_args(&args, 1);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_store_args_unknown_option_is_syntax_error() {
+        let args = [bs_frame("UNKNOWN")];
+        let r = parse_store_args(&args, 1);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_parse_store_args_aggregate_missing_value_is_syntax_error() {
+        let args = [bs_frame("AGGREGATE")];
+        let r = parse_store_args(&args, 1);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+}

@@ -171,3 +171,48 @@ impl CommandSpec for Smove {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_smove_parses_source_dest_member() {
+        let c = Smove::parse(&[bs("src"), bs("dst"), bs("m")]).unwrap();
+        assert_eq!(c.source, Bytes::from_static(b"src"));
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.member, Bytes::from_static(b"m"));
+    }
+
+    #[test]
+    fn test_smove_with_too_few_args_is_error() {
+        let r = Smove::parse(&[bs("src"), bs("dst")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_smove_with_too_many_args_is_error() {
+        let r = Smove::parse(&[bs("src"), bs("dst"), bs("m"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_smove_with_non_bulk_source_is_wrong_type() {
+        let r = Smove::parse(&[RespFrame::Integer(1), bs("dst"), bs("m")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_smove_to_resp_args_round_trips() {
+        let c = Smove::parse(&[bs("src"), bs("dst"), bs("m")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"src"));
+        assert_eq!(args[1], Bytes::from_static(b"dst"));
+        assert_eq!(args[2], Bytes::from_static(b"m"));
+    }
+}

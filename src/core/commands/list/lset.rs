@@ -133,3 +133,60 @@ impl CommandSpec for LSet {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lset_parses_key_index_element() {
+        let c = LSet::parse(&[bs("k"), bs("0"), bs("v")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.index, 0);
+        assert_eq!(c.element, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_lset_parses_negative_index() {
+        let c = LSet::parse(&[bs("k"), bs("-1"), bs("v")]).unwrap();
+        assert_eq!(c.index, -1);
+    }
+
+    #[test]
+    fn test_lset_with_too_few_args_is_error() {
+        let r = LSet::parse(&[bs("k"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lset_with_too_many_args_is_error() {
+        let r = LSet::parse(&[bs("k"), bs("0"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lset_with_non_integer_index_is_error() {
+        let r = LSet::parse(&[bs("k"), bs("first"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_lset_with_non_bulk_element_is_wrong_type() {
+        let r = LSet::parse(&[bs("k"), bs("0"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_lset_to_resp_args_round_trips() {
+        let c = LSet::parse(&[bs("k"), bs("2"), bs("v")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"2"));
+        assert_eq!(args[2], Bytes::from_static(b"v"));
+    }
+}

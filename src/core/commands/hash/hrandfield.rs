@@ -206,3 +206,69 @@ impl CommandSpec for HRandField {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hrandfield_parses_key_only() {
+        let c = HRandField::parse(&[bs("h")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"h"));
+        assert_eq!(c.count, None);
+        assert!(!c.with_values);
+    }
+
+    #[test]
+    fn test_hrandfield_parses_with_count() {
+        let c = HRandField::parse(&[bs("h"), bs("3")]).unwrap();
+        assert_eq!(c.count, Some(3));
+        assert!(!c.with_values);
+    }
+
+    #[test]
+    fn test_hrandfield_parses_with_withvalues() {
+        let c = HRandField::parse(&[bs("h"), bs("WITHVALUES")]).unwrap();
+        assert_eq!(c.count, None);
+        assert!(c.with_values);
+    }
+
+    #[test]
+    fn test_hrandfield_parses_with_count_and_withvalues() {
+        let c = HRandField::parse(&[bs("h"), bs("2"), bs("WITHVALUES")]).unwrap();
+        assert_eq!(c.count, Some(2));
+        assert!(c.with_values);
+    }
+
+    #[test]
+    fn test_hrandfield_with_count_and_withvalues_case_insensitive() {
+        let c = HRandField::parse(&[bs("h"), bs("2"), bs("withvalues")]).unwrap();
+        assert!(c.with_values);
+    }
+
+    #[test]
+    fn test_hrandfield_with_no_args_is_error() {
+        let r = HRandField::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hrandfield_with_unknown_arg_is_syntax_error() {
+        let r = HRandField::parse(&[bs("h"), bs("3"), bs("foo")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_hrandfield_to_resp_args_round_trips() {
+        let c = HRandField::parse(&[bs("h"), bs("2"), bs("WITHVALUES")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"h"));
+        assert_eq!(args[1], Bytes::from_static(b"2"));
+        assert_eq!(args[2], Bytes::from_static(b"WITHVALUES"));
+    }
+}

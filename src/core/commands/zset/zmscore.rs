@@ -89,3 +89,38 @@ impl CommandSpec for ZMScore {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zmscore_parses_key_and_members() {
+        let c = ZMScore::parse(&[bs("z"), bs("m1"), bs("m2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert_eq!(c.members.len(), 2);
+    }
+
+    #[test]
+    fn test_zmscore_with_too_few_args_is_error() {
+        let r = ZMScore::parse(&[bs("z")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zmscore_with_non_bulk_key_is_wrong_type() {
+        let r = ZMScore::parse(&[RespFrame::Integer(1), bs("m")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_zmscore_to_resp_args_round_trips() {
+        let c = ZMScore::parse(&[bs("z"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+    }
+}

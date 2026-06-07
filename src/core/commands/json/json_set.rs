@@ -168,3 +168,74 @@ impl CommandSpec for JsonSet {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_set_parses_basic() {
+        let c = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.f");
+        assert_eq!(c.value_json_str, Bytes::from_static(b"1"));
+        assert_eq!(c.condition, SetCondition::None);
+    }
+
+    #[test]
+    fn test_json_set_with_nx() {
+        let c = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1"), bs("NX")]).unwrap();
+        assert_eq!(c.condition, SetCondition::IfNotExists);
+    }
+
+    #[test]
+    fn test_json_set_with_xx() {
+        let c = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1"), bs("XX")]).unwrap();
+        assert_eq!(c.condition, SetCondition::IfExists);
+    }
+
+    #[test]
+    fn test_json_set_with_too_few_args_is_error() {
+        let r = JsonSet::parse(&[bs("k"), bs("$.f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_set_with_too_many_args_is_error() {
+        let r = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1"), bs("NX"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_set_unknown_condition_is_syntax_error() {
+        let r = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1"), bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_json_set_condition_case_insensitive() {
+        let c = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1"), bs("nx")]).unwrap();
+        assert_eq!(c.condition, SetCondition::IfNotExists);
+    }
+
+    #[test]
+    fn test_json_set_with_non_bulk_key_is_wrong_type() {
+        let r = JsonSet::parse(&[RespFrame::Integer(1), bs("$.f"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_set_to_resp_args_round_trips() {
+        let c = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"$.f"),
+            Bytes::from_static(b"1"),
+        ]);
+    }
+}

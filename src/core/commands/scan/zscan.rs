@@ -129,3 +129,81 @@ impl CommandSpec for ZScan {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zscan_parses_key_and_cursor() {
+        let c = ZScan::parse(&[bs("k"), bs("0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.cursor, 0);
+        assert!(c.pattern.is_none());
+        assert!(c.count.is_none());
+    }
+
+    #[test]
+    fn test_zscan_with_match_pattern() {
+        let c = ZScan::parse(&[bs("k"), bs("0"), bs("MATCH"), bs("m*")]).unwrap();
+        assert_eq!(c.pattern, Some(Bytes::from_static(b"m*")));
+    }
+
+    #[test]
+    fn test_zscan_with_count() {
+        let c = ZScan::parse(&[bs("k"), bs("0"), bs("COUNT"), bs("25")]).unwrap();
+        assert_eq!(c.count, Some(25));
+    }
+
+    #[test]
+    fn test_zscan_with_match_and_count() {
+        let c = ZScan::parse(&[
+            bs("k"),
+            bs("0"),
+            bs("MATCH"),
+            bs("m*"),
+            bs("COUNT"),
+            bs("10"),
+        ])
+        .unwrap();
+        assert_eq!(c.pattern, Some(Bytes::from_static(b"m*")));
+        assert_eq!(c.count, Some(10));
+    }
+
+    #[test]
+    fn test_zscan_with_too_few_args_is_error() {
+        let r = ZScan::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zscan_with_no_args_is_error() {
+        let r = ZScan::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zscan_with_non_bulk_key_is_wrong_type() {
+        let r = ZScan::parse(&[RespFrame::Integer(1), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_zscan_to_resp_args_round_trips() {
+        let c = ZScan::parse(&[bs("k"), bs("5"), bs("MATCH"), bs("m*")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"5"));
+        assert_eq!(args[2], Bytes::from_static(b"MATCH"));
+    }
+
+    #[test]
+    fn test_zscan_with_nonzero_cursor() {
+        let c = ZScan::parse(&[bs("k"), bs("200")]).unwrap();
+        assert_eq!(c.cursor, 200);
+    }
+}

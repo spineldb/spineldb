@@ -84,3 +84,50 @@ impl CommandSpec for GetSet {
         vec![self.key.clone(), self.value.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_getset_parses_key_and_value() {
+        let g = GetSet::parse(&[bs("k"), bs("v")]).unwrap();
+        assert_eq!(g.key, Bytes::from_static(b"k"));
+        assert_eq!(g.value, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_getset_with_empty_value() {
+        let g = GetSet::parse(&[bs("k"), bs("")]).unwrap();
+        assert!(g.value.is_empty());
+    }
+
+    #[test]
+    fn test_getset_with_too_few_args_is_error() {
+        let r = GetSet::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getset_with_too_many_args_is_error() {
+        let r = GetSet::parse(&[bs("k"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getset_with_non_bulk_is_wrong_type() {
+        let r = GetSet::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_getset_to_resp_args_round_trips() {
+        let g = GetSet::parse(&[bs("k"), bs("v")]).unwrap();
+        let args = g.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")]);
+    }
+}

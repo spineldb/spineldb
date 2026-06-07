@@ -163,3 +163,38 @@ pub struct GeoPoint {
     pub score: Option<f64>,
     pub coords: Option<(f64, f64)>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_geohash_roundtrip() {
+        let coord = (10.0, 20.0);
+        let score = coordinates_to_score(coord.0, coord.1).unwrap();
+        let (lon, lat) = score_to_coordinates(score).unwrap();
+        assert!(lon - coord.0 < 0.001);
+        assert!(lat - coord.1 < 0.001);
+    }
+
+    #[test]
+    fn test_haversine_distance_same_point() {
+        let d = haversine_distance(10.0, 20.0, 10.0, 20.0, GeoUnit::Meters);
+        assert!((d - 0.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_haversine_distance_known_points() {
+        // Distance between London (0, 51.5) and Paris (2.3, 48.9)
+        let d = haversine_distance(0.0, 51.5, 2.3, 48.9, GeoUnit::Kilometers);
+        assert!(d > 300.0 && d < 400.0, "Expected ~340km, got {}", d);
+    }
+
+    #[test]
+    fn test_radius_to_geohash_step_values() {
+        assert_eq!(radius_to_geohash_step(0.075), 11);
+        assert_eq!(radius_to_geohash_step(1.0), 9);
+        assert_eq!(radius_to_geohash_step(1000.0), 5);
+        assert_eq!(radius_to_geohash_step(100000.0), 2);
+    }
+}

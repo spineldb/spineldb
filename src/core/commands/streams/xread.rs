@@ -314,3 +314,141 @@ impl CommandSpec for XRead {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xread_parses_streams_and_ids() {
+        let c = XRead::parse(&[bs("STREAMS"), bs("k1"), bs("1-0")]).unwrap();
+        assert_eq!(c.streams.len(), 1);
+        assert_eq!(c.streams[0].0, Bytes::from_static(b"k1"));
+        assert_eq!(c.streams[0].1, StreamIdSpec::Exact(StreamId::new(1, 0)));
+        assert!(c.count.is_none());
+        assert!(c.block_timeout.is_none());
+    }
+
+    #[test]
+    fn test_xread_with_dollar_id() {
+        let c = XRead::parse(&[bs("STREAMS"), bs("k1"), bs("$")]).unwrap();
+        assert_eq!(c.streams[0].1, StreamIdSpec::Last);
+    }
+
+    #[test]
+    fn test_xread_with_count() {
+        let c = XRead::parse(&[bs("COUNT"), bs("10"), bs("STREAMS"), bs("k1"), bs("0")]).unwrap();
+        assert_eq!(c.count, Some(10));
+    }
+
+    #[test]
+    fn test_xread_with_block() {
+        let c = XRead::parse(&[bs("BLOCK"), bs("5000"), bs("STREAMS"), bs("k1"), bs("$")]).unwrap();
+        assert_eq!(c.block_timeout, Some(Duration::from_millis(5000)));
+    }
+
+    #[test]
+    fn test_xread_with_count_and_block() {
+        let c = XRead::parse(&[
+            bs("COUNT"),
+            bs("10"),
+            bs("BLOCK"),
+            bs("1000"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs("0"),
+        ])
+        .unwrap();
+        assert_eq!(c.count, Some(10));
+        assert_eq!(c.block_timeout, Some(Duration::from_millis(1000)));
+    }
+
+    #[test]
+    fn test_xread_multiple_streams() {
+        let c = XRead::parse(&[
+            bs("STREAMS"),
+            bs("k1"),
+            bs("k2"),
+            bs("0"),
+            bs("$"),
+        ])
+        .unwrap();
+        assert_eq!(c.streams.len(), 2);
+        assert_eq!(c.streams[0].0, Bytes::from_static(b"k1"));
+        assert_eq!(c.streams[1].0, Bytes::from_static(b"k2"));
+    }
+
+    #[test]
+    fn test_xread_no_streams_keyword_is_error() {
+        let r = XRead::parse(&[bs("k1"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xread_unknown_option_is_error() {
+        let r = XRead::parse(&[bs("FOO"), bs("BAR"), bs("STREAMS"), bs("k1"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xread_count_without_value_is_syntax_error() {
+        let r = XRead::parse(&[bs("COUNT")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xread_block_without_value_is_syntax_error() {
+        let r = XRead::parse(&[bs("BLOCK")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xread_odd_streams_count_is_error() {
+        let r = XRead::parse(&[bs("STREAMS"), bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xread_no_args_is_error() {
+        let r = XRead::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xread_invalid_id_is_error() {
+        let r = XRead::parse(&[bs("STREAMS"), bs("k1"), bs("invalid")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xread_invalid_block_value_is_error() {
+        let r = XRead::parse(&[bs("BLOCK"), bs("not_a_number"), bs("STREAMS"), bs("k1"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_xread_to_resp_args_round_trips() {
+        let c = XRead::parse(&[
+            bs("COUNT"),
+            bs("5"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs("k2"),
+            bs("0"),
+            bs("$"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"COUNT"));
+        assert_eq!(args[1], Bytes::from_static(b"5"));
+        assert_eq!(args[2], Bytes::from_static(b"STREAMS"));
+        assert_eq!(args[3], Bytes::from_static(b"k1"));
+        assert_eq!(args[4], Bytes::from_static(b"k2"));
+        assert_eq!(args[5], Bytes::from_static(b"0-0"));
+        assert_eq!(args[6], Bytes::from_static(b"$"));
+    }
+}

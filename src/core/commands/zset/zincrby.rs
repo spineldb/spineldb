@@ -102,3 +102,53 @@ impl CommandSpec for ZIncrBy {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zincrby_parses_positive_increment() {
+        let c = ZIncrBy::parse(&[bs("z"), bs("2.5"), bs("m")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert!((c.increment - 2.5).abs() < f64::EPSILON);
+        assert_eq!(c.member, Bytes::from_static(b"m"));
+    }
+
+    #[test]
+    fn test_zincrby_parses_negative_increment() {
+        let c = ZIncrBy::parse(&[bs("z"), bs("-3"), bs("m")]).unwrap();
+        assert!((c.increment - -3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_zincrby_with_too_few_args_is_error() {
+        let r = ZIncrBy::parse(&[bs("z"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zincrby_with_too_many_args_is_error() {
+        let r = ZIncrBy::parse(&[bs("z"), bs("1"), bs("m"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zincrby_with_non_float_increment_is_error() {
+        let r = ZIncrBy::parse(&[bs("z"), bs("abc"), bs("m")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_zincrby_to_resp_args_round_trips() {
+        let c = ZIncrBy::parse(&[bs("z"), bs("1.5"), bs("m")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"z"));
+        assert_eq!(args[2], Bytes::from_static(b"m"));
+    }
+}

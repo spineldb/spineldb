@@ -80,3 +80,29 @@ impl CommandSpec for FlushDb {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_flushdb_parses_with_no_args() {
+        assert!(FlushDb::parse(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_flushdb_with_any_args_is_error() {
+        let r = FlushDb::parse(&[bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_flushdb_to_resp_args_is_empty() {
+        let f = FlushDb;
+        assert!(f.to_resp_args().is_empty());
+    }
+}

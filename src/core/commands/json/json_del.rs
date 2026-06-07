@@ -120,3 +120,51 @@ impl CommandSpec for JsonDel {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_del_parses_key_only() {
+        let c = JsonDel::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.paths, vec!["$".to_string()]);
+    }
+
+    #[test]
+    fn test_json_del_parses_with_path() {
+        let c = JsonDel::parse(&[bs("k"), bs("$.f")]).unwrap();
+        assert_eq!(c.paths, vec!["$.f".to_string()]);
+    }
+
+    #[test]
+    fn test_json_del_parses_multiple_paths() {
+        let c = JsonDel::parse(&[bs("k"), bs("$.f"), bs("$.g")]).unwrap();
+        assert_eq!(c.paths.len(), 2);
+    }
+
+    #[test]
+    fn test_json_del_no_args_is_error() {
+        let r = JsonDel::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_del_with_non_bulk_key_is_wrong_type() {
+        let r = JsonDel::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_del_to_resp_args_round_trips() {
+        let c = JsonDel::parse(&[bs("k"), bs("$.f")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

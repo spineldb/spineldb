@@ -111,6 +111,43 @@ impl CommandSpec for LPushX {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lpushx_parses_key_and_values() {
+        let c = LPushX::parse(&[bs("k"), bs("v1"), bs("v2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.values.len(), 2);
+    }
+
+    #[test]
+    fn test_lpushx_with_no_values_is_error() {
+        // LPUSHX must have at least one value (pushx_logic returns SyntaxError if values empty).
+        let r = LPushX::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lpushx_with_non_bulk_key_is_wrong_type() {
+        let r = LPushX::parse(&[RespFrame::Integer(1), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_lpushx_to_resp_args_round_trips() {
+        let c = LPushX::parse(&[bs("k"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}
+
 // --- RPUSHX ---
 #[derive(Debug, Clone, Default)]
 pub struct RPushX {
@@ -161,5 +198,40 @@ impl CommandSpec for RPushX {
         let mut args = vec![self.key.clone()];
         args.extend(self.values.clone());
         args
+    }
+}
+
+#[cfg(test)]
+mod rpushx_tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_rpushx_parses_key_and_values() {
+        let c = RPushX::parse(&[bs("k"), bs("v1"), bs("v2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.values.len(), 2);
+    }
+
+    #[test]
+    fn test_rpushx_with_no_values_is_error() {
+        let r = RPushX::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_rpushx_with_non_bulk_key_is_wrong_type() {
+        let r = RPushX::parse(&[RespFrame::Integer(1), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_rpushx_to_resp_args_round_trips() {
+        let c = RPushX::parse(&[bs("k"), bs("a")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"a")]);
     }
 }

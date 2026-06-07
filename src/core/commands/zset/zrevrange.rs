@@ -92,3 +92,45 @@ impl CommandSpec for ZRevRange {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zrevrange_parses_key_start_stop() {
+        let c = ZRevRange::parse(&[bs("z"), bs("0"), bs("-1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert!(!c.with_scores);
+    }
+
+    #[test]
+    fn test_zrevrange_parses_with_scores() {
+        let c = ZRevRange::parse(&[bs("z"), bs("0"), bs("5"), bs("WITHSCORES")]).unwrap();
+        assert!(c.with_scores);
+    }
+
+    #[test]
+    fn test_zrevrange_with_too_few_args_is_error() {
+        let r = ZRevRange::parse(&[bs("z"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zrevrange_with_too_many_args_is_error() {
+        let r = ZRevRange::parse(&[bs("z"), bs("0"), bs("5"), bs("WITHSCORES"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zrevrange_to_resp_args_round_trips() {
+        let c = ZRevRange::parse(&[bs("z"), bs("0"), bs("5"), bs("WITHSCORES")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[3], Bytes::from_static(b"WITHSCORES"));
+    }
+}

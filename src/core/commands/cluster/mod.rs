@@ -305,3 +305,245 @@ impl CommandSpec for ClusterInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cluster_nodes() {
+        let c = ClusterInfo::parse(&[bs("NODES")]).unwrap();
+        assert!(matches!(c.subcommand, ClusterSubcommand::Nodes));
+    }
+
+    #[test]
+    fn test_cluster_slots() {
+        let c = ClusterInfo::parse(&[bs("SLOTS")]).unwrap();
+        assert!(matches!(c.subcommand, ClusterSubcommand::Slots));
+    }
+
+    #[test]
+    fn test_cluster_myid() {
+        let c = ClusterInfo::parse(&[bs("MYID")]).unwrap();
+        assert!(matches!(c.subcommand, ClusterSubcommand::MyId));
+    }
+
+    #[test]
+    fn test_cluster_getkeysinslot() {
+        let c = ClusterInfo::parse(&[bs("GETKEYSINSLOT"), bs("100"), bs("5")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::GetKeysInSlot { slot, count } => {
+                assert_eq!(slot, 100);
+                assert_eq!(count, 5);
+            }
+            _ => panic!("expected GetKeysInSlot"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_getkeysinslot_wrong_arg_count() {
+        let r = ClusterInfo::parse(&[bs("GETKEYSINSLOT"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_addslots_single() {
+        let c = ClusterInfo::parse(&[bs("ADDSLOTS"), bs("100")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::AddSlots(s) => assert_eq!(s, vec![100]),
+            _ => panic!("expected AddSlots"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_addslots_multiple() {
+        let c = ClusterInfo::parse(&[bs("ADDSLOTS"), bs("100"), bs("200"), bs("300")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::AddSlots(s) => assert_eq!(s, vec![100, 200, 300]),
+            _ => panic!("expected AddSlots"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_addslots_no_slots_is_error() {
+        let r = ClusterInfo::parse(&[bs("ADDSLOTS")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_meet() {
+        let c = ClusterInfo::parse(&[bs("MEET"), bs("127.0.0.1"), bs("7000")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::Meet(ip, port) => {
+                assert_eq!(ip, "127.0.0.1");
+                assert_eq!(port, 7000);
+            }
+            _ => panic!("expected Meet"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_meet_wrong_arg_count() {
+        let r = ClusterInfo::parse(&[bs("MEET"), bs("127.0.0.1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_setslot_migrating() {
+        let c = ClusterInfo::parse(&[
+            bs("SETSLOT"),
+            bs("100"),
+            bs("MIGRATING"),
+            bs("node_id_1"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            ClusterSubcommand::SetSlot(slot, SetSlotSubcommand::Migrating(id)) => {
+                assert_eq!(slot, 100);
+                assert_eq!(id, "node_id_1");
+            }
+            _ => panic!("expected SetSlot Migrating"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_setslot_importing() {
+        let c = ClusterInfo::parse(&[
+            bs("SETSLOT"),
+            bs("100"),
+            bs("IMPORTING"),
+            bs("node_id_1"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            ClusterSubcommand::SetSlot(_, SetSlotSubcommand::Importing(_)) => {}
+            _ => panic!("expected SetSlot Importing"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_setslot_node() {
+        let c = ClusterInfo::parse(&[
+            bs("SETSLOT"),
+            bs("100"),
+            bs("NODE"),
+            bs("node_id_1"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            ClusterSubcommand::SetSlot(_, SetSlotSubcommand::Node(_)) => {}
+            _ => panic!("expected SetSlot Node"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_setslot_stable() {
+        let c = ClusterInfo::parse(&[bs("SETSLOT"), bs("100"), bs("STABLE")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::SetSlot(slot, SetSlotSubcommand::Stable) => assert_eq!(slot, 100),
+            _ => panic!("expected SetSlot Stable"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_setslot_too_few_args_is_error() {
+        let r = ClusterInfo::parse(&[bs("SETSLOT"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_setslot_migrating_without_node_is_syntax_error() {
+        let r = ClusterInfo::parse(&[bs("SETSLOT"), bs("100"), bs("MIGRATING")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_cluster_replicate() {
+        let c = ClusterInfo::parse(&[bs("REPLICATE"), bs("master_id")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::Replicate(id) => assert_eq!(id, "master_id"),
+            _ => panic!("expected Replicate"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_replicate_wrong_arg_count() {
+        let r = ClusterInfo::parse(&[bs("REPLICATE")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_reshard() {
+        let c = ClusterInfo::parse(&[
+            bs("RESHARD"),
+            bs("src"),
+            bs("dst"),
+            bs("100"),
+            bs("200"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            ClusterSubcommand::Reshard { source_node_id, destination_node_id, slots } => {
+                assert_eq!(source_node_id, "src");
+                assert_eq!(destination_node_id, "dst");
+                assert_eq!(slots, vec![100, 200]);
+            }
+            _ => panic!("expected Reshard"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_reshard_no_slots_is_error() {
+        let r = ClusterInfo::parse(&[bs("RESHARD"), bs("src"), bs("dst")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_forget() {
+        let c = ClusterInfo::parse(&[bs("FORGET"), bs("node_id")]).unwrap();
+        match c.subcommand {
+            ClusterSubcommand::Forget(id) => assert_eq!(id, "node_id"),
+            _ => panic!("expected Forget"),
+        }
+    }
+
+    #[test]
+    fn test_cluster_forget_wrong_arg_count() {
+        let r = ClusterInfo::parse(&[bs("FORGET")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_fix() {
+        let c = ClusterInfo::parse(&[bs("FIX")]).unwrap();
+        assert!(matches!(c.subcommand, ClusterSubcommand::Fix));
+    }
+
+    #[test]
+    fn test_cluster_fix_with_extra_args_is_error() {
+        let r = ClusterInfo::parse(&[bs("FIX"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_unknown_subcommand_is_error() {
+        let r = ClusterInfo::parse(&[bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_cluster_no_args_is_error() {
+        let r = ClusterInfo::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cluster_subcommand_case_insensitive() {
+        let c = ClusterInfo::parse(&[bs("nodes")]).unwrap();
+        assert!(matches!(c.subcommand, ClusterSubcommand::Nodes));
+    }
+}

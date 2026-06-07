@@ -60,3 +60,28 @@ impl CommandSpec for Quit {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_quit_parses_with_no_args() {
+        assert!(Quit::parse(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_quit_with_any_args_is_error() {
+        let r = Quit::parse(&[bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_quit_to_resp_args_is_empty() {
+        assert!(Quit.to_resp_args().is_empty());
+    }
+}

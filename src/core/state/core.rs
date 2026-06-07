@@ -7,7 +7,7 @@ use super::client::*;
 use super::persistence::*;
 use super::replication::*;
 use super::stats::StatsState;
-use crate::config::{AclConfig, AclUsersFile, Config};
+use crate::config::{AclConfig, AclUsersFile, Config, ReplicationConfig};
 use crate::core::SpinelDBError;
 use crate::core::acl::enforcer::AclEnforcer;
 use crate::core::blocking::BlockerManager;
@@ -16,6 +16,7 @@ use crate::core::cluster::state::ClusterState;
 use crate::core::database::Db;
 use crate::core::events::{EventBus, PropagatedWork};
 use crate::core::latency::LatencyMonitor;
+use crate::core::protocol::resp_frame::set_max_bulk_string_size;
 use crate::core::pubsub::PubSubManager;
 use crate::core::replication::backlog::ReplicationBacklog;
 use crate::core::scripting::lua_manager::LuaManager;
@@ -137,13 +138,19 @@ impl ServerState {
         let (event_bus, aof_event_rx) = EventBus::new(config.persistence.aof_enabled);
         let (fsync_tx, fsync_rx) = mpsc::channel(1);
         let (rewrite_complete_tx, rewrite_complete_rx) = watch::channel(());
-        let (replication_backlog, replication_offset_receiver) = ReplicationBacklog::new();
+        let (replication_backlog, replication_offset_receiver) =
+            ReplicationBacklog::with_capacity(replication_backlog_capacity(&config));
         let (lazy_free_tx, lazy_free_rx) = mpsc::channel(128);
         let (cluster_gossip_tx, cluster_gossip_rx) = mpsc::channel(128);
         let (replication_reconfigure_tx, replication_reconfigure_rx) = broadcast::channel(1);
 
         const CACHE_REVALIDATION_CHANNEL_CAPACITY: usize = 128;
         let (reval_tx, reval_rx) = mpsc::channel(CACHE_REVALIDATION_CHANNEL_CAPACITY);
+
+        // Apply runtime-tunable protocol limits from the resolved config.
+        if config.safety.max_bulk_string_size > 0 {
+            set_max_bulk_string_size(config.safety.max_bulk_string_size);
+        }
 
         // Initialize all databases.
         let dbs = (0..config.databases).map(|_| Arc::new(Db::new())).collect();
@@ -289,4 +296,15 @@ impl ServerState {
         self.is_read_only_due_to_quorum_loss
             .store(value, Ordering::SeqCst);
     }
+}
+
+/// Resolves the desired replication backlog capacity from the live config.
+fn replication_backlog_capacity(config: &Config) -> usize {
+    if let ReplicationConfig::Primary(primary) = &config.replication
+        && primary.backlog_capacity > 0
+    {
+        return primary.backlog_capacity;
+    }
+    // Fall back to the hard-coded default to preserve prior behavior.
+    2 * 1024 * 1024
 }

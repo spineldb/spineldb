@@ -83,3 +83,43 @@ impl CommandSpec for BfCard {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfcard_parses_key() {
+        let c = BfCard::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+    }
+
+    #[test]
+    fn test_bfcard_with_too_few_args_is_error() {
+        let r = BfCard::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfcard_with_too_many_args_is_error() {
+        let r = BfCard::parse(&[bs("k"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfcard_with_non_bulk_key_is_wrong_type() {
+        let r = BfCard::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bfcard_to_resp_args_round_trips() {
+        let c = BfCard::parse(&[bs("k")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k")]);
+    }
+}

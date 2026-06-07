@@ -229,3 +229,110 @@ impl CommandSpec for LPos {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_lpos_parses_key_and_element() {
+        let c = LPos::parse(&[bs("k"), bs("v")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.element, Bytes::from_static(b"v"));
+        assert_eq!(c.rank, None);
+        assert_eq!(c.count, None);
+        assert_eq!(c.max_len, None);
+    }
+
+    #[test]
+    fn test_lpos_parses_rank() {
+        let c = LPos::parse(&[bs("k"), bs("v"), bs("RANK"), bs("2")]).unwrap();
+        assert_eq!(c.rank, Some(2));
+    }
+
+    #[test]
+    fn test_lpos_parses_count() {
+        let c = LPos::parse(&[bs("k"), bs("v"), bs("COUNT"), bs("3")]).unwrap();
+        assert_eq!(c.count, Some(3));
+    }
+
+    #[test]
+    fn test_lpos_parses_count_zero_as_max() {
+        let c = LPos::parse(&[bs("k"), bs("v"), bs("COUNT"), bs("0")]).unwrap();
+        assert_eq!(c.count, Some(u64::MAX));
+    }
+
+    #[test]
+    fn test_lpos_parses_maxlen() {
+        let c = LPos::parse(&[bs("k"), bs("v"), bs("MAXLEN"), bs("100")]).unwrap();
+        assert_eq!(c.max_len, Some(100));
+    }
+
+    #[test]
+    fn test_lpos_parses_all_options() {
+        let c = LPos::parse(&[
+            bs("k"),
+            bs("v"),
+            bs("RANK"),
+            bs("1"),
+            bs("COUNT"),
+            bs("2"),
+            bs("MAXLEN"),
+            bs("10"),
+        ])
+        .unwrap();
+        assert_eq!(c.rank, Some(1));
+        assert_eq!(c.count, Some(2));
+        assert_eq!(c.max_len, Some(10));
+    }
+
+    #[test]
+    fn test_lpos_options_case_insensitive() {
+        let c = LPos::parse(&[bs("k"), bs("v"), bs("rank"), bs("1")]).unwrap();
+        assert_eq!(c.rank, Some(1));
+    }
+
+    #[test]
+    fn test_lpos_with_no_args_is_error() {
+        let r = LPos::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lpos_with_too_few_args_is_error() {
+        let r = LPos::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_lpos_with_unknown_option_is_syntax_error() {
+        let r = LPos::parse(&[bs("k"), bs("v"), bs("FOO"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_lpos_with_option_missing_value_is_syntax_error() {
+        let r = LPos::parse(&[bs("k"), bs("v"), bs("RANK")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_lpos_with_non_integer_rank_is_error() {
+        let r = LPos::parse(&[bs("k"), bs("v"), bs("RANK"), bs("first")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_lpos_to_resp_args_with_count_zero_round_trips() {
+        let c = LPos::parse(&[bs("k"), bs("v"), bs("COUNT"), bs("0")]).unwrap();
+        let args = c.to_resp_args();
+        // [k, v, COUNT, 0]
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[2], Bytes::from_static(b"COUNT"));
+        assert_eq!(args[3], Bytes::from_static(b"0"));
+    }
+}

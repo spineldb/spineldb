@@ -108,3 +108,64 @@ impl CommandSpec for JsonMGet {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_mget_single_key() {
+        let c = JsonMGet::parse(&[bs("k1"), bs("$.a")]).unwrap();
+        assert_eq!(c.keys, vec![Bytes::from_static(b"k1")]);
+        assert_eq!(c.path, "$.a");
+    }
+
+    #[test]
+    fn test_json_mget_multiple_keys() {
+        let c = JsonMGet::parse(&[bs("k1"), bs("k2"), bs("k3"), bs("$.a")]).unwrap();
+        assert_eq!(c.keys.len(), 3);
+        assert_eq!(c.keys[0], Bytes::from_static(b"k1"));
+        assert_eq!(c.keys[1], Bytes::from_static(b"k2"));
+        assert_eq!(c.keys[2], Bytes::from_static(b"k3"));
+        assert_eq!(c.path, "$.a");
+    }
+
+    #[test]
+    fn test_json_mget_no_path_is_error() {
+        let r = JsonMGet::parse(&[bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_mget_no_args_is_error() {
+        let r = JsonMGet::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_mget_with_non_bulk_key_is_wrong_type() {
+        let r = JsonMGet::parse(&[RespFrame::Integer(1), bs("$.a")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_mget_with_non_bulk_path_is_wrong_type() {
+        let r = JsonMGet::parse(&[bs("k1"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_mget_to_resp_args_round_trips() {
+        let c = JsonMGet::parse(&[bs("k1"), bs("k2"), bs("$.a")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![
+            Bytes::from_static(b"k1"),
+            Bytes::from_static(b"k2"),
+            Bytes::from_static(b"$.a"),
+        ]);
+    }
+}

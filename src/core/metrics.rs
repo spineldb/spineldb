@@ -69,3 +69,73 @@ pub fn gather_metrics() -> String {
     let metric_families = prometheus::gather();
     encoder.encode_to_string(&metric_families).unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gather_metrics_returns_non_empty_string() {
+        // Touch metrics so they appear in the encoded output.
+        // Prometheus only emits metrics that have at least one sample.
+        CONNECTED_CLIENTS.inc();
+        COMMAND_LATENCY_SECONDS.observe(0.0);
+        let s = gather_metrics();
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn test_gather_metrics_contains_known_metric_names() {
+        // Touch all metrics so they appear in the encoded output.
+        // Prometheus only emits metrics that have at least one sample.
+        CONNECTED_CLIENTS.inc();
+        MEMORY_USED_BYTES.inc();
+        IS_READ_ONLY.set(0.0);
+        AOF_REWRITE_IN_PROGRESS.set(0.0);
+        SPLDB_SAVE_IN_PROGRESS.set(0.0);
+        COMMANDS_PROCESSED_TOTAL.inc();
+        CONNECTIONS_RECEIVED_TOTAL.inc();
+        EXPIRED_KEYS_TOTAL.inc();
+        EVICTED_KEYS_TOTAL.inc();
+        CACHE_EVICTIONS_TOTAL.inc();
+        CACHE_HITS_TOTAL.with_label_values(&["x"]).inc();
+        CACHE_MISSES_TOTAL.with_label_values(&["x"]).inc();
+        COMMAND_LATENCY_SECONDS.observe(0.0);
+
+        let s = gather_metrics();
+        assert!(s.contains("spineldb_connected_clients"));
+        assert!(s.contains("spineldb_commands_processed_total"));
+        assert!(s.contains("spineldb_memory_used_bytes"));
+        assert!(s.contains("spineldb_command_latency_seconds"));
+    }
+
+    #[test]
+    fn test_counter_increments() {
+        let before = COMMANDS_PROCESSED_TOTAL.get();
+        COMMANDS_PROCESSED_TOTAL.inc();
+        let after = COMMANDS_PROCESSED_TOTAL.get();
+        assert_eq!(after, before + 1.0);
+    }
+
+    #[test]
+    fn test_gauge_set_and_dec() {
+        IS_READ_ONLY.set(1.0);
+        assert_eq!(IS_READ_ONLY.get(), 1.0);
+        IS_READ_ONLY.dec();
+        assert_eq!(IS_READ_ONLY.get(), 0.0);
+    }
+
+    #[test]
+    fn test_counter_vec_with_labels() {
+        CACHE_HITS_TOTAL.with_label_values(&["test-policy"]).inc();
+        let v = CACHE_HITS_TOTAL.with_label_values(&["test-policy"]).get();
+        assert!(v >= 1.0);
+    }
+
+    #[test]
+    fn test_histogram_observe() {
+        COMMAND_LATENCY_SECONDS.observe(0.001);
+        let count = COMMAND_LATENCY_SECONDS.get_sample_count();
+        assert!(count >= 1);
+    }
+}

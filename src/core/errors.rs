@@ -277,3 +277,209 @@ impl From<serde_json::Error> for SpinelDBError {
         SpinelDBError::Internal(format!("JSON serialization/deserialization error: {e}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn test_clone_io_preserves_arc_payload() {
+        let original = SpinelDBError::Io(Arc::new(io::Error::other("boom")));
+        let cloned = original.clone();
+        match (original, cloned) {
+            (SpinelDBError::Io(a), SpinelDBError::Io(b)) => {
+                // Arc::ptr_eq guarantees that the heap allocation is shared (cheap clone).
+                assert!(Arc::ptr_eq(&a, &b));
+            }
+            _ => panic!("clone should preserve the Io variant"),
+        }
+    }
+
+    #[test]
+    fn test_clone_string_variants() {
+        let cases = [
+            SpinelDBError::IoString("io".into()),
+            SpinelDBError::HttpClientError("http".into()),
+            SpinelDBError::UnknownCommand("?".into()),
+            SpinelDBError::WrongArgumentCount("X".into()),
+            SpinelDBError::InvalidRequest("req".into()),
+            SpinelDBError::SecurityViolation("sec".into()),
+            SpinelDBError::InvalidState("st".into()),
+            SpinelDBError::ReadOnly("ro".into()),
+            SpinelDBError::AofError("aof".into()),
+            SpinelDBError::ReplicationError("rep".into()),
+            SpinelDBError::LockingError("lock".into()),
+            SpinelDBError::MigrationError("mig".into()),
+            SpinelDBError::Internal("int".into()),
+            SpinelDBError::ClusterDown("down".into()),
+        ];
+        for c in cases {
+            let cloned = c.clone();
+            assert_eq!(c, cloned);
+        }
+    }
+
+    #[test]
+    fn test_clone_cluster_variants() {
+        let moved = SpinelDBError::Moved {
+            slot: 7,
+            addr: "127.0.0.1:7000".into(),
+        };
+        let ask = SpinelDBError::Ask {
+            slot: 8,
+            addr: "127.0.0.1:7001".into(),
+        };
+        assert_eq!(moved.clone(), moved);
+        assert_eq!(ask.clone(), ask);
+        // Different slot/addr => not equal
+        assert_ne!(
+            moved,
+            SpinelDBError::Moved {
+                slot: 9,
+                addr: "127.0.0.1:7000".into()
+            }
+        );
+    }
+
+    #[test]
+    fn test_partial_eq_distinguishes_variants() {
+        assert_eq!(SpinelDBError::SyntaxError, SpinelDBError::SyntaxError);
+        assert_ne!(SpinelDBError::SyntaxError, SpinelDBError::WrongType);
+        assert_ne!(
+            SpinelDBError::Moved {
+                slot: 1,
+                addr: "a".into()
+            },
+            SpinelDBError::Ask {
+                slot: 1,
+                addr: "a".into()
+            }
+        );
+    }
+
+    #[test]
+    fn test_display_messages_include_keyword() {
+        // We just check that the display impls include some expected substring.
+        let cases = [
+            (SpinelDBError::SyntaxError, "Syntax error"),
+            (SpinelDBError::WrongType, "WRONGTYPE"),
+            (SpinelDBError::NotAnInteger, "not an integer"),
+            (SpinelDBError::NotAFloat, "float"),
+            (SpinelDBError::Overflow, "overflow"),
+            (SpinelDBError::KeyNotFound, "not found"),
+            (SpinelDBError::KeyExists, "exists"),
+            (SpinelDBError::AuthRequired, "NOAUTH"),
+            (SpinelDBError::NoPermission, "NOPER"),
+            (SpinelDBError::InvalidPassword, "WRONGPASS"),
+            (SpinelDBError::TransactionAborted, "aborted"),
+            (SpinelDBError::MaxMemoryReached, "OOM"),
+            (SpinelDBError::ConsumerGroupNotFound, "NOGROUP"),
+            (SpinelDBError::ReplicationLoopDetected, "loop"),
+            (SpinelDBError::ScriptTimeout, "timed out"),
+            (SpinelDBError::CrossSlot, "CROSSSLOT"),
+            (
+                SpinelDBError::Moved {
+                    slot: 42,
+                    addr: "host:1".into(),
+                },
+                "MOVED 42 host:1",
+            ),
+            (
+                SpinelDBError::Ask {
+                    slot: 1,
+                    addr: "h:2".into(),
+                },
+                "ASK 1 h:2",
+            ),
+        ];
+        for (e, expected) in cases {
+            assert!(
+                e.to_string().contains(expected),
+                "expected {:?} to contain {:?}",
+                e,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let converted: SpinelDBError = io_err.into();
+        match converted {
+            SpinelDBError::Io(_) => {}
+            other => panic!("expected Io variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_from_string() {
+        let s = "boom".to_string();
+        let e: SpinelDBError = s.into();
+        match e {
+            SpinelDBError::IoString(inner) => assert_eq!(inner, "boom"),
+            other => panic!("expected IoString, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_from_parse_int_error() {
+        let parsed: Result<i32, _> = "abc".parse();
+        let err = parsed.unwrap_err();
+        let converted: SpinelDBError = err.into();
+        assert_eq!(converted, SpinelDBError::NotAnInteger);
+    }
+
+    #[test]
+    fn test_from_parse_float_error() {
+        let parsed: Result<f64, _> = "abc".parse();
+        let err = parsed.unwrap_err();
+        let converted: SpinelDBError = err.into();
+        assert_eq!(converted, SpinelDBError::NotAFloat);
+    }
+
+    #[test]
+    fn test_from_utf8_errors_become_wrong_type() {
+        let bytes = vec![0xff, 0xfe, 0xfd];
+        let from_slice = std::str::from_utf8(&bytes).unwrap_err();
+        let converted: SpinelDBError = from_slice.into();
+        assert_eq!(converted, SpinelDBError::WrongType);
+
+        let from_string = String::from_utf8(bytes).unwrap_err();
+        let converted: SpinelDBError = from_string.into();
+        assert_eq!(converted, SpinelDBError::WrongType);
+    }
+
+    #[test]
+    fn test_io_variant_partial_eq_uses_string_representation() {
+        // Two distinct io::Error values with the same kind/message should compare equal
+        // because the PartialEq impl compares the string representation.
+        let a = SpinelDBError::Io(Arc::new(io::Error::other("x")));
+        let b = SpinelDBError::Io(Arc::new(io::Error::other("x")));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_moved_and_ask_field_specific_inequality() {
+        let moved_a = SpinelDBError::Moved {
+            slot: 1,
+            addr: "x".into(),
+        };
+        let moved_b = SpinelDBError::Moved {
+            slot: 1,
+            addr: "x".into(),
+        };
+        let moved_c = SpinelDBError::Moved {
+            slot: 2,
+            addr: "x".into(),
+        };
+        let moved_d = SpinelDBError::Moved {
+            slot: 1,
+            addr: "y".into(),
+        };
+        assert_eq!(moved_a, moved_b);
+        assert_ne!(moved_a, moved_c);
+        assert_ne!(moved_a, moved_d);
+    }
+}

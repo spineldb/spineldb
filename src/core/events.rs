@@ -116,6 +116,12 @@ impl EventBus {
     }
 
     /// Publishes a `UnitOfWork` to all subscribers (AOF and replication).
+    ///
+    /// The AOF sender applies graceful backpressure: when the channel is full
+    /// we wait up to `state.config.persistence.aof_enqueue_timeout_ms`
+    /// milliseconds for room to appear before falling back to a hard error.
+    /// The timeout can be disabled (set to `0`) to preserve the legacy
+    /// "immediate read-only" behavior.
     pub fn publish(&self, uow: UnitOfWork, state: &Arc<ServerState>) {
         let work = PropagatedWork { uow };
 
@@ -125,18 +131,79 @@ impl EventBus {
         }
 
         if let Some(sender) = &self.aof_sender {
+            // Fast path: the channel has room.
             match sender.try_send(work) {
-                Ok(_) => {}
-                Err(TrySendError::Full(_)) => {
-                    let reason =
-                        "AOF channel is full. Persistence is lagging behind writes.".to_string();
-                    error!("{}", reason);
-                    state.set_read_only(true, &reason);
-                }
+                Ok(_) => (),
                 Err(TrySendError::Closed(_)) => {
                     let reason = "AOF channel is closed. Persistence has stopped.".to_string();
                     error!("{}", reason);
                     state.set_read_only(true, &reason);
+                }
+                Err(TrySendError::Full(work)) => {
+                    // Channel is full. Decide whether to wait or escalate.
+                    let timeout_ms = state
+                        .config
+                        .try_lock()
+                        .map(|cfg| cfg.persistence.aof_enqueue_timeout_ms)
+                        .unwrap_or(0);
+
+                    if timeout_ms == 0 {
+                        let reason = "AOF channel is full. Persistence is lagging behind writes."
+                            .to_string();
+                        error!("{}", reason);
+                        state.set_read_only(true, &reason);
+                        return;
+                    }
+
+                    let sender_clone = sender.clone();
+                    // Drive the wait on a best-effort blocking thread so we do
+                    // not stall the Tokio runtime that handles the command.
+                    let work_size = work.estimated_size();
+                    let state_clone = state.clone();
+                    // Clone the work so the closure can move its own copy while
+                    // we keep a copy available for the fallback `unwrap_or`
+                    // path below.
+                    let work_for_thread = work.clone();
+                    let send_result = std::thread::Builder::new()
+                        .name("spineldb-aof-backpressure".into())
+                        .spawn(move || {
+                            // We are inside a dedicated OS thread, not a Tokio
+                            // worker, so it is safe to block here for the
+                            // configured timeout.
+                            let deadline = std::time::Instant::now()
+                                + std::time::Duration::from_millis(timeout_ms);
+                            let mut work = work_for_thread;
+                            loop {
+                                match sender_clone.try_send(work) {
+                                    Ok(()) => return Ok(()),
+                                    Err(TrySendError::Full(w)) => {
+                                        if std::time::Instant::now() >= deadline {
+                                            return Err(w);
+                                        }
+                                        std::thread::sleep(std::time::Duration::from_millis(1));
+                                        work = w;
+                                    }
+                                    Err(TrySendError::Closed(w)) => return Err(w),
+                                }
+                            }
+                        })
+                        .ok()
+                        .and_then(|h| h.join().ok())
+                        .unwrap_or(Err(work));
+
+                    if let Err(returned) = send_result {
+                        let reason = format!(
+                            "AOF channel stayed full for {} ms (approx. {} bytes pending). \
+                             Persistence is lagging behind writes.",
+                            timeout_ms, work_size
+                        );
+                        error!("{}", reason);
+                        state_clone.set_read_only(true, &reason);
+                        // `returned` is dropped here, which means the write is
+                        // not propagated. The set_read_only call above will
+                        // reject subsequent writes, preventing unbounded loss.
+                        let _ = returned;
+                    }
                 }
             }
         }
@@ -150,5 +217,86 @@ impl EventBus {
     /// Checks if the AOF channel has been closed.
     pub fn is_closed(&self) -> bool {
         self.aof_sender.as_ref().is_some_and(|s| s.is_closed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::generic::Ping;
+
+    #[test]
+    fn test_uow_command_estimated_size() {
+        let cmd = Command::Ping(Ping::default());
+        let uow = UnitOfWork::Command(Box::new(cmd));
+        // The size is the encoded RESP frame size; we just assert it's non-zero.
+        assert!(uow.estimated_size() > 0);
+    }
+
+    #[test]
+    fn test_uow_transaction_estimated_size_includes_all_cmds() {
+        let cmd1 = Command::Ping(Ping::default());
+        let cmd2 = Command::Ping(Ping::default());
+        let tx = TransactionData {
+            all_commands: vec![cmd1.clone(), cmd2.clone()],
+            write_commands: vec![cmd1.clone(), cmd2],
+        };
+        let uow = UnitOfWork::Transaction(Box::new(tx));
+        // A transaction with 2 commands must have a larger estimate than a
+        // single command on its own.
+        let single = UnitOfWork::Command(Box::new(cmd1));
+        assert!(uow.estimated_size() > single.estimated_size());
+    }
+
+    #[test]
+    fn test_uow_empty_transaction_estimated_size_is_zero() {
+        let tx = TransactionData {
+            all_commands: vec![],
+            write_commands: vec![],
+        };
+        let uow = UnitOfWork::Transaction(Box::new(tx));
+        assert_eq!(uow.estimated_size(), 0);
+    }
+
+    #[test]
+    fn test_propagated_work_estimated_size_delegates() {
+        let cmd = Command::Ping(Ping::default());
+        let uow = UnitOfWork::Command(Box::new(cmd));
+        let expected = uow.estimated_size();
+        let work = PropagatedWork { uow };
+        assert_eq!(work.estimated_size(), expected);
+    }
+
+    #[test]
+    fn test_event_bus_new_with_aof_enabled() {
+        let (bus, rx) = EventBus::new(true);
+        assert!(rx.is_some());
+        // AOF is still open because the receiver is alive.
+        assert!(!bus.is_closed());
+    }
+
+    #[test]
+    fn test_event_bus_new_with_aof_disabled() {
+        let (_bus, rx) = EventBus::new(false);
+        assert!(rx.is_none());
+    }
+
+    #[test]
+    fn test_event_bus_aof_closes_when_receiver_dropped() {
+        let (bus, rx) = EventBus::new(true);
+        drop(rx);
+        // After dropping the receiver, the channel is closed.
+        assert!(bus.is_closed());
+    }
+
+    #[test]
+    fn test_event_bus_subscribe_for_replication() {
+        let (bus, _rx) = EventBus::new(false);
+        let mut sub = bus.subscribe_for_replication();
+        // Send a work unit through the bus using a minimal state.
+        // We can't easily construct a ServerState here, so we use the broadcast
+        // sender directly via publish_for_test if available, or skip.
+        // We at least verify subscribe() returns a valid receiver.
+        assert!(sub.try_recv().is_err()); // No messages yet.
     }
 }

@@ -114,12 +114,29 @@ impl ParseCommand for Zadd {
     }
 }
 
+/// Returns `true` if the operator has chosen to reject NaN scores for `ZADD`.
+async fn reject_nan_scores(ctx: &ExecutionContext<'_>) -> bool {
+    ctx.state.config.lock().await.safety.reject_nan_scores
+}
+
 #[async_trait]
 impl ExecutableCommand for Zadd {
     async fn execute<'a>(
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
+        // Reject NaN scores up-front. NaN is technically a valid `f64` but
+        // would break all ordering guarantees in the sorted set (Redis
+        // itself stores NaN, but every comparison collapses to "equal").
+        // Operators can opt back into the legacy behavior via config.
+        if reject_nan_scores(ctx).await {
+            for (score, _) in &self.members {
+                if score.is_nan() {
+                    return Err(SpinelDBError::NotAFloat);
+                }
+            }
+        }
+
         if self.incr {
             if self.members.len() != 1 {
                 return Err(SpinelDBError::SyntaxError);
@@ -289,5 +306,129 @@ impl CommandSpec for Zadd {
                 .flat_map(|(s, m)| [s.to_string().into(), m.clone()]),
         );
         args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zadd_parses_key_and_single_member() {
+        let c = Zadd::parse(&[bs("z"), bs("1"), bs("m1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert_eq!(c.members.len(), 1);
+        assert_eq!(c.members[0].0, 1.0);
+        assert_eq!(c.members[0].1, Bytes::from_static(b"m1"));
+        assert_eq!(c.condition, ZaddCondition::None);
+    }
+
+    #[test]
+    fn test_zadd_parses_multiple_members() {
+        let c = Zadd::parse(&[bs("z"), bs("1"), bs("a"), bs("2"), bs("b")]).unwrap();
+        assert_eq!(c.members.len(), 2);
+    }
+
+    #[test]
+    fn test_zadd_parses_negative_score() {
+        let c = Zadd::parse(&[bs("z"), bs("-3.5"), bs("a")]).unwrap();
+        assert_eq!(c.members[0].0, -3.5);
+    }
+
+    #[test]
+    fn test_zadd_parses_nx_flag() {
+        let c = Zadd::parse(&[bs("z"), bs("NX"), bs("1"), bs("a")]).unwrap();
+        assert_eq!(c.condition, ZaddCondition::IfNotExists);
+    }
+
+    #[test]
+    fn test_zadd_parses_xx_flag() {
+        let c = Zadd::parse(&[bs("z"), bs("XX"), bs("1"), bs("a")]).unwrap();
+        assert_eq!(c.condition, ZaddCondition::IfExists);
+    }
+
+    #[test]
+    fn test_zadd_parses_gt_flag() {
+        let c = Zadd::parse(&[bs("z"), bs("GT"), bs("1"), bs("a")]).unwrap();
+        assert_eq!(c.update_rule, ZaddUpdateRule::GreaterThan);
+    }
+
+    #[test]
+    fn test_zadd_parses_lt_flag() {
+        let c = Zadd::parse(&[bs("z"), bs("LT"), bs("1"), bs("a")]).unwrap();
+        assert_eq!(c.update_rule, ZaddUpdateRule::LessThan);
+    }
+
+    #[test]
+    fn test_zadd_parses_ch_flag() {
+        let c = Zadd::parse(&[bs("z"), bs("CH"), bs("1"), bs("a")]).unwrap();
+        assert!(c.ch);
+    }
+
+    #[test]
+    fn test_zadd_parses_incr_flag_with_one_pair() {
+        let c = Zadd::parse(&[bs("z"), bs("INCR"), bs("1"), bs("a")]).unwrap();
+        assert!(c.incr);
+        assert_eq!(c.members.len(), 1);
+    }
+
+    #[test]
+    fn test_zadd_flags_case_insensitive() {
+        let c = Zadd::parse(&[bs("z"), bs("nx"), bs("1"), bs("a")]).unwrap();
+        assert_eq!(c.condition, ZaddCondition::IfNotExists);
+    }
+
+    #[test]
+    fn test_zadd_with_nx_and_gt_is_syntax_error() {
+        let r = Zadd::parse(&[bs("z"), bs("NX"), bs("GT"), bs("1"), bs("a")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zadd_with_incr_and_nx_is_syntax_error() {
+        let r = Zadd::parse(&[bs("z"), bs("INCR"), bs("NX"), bs("1"), bs("a")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zadd_incr_with_multiple_pairs_is_error() {
+        let r = Zadd::parse(&[bs("z"), bs("INCR"), bs("1"), bs("a"), bs("2"), bs("b")]);
+        assert!(matches!(
+            r,
+            Err(SpinelDBError::InvalidState(_)) | Err(SpinelDBError::SyntaxError)
+        ));
+    }
+
+    #[test]
+    fn test_zadd_with_odd_member_args_is_error() {
+        let r = Zadd::parse(&[bs("z"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zadd_with_no_args_is_error() {
+        let r = Zadd::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zadd_with_non_float_score_is_error() {
+        let r = Zadd::parse(&[bs("z"), bs("abc"), bs("a")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_zadd_to_resp_args_with_all_flags() {
+        let c = Zadd::parse(&[bs("z"), bs("GT"), bs("CH"), bs("1"), bs("a")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"z"));
+        assert_eq!(args[1], Bytes::from_static(b"GT"));
+        assert_eq!(args[2], Bytes::from_static(b"CH"));
+        assert_eq!(args[3], Bytes::from_static(b"1"));
+        assert_eq!(args[4], Bytes::from_static(b"a"));
     }
 }

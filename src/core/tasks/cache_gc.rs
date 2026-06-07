@@ -13,8 +13,13 @@ use tracing::{debug, info, warn};
 use crate::core::state::ServerState;
 use crate::core::storage::cache_types::{ManifestEntry, ManifestState};
 
-/// The interval for the on-disk cache garbage collector and compactor.
-const GC_COMPACTION_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
+/// The default interval for the on-disk cache garbage collector and compactor.
+/// The actual interval is configurable via
+/// `cache.on_disk_gc_interval_secs` in `config.toml`.
+const DEFAULT_GC_COMPACTION_INTERVAL: Duration = Duration::from_secs(600); // 10 minutes
+/// Hard minimum to prevent operators from misconfiguring the GC into a tight
+/// loop that thrashes the manifest file.
+const MIN_GC_COMPACTION_INTERVAL: Duration = Duration::from_secs(10);
 /// Grace period before a PENDING file is considered for deletion.
 const GC_PENDING_GRACE_PERIOD: Duration = Duration::from_secs(300); // 5 minutes
 
@@ -31,7 +36,10 @@ impl OnDiskCacheGCTask {
     /// The main run loop for the garbage collection and compaction task.
     pub async fn run(self, mut shutdown_rx: broadcast::Receiver<()>) {
         info!("On-disk cache GC and compaction task started.");
-        let mut interval = tokio::time::interval(GC_COMPACTION_INTERVAL);
+        // Track the resolved interval so that `CONFIG SET cache.on_disk_gc_interval_secs`
+        // can take effect on the next cycle without restarting the server.
+        let mut current_interval = self.resolve_interval().await;
+        let mut interval = tokio::time::interval(current_interval);
 
         loop {
             tokio::select! {
@@ -40,12 +48,36 @@ impl OnDiskCacheGCTask {
                     if let Err(e) = garbage_collect_and_compact_manifest(&self.state).await {
                         warn!("On-disk cache GC/compaction cycle failed: {}", e);
                     }
+                    // Pick up any new interval value the operator may have set.
+                    let new_interval = self.resolve_interval().await;
+                    if new_interval != current_interval {
+                        current_interval = new_interval;
+                        interval = tokio::time::interval(current_interval);
+                        info!(
+                            "On-disk cache GC interval updated to {:?}.",
+                            current_interval
+                        );
+                    }
                 }
                 _ = shutdown_rx.recv() => {
                     info!("On-disk cache GC and compaction task shutting down.");
                     return;
                 }
             }
+        }
+    }
+
+    /// Reads the configured GC interval, falling back to the default and
+    /// clamping values that would be either useless (0) or abusive.
+    async fn resolve_interval(&self) -> Duration {
+        let configured = {
+            let cfg = self.state.config.lock().await;
+            cfg.cache.on_disk_gc_interval_secs
+        };
+        if configured == 0 {
+            DEFAULT_GC_COMPACTION_INTERVAL
+        } else {
+            Duration::from_secs(configured).max(MIN_GC_COMPACTION_INTERVAL)
         }
     }
 }

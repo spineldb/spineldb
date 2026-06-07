@@ -157,3 +157,66 @@ impl CommandSpec for JsonNumIncrBy {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(parts: &[&str]) -> Vec<RespFrame> {
+        parts
+            .iter()
+            .map(|s| RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes())))
+            .collect()
+    }
+
+    #[test]
+    fn test_json_numincrby_parse_valid() {
+        let frames = make_frame(&["mykey", "$", "5"]);
+        let cmd = JsonNumIncrBy::parse(&frames).unwrap();
+        assert_eq!(cmd.key, Bytes::copy_from_slice(b"mykey"));
+        assert_eq!(cmd.path, "$");
+        assert_eq!(cmd.value, 5.0);
+    }
+
+    #[test]
+    fn test_json_numincrby_parse_negative() {
+        let frames = make_frame(&["mykey", "$.counter", "-3.5"]);
+        let cmd = JsonNumIncrBy::parse(&frames).unwrap();
+        assert_eq!(cmd.value, -3.5);
+    }
+
+    #[test]
+    fn test_json_numincrby_parse_invalid_arity() {
+        let frames = make_frame(&["mykey", "$"]);
+        assert!(JsonNumIncrBy::parse(&frames).is_err());
+    }
+
+    #[test]
+    fn test_json_numincrby_invalid_value_is_error() {
+        let frames = make_frame(&["k", "$.n", "not_a_number"]);
+        let r = JsonNumIncrBy::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_json_numincrby_too_many_args_is_error() {
+        let frames = make_frame(&["k", "$.n", "5", "extra"]);
+        let r = JsonNumIncrBy::parse(&frames);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_numincrby_no_args_is_error() {
+        let r = JsonNumIncrBy::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_numincrby_to_resp_args_round_trips() {
+        let frames = make_frame(&["k", "$.n", "5"]);
+        let c = JsonNumIncrBy::parse(&frames).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+    }
+}

@@ -123,3 +123,44 @@ impl CommandSpec for PfCount {
         self.keys.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_pfcount_parses_single_key() {
+        let c = PfCount::parse(&[bs("hll1")]).unwrap();
+        assert_eq!(c.keys.len(), 1);
+        assert_eq!(c.keys[0], Bytes::from_static(b"hll1"));
+    }
+
+    #[test]
+    fn test_pfcount_parses_multiple_keys() {
+        let c = PfCount::parse(&[bs("hll1"), bs("hll2"), bs("hll3")]).unwrap();
+        assert_eq!(c.keys.len(), 3);
+    }
+
+    #[test]
+    fn test_pfcount_no_args_is_error() {
+        let r = PfCount::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pfcount_with_non_bulk_key_is_wrong_type() {
+        let r = PfCount::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_pfcount_to_resp_args_round_trips() {
+        let c = PfCount::parse(&[bs("hll1"), bs("hll2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+    }
+}

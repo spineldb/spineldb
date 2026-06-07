@@ -157,3 +157,43 @@ impl CommandSpec for Unlink {
         self.keys.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_unlink_with_single_key() {
+        let u = Unlink::parse(&[bs("k1")]).unwrap();
+        assert_eq!(u.keys, vec![Bytes::from_static(b"k1")]);
+    }
+
+    #[test]
+    fn test_unlink_with_many_keys() {
+        let u = Unlink::parse(&[bs("a"), bs("b"), bs("c")]).unwrap();
+        assert_eq!(u.keys.len(), 3);
+    }
+
+    #[test]
+    fn test_unlink_with_no_args_is_error() {
+        let r = Unlink::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_unlink_with_non_bulk_is_wrong_type() {
+        let r = Unlink::parse(&[bs("a"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_unlink_to_resp_args_round_trips() {
+        let u = Unlink::parse(&[bs("x"), bs("y")]).unwrap();
+        let args = u.to_resp_args();
+        assert_eq!(args, u.keys);
+    }
+}

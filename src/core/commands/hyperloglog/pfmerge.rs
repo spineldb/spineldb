@@ -140,3 +140,60 @@ impl CommandSpec for PfMerge {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_pfmerge_parses_dest_and_sources() {
+        let c = PfMerge::parse(&[bs("dest"), bs("src1")]).unwrap();
+        assert_eq!(c.dest_key, Bytes::from_static(b"dest"));
+        assert_eq!(c.source_keys.len(), 1);
+    }
+
+    #[test]
+    fn test_pfmerge_parses_multiple_sources() {
+        let c = PfMerge::parse(&[bs("dest"), bs("src1"), bs("src2"), bs("src3")]).unwrap();
+        assert_eq!(c.source_keys.len(), 3);
+    }
+
+    #[test]
+    fn test_pfmerge_with_too_few_args_is_error() {
+        let r = PfMerge::parse(&[bs("dest")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pfmerge_no_args_is_error() {
+        let r = PfMerge::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pfmerge_with_non_bulk_key_is_wrong_type() {
+        let r = PfMerge::parse(&[RespFrame::Integer(1), bs("src1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_pfmerge_to_resp_args_round_trips() {
+        let c = PfMerge::parse(&[bs("dest"), bs("src1"), bs("src2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"dest"));
+    }
+
+    #[test]
+    fn test_pfmerge_get_keys_includes_dest_and_sources() {
+        let c = PfMerge::parse(&[bs("dest"), bs("src1")]).unwrap();
+        let keys = c.get_keys();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], Bytes::from_static(b"dest"));
+        assert_eq!(keys[1], Bytes::from_static(b"src1"));
+    }
+}

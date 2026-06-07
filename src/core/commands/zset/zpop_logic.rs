@@ -119,3 +119,40 @@ pub(crate) async fn zpop_logic<'a>(
         Err(SpinelDBError::WrongType)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pop_side_default_is_min() {
+        assert_eq!(PopSide::default(), PopSide::Min);
+    }
+
+    #[test]
+    fn test_pop_side_variants_distinct() {
+        assert_ne!(PopSide::Min, PopSide::Max);
+    }
+
+    #[test]
+    fn test_zpop_new_constructor() {
+        let z = ZPop::new(Bytes::from_static(b"k"), PopSide::Max, Some(5));
+        assert_eq!(z.key, Bytes::from_static(b"k"));
+        assert_eq!(z.side, PopSide::Max);
+        assert_eq!(z.count, Some(5));
+    }
+
+    #[test]
+    fn test_zpop_new_no_count() {
+        let z = ZPop::new(Bytes::from_static(b"k"), PopSide::Min, None);
+        assert_eq!(z.count, None);
+    }
+
+    #[test]
+    fn test_zpop_default_uses_min_and_no_count() {
+        let z = ZPop::default();
+        assert_eq!(z.side, PopSide::Min);
+        assert_eq!(z.count, None);
+        assert!(z.key.is_empty());
+    }
+}

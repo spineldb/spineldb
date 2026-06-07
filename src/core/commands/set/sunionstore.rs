@@ -73,3 +73,47 @@ impl CommandSpec for SUnionStore {
         all_args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_sunionstore_parses_destination_and_keys() {
+        let c = SUnionStore::parse(&[bs("dst"), bs("k1"), bs("k2")]).unwrap();
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.keys.len(), 2);
+        assert_eq!(c.keys[0], Bytes::from_static(b"k1"));
+    }
+
+    #[test]
+    fn test_sunionstore_with_destination_only() {
+        let c = SUnionStore::parse(&[bs("dst")]).unwrap();
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert!(c.keys.is_empty());
+    }
+
+    #[test]
+    fn test_sunionstore_with_no_args_is_error() {
+        let r = SUnionStore::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sunionstore_with_non_bulk_dest_is_wrong_type() {
+        let r = SUnionStore::parse(&[RespFrame::Integer(1), bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_sunionstore_to_resp_args_round_trips() {
+        let c = SUnionStore::parse(&[bs("dst"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"dst"));
+    }
+}

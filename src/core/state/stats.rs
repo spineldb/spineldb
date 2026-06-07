@@ -48,3 +48,50 @@ impl StatsState {
         self.total_commands.load(Ordering::Relaxed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_starts_at_zero() {
+        let s = StatsState::new();
+        assert_eq!(s.get_total_connections(), 0);
+        assert_eq!(s.get_total_commands(), 0);
+    }
+
+    #[test]
+    fn test_default_matches_new() {
+        let s = StatsState::default();
+        assert_eq!(s.get_total_connections(), 0);
+        assert_eq!(s.get_total_commands(), 0);
+    }
+
+    #[test]
+    fn test_increment_connections() {
+        let s = StatsState::new();
+        s.increment_total_connections();
+        s.increment_total_connections();
+        s.increment_total_connections();
+        assert_eq!(s.get_total_connections(), 3);
+    }
+
+    #[test]
+    fn test_increment_commands() {
+        let s = StatsState::new();
+        for _ in 0..100 {
+            s.increment_total_commands();
+        }
+        assert_eq!(s.get_total_commands(), 100);
+    }
+
+    #[test]
+    fn test_counters_are_independent() {
+        let s = StatsState::new();
+        s.increment_total_connections();
+        s.increment_total_connections();
+        s.increment_total_commands();
+        assert_eq!(s.get_total_connections(), 2);
+        assert_eq!(s.get_total_commands(), 1);
+    }
+}

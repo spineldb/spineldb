@@ -106,3 +106,50 @@ impl CommandSpec for BfExists {
         vec![self.key.clone(), self.item.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfexists_parses_key_and_item() {
+        let c = BfExists::parse(&[bs("k"), bs("item1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.item, Bytes::from_static(b"item1"));
+    }
+
+    #[test]
+    fn test_bfexists_with_too_few_args_is_error() {
+        let r = BfExists::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfexists_with_too_many_args_is_error() {
+        let r = BfExists::parse(&[bs("k"), bs("item"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfexists_no_args_is_error() {
+        let r = BfExists::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfexists_with_non_bulk_key_is_wrong_type() {
+        let r = BfExists::parse(&[RespFrame::Integer(1), bs("item")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bfexists_to_resp_args_round_trips() {
+        let c = BfExists::parse(&[bs("k"), bs("item1")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"item1")]);
+    }
+}

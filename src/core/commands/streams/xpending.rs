@@ -285,3 +285,121 @@ impl CommandSpec for XPending {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_xpending_summary() {
+        let c = XPending::parse(&[bs("k"), bs("g1")]).unwrap();
+        match c.subcommand {
+            XPendingSubcommand::Summary { key, group_name } => {
+                assert_eq!(key, Bytes::from_static(b"k"));
+                assert_eq!(group_name, Bytes::from_static(b"g1"));
+            }
+            _ => panic!("expected Summary"),
+        }
+    }
+
+    #[test]
+    fn test_xpending_detailed() {
+        let c = XPending::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("1-0"),
+            bs("9999-0"),
+            bs("10"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            XPendingSubcommand::Detailed { start, end, count, consumer, idle_time_filter, .. } => {
+                assert_eq!(start, StreamId::new(1, 0));
+                assert_eq!(end, StreamId::new(9999, 0));
+                assert_eq!(count, 10);
+                assert!(consumer.is_none());
+                assert!(idle_time_filter.is_none());
+            }
+            _ => panic!("expected Detailed"),
+        }
+    }
+
+    #[test]
+    fn test_xpending_detailed_with_consumer() {
+        let c = XPending::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("0-0"),
+            bs("9999-0"),
+            bs("10"),
+            bs("c1"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            XPendingSubcommand::Detailed { consumer, .. } => {
+                assert_eq!(consumer, Some(Bytes::from_static(b"c1")));
+            }
+            _ => panic!("expected Detailed"),
+        }
+    }
+
+    #[test]
+    fn test_xpending_detailed_with_idle_filter() {
+        let c = XPending::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("IDLE"),
+            bs("1000"),
+            bs("0-0"),
+            bs("9999-0"),
+            bs("10"),
+        ])
+        .unwrap();
+        match c.subcommand {
+            XPendingSubcommand::Detailed { idle_time_filter, .. } => {
+                assert_eq!(idle_time_filter, Some(1000));
+            }
+            _ => panic!("expected Detailed"),
+        }
+    }
+
+    #[test]
+    fn test_xpending_too_few_args_is_error() {
+        let r = XPending::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xpending_no_args_is_error() {
+        let r = XPending::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_xpending_invalid_start_is_error() {
+        let r = XPending::parse(&[bs("k"), bs("g1"), bs("invalid"), bs("9999-0"), bs("10")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_xpending_invalid_count_is_error() {
+        let r = XPending::parse(&[bs("k"), bs("g1"), bs("0-0"), bs("9999-0"), bs("not_a_number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_xpending_idle_without_value_is_syntax_error() {
+        let r = XPending::parse(&[bs("k"), bs("g1"), bs("IDLE")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_xpending_with_non_bulk_key_is_wrong_type() {
+        let r = XPending::parse(&[RespFrame::Integer(1), bs("g1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+}

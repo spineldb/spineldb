@@ -188,3 +188,133 @@ impl CommandSpec for BfInsert {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bfinsert_parses_with_items() {
+        let c = BfInsert::parse(&[bs("k"), bs("ITEMS"), bs("item1"), bs("item2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.items.len(), 2);
+        assert!(c.capacity.is_none());
+        assert!(c.error_rate.is_none());
+    }
+
+    #[test]
+    fn test_bfinsert_with_capacity() {
+        let c = BfInsert::parse(&[
+            bs("k"),
+            bs("CAPACITY"),
+            bs("1000"),
+            bs("ITEMS"),
+            bs("item1"),
+        ])
+        .unwrap();
+        assert_eq!(c.capacity, Some(1000));
+    }
+
+    #[test]
+    fn test_bfinsert_with_error_rate() {
+        let c = BfInsert::parse(&[
+            bs("k"),
+            bs("ERROR"),
+            bs("0.005"),
+            bs("ITEMS"),
+            bs("item1"),
+        ])
+        .unwrap();
+        assert_eq!(c.error_rate, Some(0.005));
+    }
+
+    #[test]
+    fn test_bfinsert_with_capacity_and_error() {
+        let c = BfInsert::parse(&[
+            bs("k"),
+            bs("CAPACITY"),
+            bs("5000"),
+            bs("ERROR"),
+            bs("0.001"),
+            bs("ITEMS"),
+            bs("item1"),
+            bs("item2"),
+        ])
+        .unwrap();
+        assert_eq!(c.capacity, Some(5000));
+        assert_eq!(c.error_rate, Some(0.001));
+    }
+
+    #[test]
+    fn test_bfinsert_with_no_items_is_error() {
+        // Less than 3 args triggers WrongArgumentCount check.
+        let r = BfInsert::parse(&[bs("k"), bs("ITEMS")]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_bfinsert_missing_items_keyword_is_syntax_error() {
+        // Length is 3, but no ITEMS keyword.
+        let r = BfInsert::parse(&[bs("k"), bs("item1"), bs("item2")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_bfinsert_capacity_after_items_succeeds() {
+        // Once ITEMS is seen, parser breaks. CAPACITY after ITEMS is treated as an item
+        // (not the keyword) in this implementation.
+        let c = BfInsert::parse(&[
+            bs("k"),
+            bs("ITEMS"),
+            bs("item1"),
+        ])
+        .unwrap();
+        assert_eq!(c.items.len(), 1);
+    }
+
+    #[test]
+    fn test_bfinsert_capacity_with_keyword_as_value_is_not_an_integer() {
+        // After CAPACITY, the next arg is consumed as the value. "ITEMS" doesn't parse as u64.
+        let r = BfInsert::parse(&[bs("k"), bs("CAPACITY"), bs("ITEMS")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_bfinsert_invalid_capacity_value_is_error() {
+        let r = BfInsert::parse(&[bs("k"), bs("CAPACITY"), bs("not_a_number"), bs("ITEMS"), bs("i")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_bfinsert_too_few_args_is_error() {
+        let r = BfInsert::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfinsert_no_args_is_error() {
+        let r = BfInsert::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bfinsert_to_resp_args_round_trips() {
+        let c = BfInsert::parse(&[
+            bs("k"),
+            bs("CAPACITY"),
+            bs("100"),
+            bs("ITEMS"),
+            bs("i1"),
+        ])
+        .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"CAPACITY"));
+        assert_eq!(args[2], Bytes::from_static(b"100"));
+        assert_eq!(args[3], Bytes::from_static(b"ITEMS"));
+    }
+}

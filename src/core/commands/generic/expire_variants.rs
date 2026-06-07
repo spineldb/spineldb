@@ -226,3 +226,103 @@ impl CommandSpec for PExpireAt {
         vec![self.key.clone(), self.unix_milliseconds.to_string().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    // ---- PExpire ----
+
+    #[test]
+    fn test_pexpire_parses_key_and_milliseconds() {
+        let p = PExpire::parse(&[bs("k"), bs("1500")]).unwrap();
+        assert_eq!(p.key, Bytes::from_static(b"k"));
+        assert_eq!(p.milliseconds, 1500);
+    }
+
+    #[test]
+    fn test_pexpire_with_too_few_args_is_error() {
+        let r = PExpire::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pexpire_with_too_many_args_is_error() {
+        let r = PExpire::parse(&[bs("k"), bs("1"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pexpire_with_non_integer_is_error() {
+        let r = PExpire::parse(&[bs("k"), bs("abc")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_pexpire_to_resp_args_round_trips() {
+        let p = PExpire::parse(&[bs("k"), bs("500")]).unwrap();
+        let args = p.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[1], Bytes::from_static(b"500"));
+    }
+
+    // ---- ExpireAt ----
+
+    #[test]
+    fn test_expireat_parses_key_and_unix_seconds() {
+        let e = ExpireAt::parse(&[bs("k"), bs("1700000000")]).unwrap();
+        assert_eq!(e.key, Bytes::from_static(b"k"));
+        assert_eq!(e.unix_seconds, 1700000000);
+    }
+
+    #[test]
+    fn test_expireat_with_too_few_args_is_error() {
+        let r = ExpireAt::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_expireat_with_non_integer_is_error() {
+        let r = ExpireAt::parse(&[bs("k"), bs("now")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_expireat_to_resp_args_round_trips() {
+        let e = ExpireAt::parse(&[bs("k"), bs("1234")]).unwrap();
+        let args = e.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"1234"));
+    }
+
+    // ---- PExpireAt ----
+
+    #[test]
+    fn test_pexpireat_parses_key_and_unix_milliseconds() {
+        let p = PExpireAt::parse(&[bs("k"), bs("1700000000000")]).unwrap();
+        assert_eq!(p.key, Bytes::from_static(b"k"));
+        assert_eq!(p.unix_milliseconds, 1700000000000);
+    }
+
+    #[test]
+    fn test_pexpireat_with_too_few_args_is_error() {
+        let r = PExpireAt::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_pexpireat_with_non_integer_is_error() {
+        let r = PExpireAt::parse(&[bs("k"), bs("oops")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_pexpireat_to_resp_args_round_trips() {
+        let p = PExpireAt::parse(&[bs("k"), bs("999")]).unwrap();
+        let args = p.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"999"));
+    }
+}

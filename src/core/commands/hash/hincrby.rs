@@ -133,3 +133,58 @@ impl CommandSpec for HIncrBy {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hincrby_parses_positive_increment() {
+        let c = HIncrBy::parse(&[bs("h"), bs("f"), bs("5")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"h"));
+        assert_eq!(c.field, Bytes::from_static(b"f"));
+        assert_eq!(c.increment, 5);
+    }
+
+    #[test]
+    fn test_hincrby_parses_negative_increment() {
+        let c = HIncrBy::parse(&[bs("h"), bs("f"), bs("-3")]).unwrap();
+        assert_eq!(c.increment, -3);
+    }
+
+    #[test]
+    fn test_hincrby_parses_zero_increment() {
+        let c = HIncrBy::parse(&[bs("h"), bs("f"), bs("0")]).unwrap();
+        assert_eq!(c.increment, 0);
+    }
+
+    #[test]
+    fn test_hincrby_with_too_few_args_is_error() {
+        let r = HIncrBy::parse(&[bs("h"), bs("f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hincrby_with_too_many_args_is_error() {
+        let r = HIncrBy::parse(&[bs("h"), bs("f"), bs("1"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hincrby_with_non_integer_increment_is_error() {
+        let r = HIncrBy::parse(&[bs("h"), bs("f"), bs("abc")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_hincrby_to_resp_args_round_trips() {
+        let c = HIncrBy::parse(&[bs("h"), bs("f"), bs("42")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[2], Bytes::from_static(b"42"));
+    }
+}

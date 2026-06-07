@@ -309,3 +309,211 @@ pub fn parse_key_and_score_member_pairs(
 
     Ok((key, members, condition, update_rule, ch))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::zset::{ZaddCondition, ZaddUpdateRule};
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_extract_string_from_bulk() {
+        let frame = bs("hello");
+        assert_eq!(extract_string(&frame).unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_extract_string_non_bulk_returns_wrong_type() {
+        let frame = RespFrame::Integer(42);
+        assert_eq!(extract_string(&frame), Err(SpinelDBError::WrongType));
+    }
+
+    #[test]
+    fn test_extract_string_invalid_utf8_returns_wrong_type() {
+        let frame = RespFrame::BulkString(Bytes::from_static(&[0xFF, 0xFE]));
+        assert_eq!(extract_string(&frame), Err(SpinelDBError::WrongType));
+    }
+
+    #[test]
+    fn test_extract_bytes_from_bulk() {
+        let frame = bs("hello");
+        assert_eq!(extract_bytes(&frame).unwrap(), Bytes::from_static(b"hello"));
+    }
+
+    #[test]
+    fn test_extract_bytes_non_bulk_returns_wrong_type() {
+        let frame = RespFrame::SimpleString("x".to_string());
+        assert_eq!(extract_bytes(&frame), Err(SpinelDBError::WrongType));
+    }
+
+    #[test]
+    fn test_validate_arg_count_ok() {
+        let args = vec![bs("a"), bs("b")];
+        validate_arg_count(&args, 2, "TEST").unwrap();
+    }
+
+    #[test]
+    fn test_validate_arg_count_mismatch() {
+        let args = vec![bs("a")];
+        let r = validate_arg_count(&args, 2, "TEST");
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_parse_key_and_values_ok() {
+        let args = vec![bs("mykey"), bs("v1"), bs("v2")];
+        let (key, vals) = parse_key_and_values(&args, 2, "RPUSH").unwrap();
+        assert_eq!(key, Bytes::from_static(b"mykey"));
+        assert_eq!(vals.len(), 2);
+        assert_eq!(vals[0], Bytes::from_static(b"v1"));
+    }
+
+    #[test]
+    fn test_parse_key_and_values_too_few() {
+        let args = vec![bs("k")];
+        let r = parse_key_and_values(&args, 2, "RPUSH");
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_parse_key_and_field_value_pairs_ok() {
+        let args = vec![bs("mykey"), bs("f1"), bs("v1"), bs("f2"), bs("v2")];
+        let (key, pairs) = parse_key_and_field_value_pairs(&args, "HSET").unwrap();
+        assert_eq!(key, Bytes::from_static(b"mykey"));
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(
+            pairs[0],
+            (Bytes::from_static(b"f1"), Bytes::from_static(b"v1"))
+        );
+    }
+
+    #[test]
+    fn test_parse_key_and_field_value_pairs_odd_count() {
+        let args = vec![bs("mykey"), bs("f1"), bs("v1"), bs("f2")];
+        let r = parse_key_and_field_value_pairs(&args, "HSET");
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_argparser_match_flag_case_insensitive() {
+        let args = vec![bs("NX"), bs("10"), bs("member")];
+        let mut p = ArgParser::new(&args);
+        assert!(p.match_flag("nx"));
+        // Cursor advanced past the flag.
+        assert_eq!(p.remaining_args().len(), 2);
+    }
+
+    #[test]
+    fn test_argparser_match_flag_miss() {
+        let args = vec![bs("10")];
+        let mut p = ArgParser::new(&args);
+        assert!(!p.match_flag("nx"));
+        // Cursor unchanged.
+        assert_eq!(p.remaining_args().len(), 1);
+    }
+
+    #[test]
+    fn test_argparser_match_option_ok() {
+        let args = vec![bs("LIMIT"), bs("0"), bs("10")];
+        let mut p = ArgParser::new(&args);
+        let v: Option<u64> = p.match_option("limit").unwrap();
+        assert_eq!(v, Some(0));
+        // Cursor advanced past both the option name and its value.
+        assert_eq!(p.remaining_args().len(), 1);
+    }
+
+    #[test]
+    fn test_argparser_match_option_missing_value() {
+        let args = vec![bs("LIMIT")];
+        let mut p = ArgParser::new(&args);
+        let r: Result<Option<u64>, _> = p.match_option("LIMIT");
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_argparser_match_option_parse_error() {
+        let args = vec![bs("LIMIT"), bs("notanumber")];
+        let mut p = ArgParser::new(&args);
+        let r: Result<Option<u64>, _> = p.match_option("LIMIT");
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_argparser_match_option_not_present() {
+        let args = vec![bs("OTHER")];
+        let mut p = ArgParser::new(&args);
+        let v: Option<u64> = p.match_option("LIMIT").unwrap();
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn test_argparser_remaining_args_on_empty() {
+        let p = ArgParser::new(&[]);
+        assert!(p.remaining_args().is_empty());
+    }
+
+    #[test]
+    fn test_parse_zadd_args_basic() {
+        let args = vec![bs("mykey"), bs("1.5"), bs("alpha")];
+        let (key, members, cond, rule, ch) =
+            parse_key_and_score_member_pairs(&args, "ZADD").unwrap();
+        assert_eq!(key, Bytes::from_static(b"mykey"));
+        assert_eq!(members, vec![(1.5, Bytes::from_static(b"alpha"))]);
+        assert_eq!(cond, ZaddCondition::None);
+        assert_eq!(rule, ZaddUpdateRule::None);
+        assert!(!ch);
+    }
+
+    #[test]
+    fn test_parse_zadd_args_with_nx() {
+        let args = vec![bs("k"), bs("NX"), bs("1"), bs("a"), bs("2"), bs("b")];
+        let (_, _, cond, _, _) = parse_key_and_score_member_pairs(&args, "ZADD").unwrap();
+        assert_eq!(cond, ZaddCondition::IfNotExists);
+    }
+
+    #[test]
+    fn test_parse_zadd_args_with_xx_and_gt_conflict() {
+        // XX and GT are mutually exclusive.
+        let args = vec![bs("k"), bs("XX"), bs("GT"), bs("1"), bs("a")];
+        assert!(matches!(
+            parse_key_and_score_member_pairs(&args, "ZADD"),
+            Err(SpinelDBError::SyntaxError)
+        ));
+    }
+
+    #[test]
+    fn test_parse_zadd_args_with_ch() {
+        let args = vec![bs("k"), bs("CH"), bs("1"), bs("a")];
+        let (_, _, _, _, ch) = parse_key_and_score_member_pairs(&args, "ZADD").unwrap();
+        assert!(ch);
+    }
+
+    #[test]
+    fn test_parse_zadd_args_odd_pairs() {
+        // Pairs must come in (score, member) tuples.
+        let args = vec![bs("k"), bs("1")];
+        assert!(matches!(
+            parse_key_and_score_member_pairs(&args, "ZADD"),
+            Err(SpinelDBError::WrongArgumentCount(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_zadd_args_no_members() {
+        let args = vec![bs("k")];
+        assert!(matches!(
+            parse_key_and_score_member_pairs(&args, "ZADD"),
+            Err(SpinelDBError::WrongArgumentCount(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_zadd_args_invalid_score() {
+        let args = vec![bs("k"), bs("not-a-number"), bs("a")];
+        let r = parse_key_and_score_member_pairs(&args, "ZADD");
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+}

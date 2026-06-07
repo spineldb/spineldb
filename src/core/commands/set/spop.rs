@@ -161,3 +161,63 @@ impl CommandSpec for SPop {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_spop_parses_key_only() {
+        let c = SPop::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.count, None);
+    }
+
+    #[test]
+    fn test_spop_parses_with_count() {
+        let c = SPop::parse(&[bs("k"), bs("3")]).unwrap();
+        assert_eq!(c.count, Some(3));
+    }
+
+    #[test]
+    fn test_spop_with_no_args_is_error() {
+        let r = SPop::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_spop_with_too_many_args_is_error() {
+        let r = SPop::parse(&[bs("k"), bs("3"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_spop_with_non_integer_count_is_error() {
+        let r = SPop::parse(&[bs("k"), bs("all")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_spop_with_non_bulk_key_is_wrong_type() {
+        let r = SPop::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_spop_to_resp_args_round_trips_with_count() {
+        let c = SPop::parse(&[bs("k"), bs("2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"2")]);
+    }
+
+    #[test]
+    fn test_spop_to_resp_args_round_trips_without_count() {
+        let c = SPop::parse(&[bs("k")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k")]);
+    }
+}

@@ -132,3 +132,83 @@ impl CommandSpec for BLMove {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_blmove_parses_args() {
+        let c = BLMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT"), bs("5")]).unwrap();
+        assert_eq!(c.source, Bytes::from_static(b"src"));
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.from, Side::Left);
+        assert_eq!(c.to, Side::Right);
+        assert_eq!(c.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_blmove_zero_timeout_becomes_max() {
+        let c = BLMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT"), bs("0")]).unwrap();
+        assert_eq!(c.timeout, Duration::from_secs(u64::MAX));
+    }
+
+    #[test]
+    fn test_blmove_case_insensitive_sides() {
+        let c = BLMove::parse(&[bs("src"), bs("dst"), bs("left"), bs("right"), bs("1")]).unwrap();
+        assert_eq!(c.from, Side::Left);
+        assert_eq!(c.to, Side::Right);
+    }
+
+    #[test]
+    fn test_blmove_with_too_few_args_is_error() {
+        let r = BLMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_blmove_with_too_many_args_is_error() {
+        let r = BLMove::parse(&[
+            bs("src"),
+            bs("dst"),
+            bs("LEFT"),
+            bs("RIGHT"),
+            bs("5"),
+            bs("extra"),
+        ]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_blmove_with_invalid_from_is_syntax_error() {
+        let r = BLMove::parse(&[bs("src"), bs("dst"), bs("TOP"), bs("LEFT"), bs("5")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_blmove_with_invalid_to_is_syntax_error() {
+        let r = BLMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("BOTTOM"), bs("5")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_blmove_with_non_float_timeout_is_error() {
+        let r = BLMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT"), bs("forever")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
+    }
+
+    #[test]
+    fn test_blmove_to_resp_args_round_trips() {
+        let c = BLMove::parse(&[bs("src"), bs("dst"), bs("LEFT"), bs("RIGHT"), bs("2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], Bytes::from_static(b"src"));
+        assert_eq!(args[1], Bytes::from_static(b"dst"));
+        assert_eq!(args[2], Bytes::from_static(b"LEFT"));
+        assert_eq!(args[3], Bytes::from_static(b"RIGHT"));
+    }
+}

@@ -103,3 +103,50 @@ impl CommandSpec for JsonType {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_type_key_only() {
+        let c = JsonType::parse(&[bs("k")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert!(c.path.is_none());
+    }
+
+    #[test]
+    fn test_json_type_with_path() {
+        let c = JsonType::parse(&[bs("k"), bs("$.f")]).unwrap();
+        assert_eq!(c.path, Some("$.f".to_string()));
+    }
+
+    #[test]
+    fn test_json_type_no_args_is_error() {
+        let r = JsonType::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_type_too_many_args_is_error() {
+        let r = JsonType::parse(&[bs("k"), bs("$.f"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_type_with_non_bulk_key_is_wrong_type() {
+        let r = JsonType::parse(&[RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_type_to_resp_args_round_trips() {
+        let c = JsonType::parse(&[bs("k"), bs("$.f")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.f")]);
+    }
+}

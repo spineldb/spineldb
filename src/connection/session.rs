@@ -60,3 +60,58 @@ impl SessionState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_session_no_auth_no_acl_is_authenticated() {
+        let s = SessionState::new(false, false);
+        assert!(s.is_authenticated);
+        assert!(!s.is_in_transaction);
+        assert!(!s.is_asking);
+        assert!(!s.is_subscribed);
+        assert!(!s.is_pattern_subscribed);
+        assert!(s.subscribed_channels.is_empty());
+        assert!(s.subscribed_patterns.is_empty());
+        assert!(s.pubsub_receivers.is_empty());
+        assert_eq!(s.current_db_index, 0);
+        assert!(s.authenticated_user.is_none());
+    }
+
+    #[test]
+    fn test_new_session_with_auth_required_is_not_authenticated() {
+        let s = SessionState::new(true, false);
+        assert!(!s.is_authenticated);
+    }
+
+    #[test]
+    fn test_new_session_with_acl_enabled_is_not_authenticated() {
+        let s = SessionState::new(false, true);
+        assert!(!s.is_authenticated);
+    }
+
+    #[test]
+    fn test_new_session_with_both_auth_and_acl_is_not_authenticated() {
+        let s = SessionState::new(true, true);
+        assert!(!s.is_authenticated);
+    }
+
+    #[test]
+    fn test_session_state_db_index_mutable() {
+        let mut s = SessionState::new(false, false);
+        s.current_db_index = 5;
+        assert_eq!(s.current_db_index, 5);
+    }
+
+    #[test]
+    fn test_session_state_channels_mutable() {
+        let mut s = SessionState::new(false, false);
+        s.subscribed_channels.insert(Bytes::from_static(b"ch1"));
+        s.subscribed_channels.insert(Bytes::from_static(b"ch2"));
+        s.is_subscribed = true;
+        assert_eq!(s.subscribed_channels.len(), 2);
+        assert!(s.is_subscribed);
+    }
+}

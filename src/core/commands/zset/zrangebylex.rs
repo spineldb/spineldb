@@ -141,3 +141,65 @@ impl CommandSpec for ZRangeByLex {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_zrangebylex_parses_min_max() {
+        let c = ZRangeByLex::parse(&[bs("z"), bs("[a"), bs("[b")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+        assert_eq!(c.limit, None);
+    }
+
+    #[test]
+    fn test_zrangebylex_parses_infinity() {
+        let c = ZRangeByLex::parse(&[bs("z"), bs("-"), bs("+")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"z"));
+    }
+
+    #[test]
+    fn test_zrangebylex_parses_limit() {
+        let c = ZRangeByLex::parse(&[bs("z"), bs("[a"), bs("[b"), bs("LIMIT"), bs("0"), bs("5")])
+            .unwrap();
+        assert_eq!(c.limit, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_zrangebylex_with_too_few_args_is_error() {
+        let r = ZRangeByLex::parse(&[bs("z"), bs("[a")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_zrangebylex_with_unknown_option_is_syntax_error() {
+        let r = ZRangeByLex::parse(&[bs("z"), bs("[a"), bs("[b"), bs("FOO")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zrangebylex_with_limit_missing_args_is_syntax_error() {
+        let r = ZRangeByLex::parse(&[bs("z"), bs("[a"), bs("[b"), bs("LIMIT"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_zrangebylex_with_limit_non_integer_offset_is_error() {
+        let r = ZRangeByLex::parse(&[bs("z"), bs("[a"), bs("[b"), bs("LIMIT"), bs("a"), bs("5")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_zrangebylex_to_resp_args_with_limit() {
+        let c = ZRangeByLex::parse(&[bs("z"), bs("[a"), bs("[b"), bs("LIMIT"), bs("0"), bs("5")])
+            .unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[3], Bytes::from_static(b"LIMIT"));
+    }
+}

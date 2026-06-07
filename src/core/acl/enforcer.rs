@@ -424,3 +424,524 @@ impl From<(Regex, bool)> for AclPubSubRule {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AclConfig;
+    use crate::core::acl::rules::AclRule;
+    use bytes::Bytes;
+
+    fn empty_config() -> AclConfig {
+        AclConfig::default()
+    }
+
+    fn enabled_config_with(rules: Vec<AclRule>) -> AclConfig {
+        AclConfig {
+            enabled: true,
+            users: vec![],
+            rules,
+        }
+    }
+
+    fn rule(name: &str, commands: &[&str]) -> AclRule {
+        AclRule {
+            name: name.to_string(),
+            commands: Some(commands.iter().map(|s| s.to_string()).collect()),
+            keys: None,
+            pubsub_channels: None,
+            conditions: vec![],
+        }
+    }
+
+    fn user_with_rules(rules: &[&str]) -> AclUser {
+        AclUser {
+            username: "u".to_string(),
+            password_hash: "h".to_string(),
+            rules: rules.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_disabled_enforcer_allows_everything() {
+        let cfg = empty_config();
+        let e = AclEnforcer::new(&cfg);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        assert!(e.check_permission(
+            None,
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &["k".to_string()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_enabled_enforcer_default_denies_when_user_has_no_rules() {
+        // A user with no rules cannot run anything (default deny at the
+        // command-permission level).
+        let cfg = enabled_config_with(vec![]);
+        let e = AclEnforcer::new(&cfg);
+        let user = AclUser {
+            username: "u".to_string(),
+            password_hash: "h".to_string(),
+            rules: vec![],
+        };
+        let args: Vec<RespFrame> = vec![];
+        assert!(!e.check_permission(Some(&user), &args, "GET", CommandFlags::READONLY, &[], &[]));
+    }
+
+    #[test]
+    fn test_explicit_allow_command() {
+        let cfg = enabled_config_with(vec![rule("readonly", &["+get"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["readonly"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        // Pass empty keys to bypass the key-permission check.
+        assert!(e.check_permission(Some(&u), &args, "GET", CommandFlags::READONLY, &[], &[]));
+    }
+
+    #[test]
+    fn test_explicit_deny_command() {
+        let cfg = enabled_config_with(vec![rule("norw", &["+@all", "-flushdb"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["norw"]);
+        let args: Vec<RespFrame> = vec![];
+        // +@all allows everything but -flushdb denies FLUSHDB.
+        assert!(!e.check_permission(Some(&u), &args, "FLUSHDB", CommandFlags::ADMIN, &[], &[]));
+    }
+
+    #[test]
+    fn test_allow_category_write() {
+        let cfg = enabled_config_with(vec![rule("writer", &["+@write"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["writer"]);
+        let args: Vec<RespFrame> = vec![];
+        // Empty keys; just testing the command permission path.
+        assert!(e.check_permission(Some(&u), &args, "SET", CommandFlags::WRITE, &[], &[]));
+    }
+
+    #[test]
+    fn test_deny_category_admin() {
+        let cfg = enabled_config_with(vec![rule("plain", &["+@read", "-@admin"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["plain"]);
+        let args: Vec<RespFrame> = vec![];
+        // CONFIG is an admin command, should be denied.
+        assert!(!e.check_permission(Some(&u), &args, "CONFIG", CommandFlags::ADMIN, &[], &[]));
+    }
+
+    #[test]
+    fn test_command_name_is_case_insensitive() {
+        let cfg = enabled_config_with(vec![rule("r", &["+get"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        // Mixed-case command name still matches the rule.
+        assert!(e.check_permission(Some(&u), &args, "Get", CommandFlags::READONLY, &[], &[]));
+    }
+
+    #[test]
+    fn test_unprefixed_rule_defaults_to_allow() {
+        let cfg = enabled_config_with(vec![rule("r", &["ping"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args: Vec<RespFrame> = vec![];
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "PING",
+            CommandFlags::ADMIN | CommandFlags::READONLY,
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_user_with_unknown_rule_name_is_default_denied() {
+        let cfg = enabled_config_with(vec![rule("r", &["+get"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["nonexistent"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        assert!(!e.check_permission(Some(&u), &args, "GET", CommandFlags::READONLY, &[], &[]));
+    }
+
+    #[test]
+    fn test_no_user_default_denied_when_enabled() {
+        let cfg = enabled_config_with(vec![rule("r", &["+get"])]);
+        let e = AclEnforcer::new(&cfg);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        // No user supplied (None) → denied.
+        assert!(!e.check_permission(None, &args, "GET", CommandFlags::READONLY, &[], &[]));
+    }
+
+    #[test]
+    fn test_allow_all_via_plus_at_all() {
+        let cfg = enabled_config_with(vec![rule("r", &["+@all"])]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args: Vec<RespFrame> = vec![];
+        assert!(e.check_permission(Some(&u), &args, "ANYCMD", CommandFlags::empty(), &[], &[]));
+    }
+
+    #[test]
+    fn test_invalid_glob_is_skipped() {
+        // A bad pattern shouldn't crash; the rule is just dropped.
+        let bad = AclRule {
+            name: "r".to_string(),
+            commands: Some(vec!["+@all".to_string()]),
+            keys: Some(vec!["~[".to_string()]), // unclosed char class → invalid regex
+            pubsub_channels: None,
+            conditions: vec![],
+        };
+        let cfg = enabled_config_with(vec![bad]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args: Vec<RespFrame> = vec![];
+        // Command permission still works even if the key pattern is invalid.
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "PING",
+            CommandFlags::ADMIN | CommandFlags::READONLY,
+            &[],
+            &[]
+        ));
+    }
+
+    fn rule_with_keys(name: &str, commands: &[&str], keys: &[&str]) -> AclRule {
+        AclRule {
+            name: name.to_string(),
+            commands: Some(commands.iter().map(|s| s.to_string()).collect()),
+            keys: Some(keys.iter().map(|s| s.to_string()).collect()),
+            pubsub_channels: None,
+            conditions: vec![],
+        }
+    }
+
+    fn rule_with_channels(name: &str, commands: &[&str], channels: &[&str]) -> AclRule {
+        AclRule {
+            name: name.to_string(),
+            commands: Some(commands.iter().map(|s| s.to_string()).collect()),
+            keys: None,
+            pubsub_channels: Some(channels.iter().map(|s| s.to_string()).collect()),
+            conditions: vec![],
+        }
+    }
+
+    #[test]
+    fn test_key_glob_allow_matches() {
+        let cfg = enabled_config_with(vec![rule_with_keys(
+            "r",
+            &["+get"],
+            &["~user:*"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"user:42"))];
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &["user:42".to_string()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_key_glob_deny_takes_precedence() {
+        let cfg = enabled_config_with(vec![rule_with_keys(
+            "r",
+            &["+@all"],
+            &["~*", "-admin:*"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"admin:secret"))];
+        assert!(!e.check_permission(
+            Some(&u),
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &["admin:secret".to_string()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_key_pattern_does_not_match_other_keys() {
+        let cfg = enabled_config_with(vec![rule_with_keys(
+            "r",
+            &["+@all"],
+            &["~user:*"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"order:1"))];
+        // `order:1` does not match `user:*` so it should be denied.
+        assert!(!e.check_permission(
+            Some(&u),
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &["order:1".to_string()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_allkeys_shortcut_allows_any_key() {
+        let cfg = enabled_config_with(vec![rule_with_keys(
+            "r",
+            &["+@all"],
+            &["allkeys"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"anything"))];
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &["literally:any:key".to_string()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_pubsub_glob_allow() {
+        let cfg = enabled_config_with(vec![rule_with_channels(
+            "r",
+            &["+@all"],
+            &["&news.*"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args: Vec<RespFrame> = vec![];
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "PUBLISH",
+            CommandFlags::PUBSUB | CommandFlags::WRITE,
+            &[],
+            &["news.weather".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_pubsub_deny_blocks_publish() {
+        let cfg = enabled_config_with(vec![rule_with_channels(
+            "r",
+            &["+@all"],
+            &["&news.*", "-internal.*"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args: Vec<RespFrame> = vec![];
+        assert!(!e.check_permission(
+            Some(&u),
+            &args,
+            "PUBLISH",
+            CommandFlags::PUBSUB | CommandFlags::WRITE,
+            &[],
+            &["internal.alerts".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_allchannels_shortcut_allows_any_channel() {
+        let cfg = enabled_config_with(vec![rule_with_channels(
+            "r",
+            &["+@all"],
+            &["allchannels"],
+        )]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        let args: Vec<RespFrame> = vec![];
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "PUBLISH",
+            CommandFlags::PUBSUB | CommandFlags::WRITE,
+            &[],
+            &["any.channel".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_auth_allowed_before_authentication() {
+        // Even with ACL enabled, AUTH is allowed when no user is provided.
+        let cfg = enabled_config_with(vec![rule("r", &["+@all"])]);
+        let e = AclEnforcer::new(&cfg);
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"user"))];
+        assert!(e.check_permission(
+            None,
+            &args,
+            "AUTH",
+            CommandFlags::ADMIN,
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_auth_case_insensitive() {
+        // The special-case check is case-insensitive.
+        let cfg = enabled_config_with(vec![rule("r", &["+@all"])]);
+        let e = AclEnforcer::new(&cfg);
+        let args: Vec<RespFrame> = vec![];
+        assert!(e.check_permission(
+            None,
+            &args,
+            "auth",
+            CommandFlags::ADMIN,
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_condition_argc_less_than_grants_otherwise_denied_command() {
+        use crate::core::acl::rules::{AclCondition, ConditionOperator, ConditionTarget};
+        // Start default-deny; condition grants GET when argc < 3.
+        let cond_rule = AclRule {
+            name: "r".to_string(),
+            commands: None,
+            keys: None,
+            pubsub_channels: None,
+            conditions: vec![AclCondition {
+                target: ConditionTarget::Command,
+                operator: ConditionOperator::ArgcLessThan(3),
+                result: vec!["+GET".to_string()],
+            }],
+        };
+        let cfg = enabled_config_with(vec![cond_rule]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        // raw_args len is 1 (just the key) → argc = 2 < 3 → GET allowed.
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        assert!(e.check_permission(
+            Some(&u),
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_condition_argc_greater_than_does_not_trigger() {
+        use crate::core::acl::rules::{AclCondition, ConditionOperator, ConditionTarget};
+        let cond_rule = AclRule {
+            name: "r".to_string(),
+            commands: None,
+            keys: None,
+            pubsub_channels: None,
+            conditions: vec![AclCondition {
+                target: ConditionTarget::Command,
+                operator: ConditionOperator::ArgcGreaterThan(5),
+                result: vec!["+GET".to_string()],
+            }],
+        };
+        let cfg = enabled_config_with(vec![cond_rule]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+        // argc = 2, not greater than 5 → condition does not fire → denied.
+        let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
+        assert!(!e.check_permission(
+            Some(&u),
+            &args,
+            "GET",
+            CommandFlags::READONLY,
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_condition_starts_with_on_arg() {
+        use crate::core::acl::rules::{AclCondition, ConditionOperator, ConditionTarget};
+        // Condition grants SET only when arg[0] starts with "user:".
+        let cond_rule = AclRule {
+            name: "r".to_string(),
+            commands: None,
+            keys: None,
+            pubsub_channels: None,
+            conditions: vec![AclCondition {
+                target: ConditionTarget::Arg { index: 0 },
+                operator: ConditionOperator::StartsWith("user:".to_string()),
+                result: vec!["+SET".to_string()],
+            }],
+        };
+        let cfg = enabled_config_with(vec![cond_rule]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+
+        // arg[0] = "user:42" → matches → SET allowed.
+        let args_match = vec![RespFrame::BulkString(Bytes::from_static(b"user:42"))];
+        assert!(e.check_permission(
+            Some(&u),
+            &args_match,
+            "SET",
+            CommandFlags::WRITE,
+            &[],
+            &[]
+        ));
+
+        // arg[0] = "other:1" → no match → denied.
+        let args_nomatch = vec![RespFrame::BulkString(Bytes::from_static(b"other:1"))];
+        assert!(!e.check_permission(
+            Some(&u),
+            &args_nomatch,
+            "SET",
+            CommandFlags::WRITE,
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_condition_is_number_on_arg() {
+        use crate::core::acl::rules::{AclCondition, ConditionOperator, ConditionTarget};
+        let cond_rule = AclRule {
+            name: "r".to_string(),
+            commands: None,
+            keys: None,
+            pubsub_channels: None,
+            conditions: vec![AclCondition {
+                target: ConditionTarget::Arg { index: 0 },
+                operator: ConditionOperator::IsNumber,
+                result: vec!["+INCRBY".to_string()],
+            }],
+        };
+        let cfg = enabled_config_with(vec![cond_rule]);
+        let e = AclEnforcer::new(&cfg);
+        let u = user_with_rules(&["r"]);
+
+        // "42" is a number → INCRBY allowed.
+        let args_num = vec![RespFrame::BulkString(Bytes::from_static(b"42"))];
+        assert!(e.check_permission(
+            Some(&u),
+            &args_num,
+            "INCRBY",
+            CommandFlags::WRITE,
+            &[],
+            &[]
+        ));
+
+        // "notanumber" is not a number → INCRBY denied.
+        let args_str = vec![RespFrame::BulkString(Bytes::from_static(b"notanumber"))];
+        assert!(!e.check_permission(
+            Some(&u),
+            &args_str,
+            "INCRBY",
+            CommandFlags::WRITE,
+            &[],
+            &[]
+        ));
+    }
+}

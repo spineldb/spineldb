@@ -109,3 +109,83 @@ impl CommandSpec for GeoDist {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_geodist_parses_key_and_members() {
+        let c = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.member1, Bytes::from_static(b"m1"));
+        assert_eq!(c.member2, Bytes::from_static(b"m2"));
+        assert!(matches!(c.unit, GeoUnit::Meters));
+    }
+
+    #[test]
+    fn test_geodist_with_unit_km() {
+        let c = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2"), bs("km")]).unwrap();
+        assert!(matches!(c.unit, GeoUnit::Kilometers));
+    }
+
+    #[test]
+    fn test_geodist_with_unit_mi() {
+        let c = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2"), bs("mi")]).unwrap();
+        assert!(matches!(c.unit, GeoUnit::Miles));
+    }
+
+    #[test]
+    fn test_geodist_with_unit_ft() {
+        let c = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2"), bs("ft")]).unwrap();
+        assert!(matches!(c.unit, GeoUnit::Feet));
+    }
+
+    #[test]
+    fn test_geodist_invalid_unit_is_error() {
+        let r = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2"), bs("invalid")]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_geodist_with_too_few_args_is_error() {
+        let r = GeoDist::parse(&[bs("k"), bs("m1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_geodist_with_too_many_args_is_error() {
+        let r = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2"), bs("km"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_geodist_no_args_is_error() {
+        let r = GeoDist::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_geodist_with_non_bulk_key_is_wrong_type() {
+        let r = GeoDist::parse(&[RespFrame::Integer(1), bs("m1"), bs("m2")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_geodist_to_resp_args_round_trips_default_unit() {
+        let c = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn test_geodist_to_resp_args_includes_unit_when_non_default() {
+        let c = GeoDist::parse(&[bs("k"), bs("m1"), bs("m2"), bs("km")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+    }
+}

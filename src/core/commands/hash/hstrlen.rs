@@ -86,3 +86,46 @@ impl CommandSpec for HStrLen {
         vec![self.key.clone(), self.field.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_hstrlen_parses_key_and_field() {
+        let c = HStrLen::parse(&[bs("h"), bs("f")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"h"));
+        assert_eq!(c.field, Bytes::from_static(b"f"));
+    }
+
+    #[test]
+    fn test_hstrlen_with_too_few_args_is_error() {
+        let r = HStrLen::parse(&[bs("h")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hstrlen_with_too_many_args_is_error() {
+        let r = HStrLen::parse(&[bs("h"), bs("f"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_hstrlen_with_non_bulk_key_is_wrong_type() {
+        let r = HStrLen::parse(&[RespFrame::Integer(1), bs("f")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_hstrlen_to_resp_args_round_trips() {
+        let c = HStrLen::parse(&[bs("h"), bs("f")]).unwrap();
+        assert_eq!(
+            c.to_resp_args(),
+            vec![Bytes::from_static(b"h"), Bytes::from_static(b"f")]
+        );
+    }
+}

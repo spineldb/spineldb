@@ -72,3 +72,38 @@ impl CommandSpec for SdiffStore {
         all_args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_sdiffstore_parses_destination_and_keys() {
+        let c = SdiffStore::parse(&[bs("dst"), bs("k1"), bs("k2")]).unwrap();
+        assert_eq!(c.destination, Bytes::from_static(b"dst"));
+        assert_eq!(c.keys.len(), 2);
+    }
+
+    #[test]
+    fn test_sdiffstore_with_too_few_args_is_error() {
+        let r = SdiffStore::parse(&[bs("dst")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_sdiffstore_with_non_bulk_dest_is_wrong_type() {
+        let r = SdiffStore::parse(&[RespFrame::Integer(1), bs("k1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_sdiffstore_to_resp_args_round_trips() {
+        let c = SdiffStore::parse(&[bs("dst"), bs("a"), bs("b")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+    }
+}

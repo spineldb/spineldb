@@ -179,3 +179,104 @@ impl CommandSpec for Bloom {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bloom_default_has_no_subcommand() {
+        let b = Bloom::default();
+        assert!(b.subcommand.is_none());
+    }
+
+    #[test]
+    fn test_bloom_parse_no_args_is_error() {
+        let r = Bloom::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_reserve() {
+        // Order: key, error_rate, capacity.
+        let b = Bloom::parse(&[bs("RESERVE"), bs("k"), bs("0.01"), bs("100")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Reserve(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_add() {
+        let b = Bloom::parse(&[bs("ADD"), bs("k"), bs("v")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Add(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_madd() {
+        let b = Bloom::parse(&[bs("MADD"), bs("k"), bs("v1"), bs("v2")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::MAdd(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_exists() {
+        let b = Bloom::parse(&[bs("EXISTS"), bs("k"), bs("v")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Exists(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_mexists() {
+        let b = Bloom::parse(&[bs("MEXISTS"), bs("k"), bs("v1"), bs("v2")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::MExists(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_info() {
+        let b = Bloom::parse(&[bs("INFO"), bs("k")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Info(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_card() {
+        let b = Bloom::parse(&[bs("CARD"), bs("k")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Card(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_insert() {
+        let b = Bloom::parse(&[bs("INSERT"), bs("k"), bs("ITEMS"), bs("v1"), bs("v2")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Insert(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_unknown_subcommand_is_error() {
+        let r = Bloom::parse(&[bs("FOO"), bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_bloom_parse_case_insensitive_subcommand() {
+        let b = Bloom::parse(&[bs("add"), bs("k"), bs("v")]).unwrap();
+        assert!(matches!(b.subcommand, Some(BloomSubcommand::Add(_))));
+    }
+
+    #[test]
+    fn test_bloom_command_spec_metadata() {
+        let b = Bloom::default();
+        assert_eq!(b.name(), "bf");
+        assert_eq!(b.arity(), -2);
+        assert!(b.flags().contains(CommandFlags::WRITE));
+        assert!(b.flags().contains(CommandFlags::DENY_OOM));
+        assert_eq!(b.first_key(), 0);
+        assert_eq!(b.last_key(), 0);
+        assert_eq!(b.step(), 0);
+    }
+
+    #[test]
+    fn test_bloom_command_spec_default_get_keys_is_empty() {
+        let b = Bloom::default();
+        assert!(b.get_keys().is_empty());
+        assert!(b.to_resp_args().is_empty());
+    }
+}

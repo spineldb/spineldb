@@ -159,3 +159,62 @@ impl CommandSpec for JsonArrInsert {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_json_arrinsert_parses() {
+        let c = JsonArrInsert::parse(&[bs("k"), bs("$.a"), bs("0"), bs("1"), bs("2")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.path, "$.a");
+        assert_eq!(c.index, 0);
+        assert_eq!(c.values.len(), 2);
+        assert_eq!(c.values[0], Bytes::from_static(b"1"));
+        assert_eq!(c.values[1], Bytes::from_static(b"2"));
+    }
+
+    #[test]
+    fn test_json_arrinsert_negative_index() {
+        let c = JsonArrInsert::parse(&[bs("k"), bs("$.a"), bs("-1"), bs("1")]).unwrap();
+        assert_eq!(c.index, -1);
+    }
+
+    #[test]
+    fn test_json_arrinsert_too_few_args_is_error() {
+        let r = JsonArrInsert::parse(&[bs("k"), bs("$.a"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrinsert_no_args_is_error() {
+        let r = JsonArrInsert::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_json_arrinsert_invalid_index_is_error() {
+        let r = JsonArrInsert::parse(&[bs("k"), bs("$.a"), bs("not_a_number"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_json_arrinsert_with_non_bulk_key_is_wrong_type() {
+        let r = JsonArrInsert::parse(&[RespFrame::Integer(1), bs("$.a"), bs("0"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_json_arrinsert_to_resp_args_round_trips() {
+        let c = JsonArrInsert::parse(&[bs("k"), bs("$.a"), bs("0"), bs("1"), bs("2")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[2], Bytes::from_static(b"0"));
+    }
+}
