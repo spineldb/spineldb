@@ -122,3 +122,91 @@ impl CommandSpec for BitCount {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bitcount_parse_basic() {
+        let c = BitCount::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+        assert!(c.range.is_none());
+    }
+
+    #[test]
+    fn test_bitcount_parse_with_range() {
+        let c = BitCount::parse(&[bs("mykey"), bs("0"), bs("10")]).unwrap();
+        assert_eq!(c.range, Some((0, 10)));
+    }
+
+    #[test]
+    fn test_bitcount_parse_with_negative_range() {
+        let c = BitCount::parse(&[bs("mykey"), bs("-5"), bs("-1")]).unwrap();
+        assert_eq!(c.range, Some((-5, -1)));
+    }
+
+    #[test]
+    fn test_bitcount_parse_empty_args_is_error() {
+        let r = BitCount::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitcount_parse_too_many_args_is_error() {
+        let r = BitCount::parse(&[bs("k"), bs("a"), bs("b"), bs("c")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitcount_parse_two_args_is_error() {
+        let r = BitCount::parse(&[bs("k"), bs("a")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_bitcount_parse_non_bulk_string_is_error() {
+        let r = BitCount::parse(&[RespFrame::Integer(123)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bitcount_to_resp_args_basic() {
+        let c = BitCount {
+            key: Bytes::from_static(b"key"),
+            ..Default::default()
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+    }
+
+    #[test]
+    fn test_bitcount_to_resp_args_with_range() {
+        let c = BitCount {
+            key: Bytes::from_static(b"key"),
+            range: Some((5, 10)),
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[1], Bytes::from_static(b"5"));
+        assert_eq!(args[2], Bytes::from_static(b"10"));
+    }
+
+    #[test]
+    fn test_bitcount_spec() {
+        let c = BitCount {
+            key: Bytes::from_static(b"k"),
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "bitcount");
+        assert_eq!(c.arity(), -2);
+        assert!(c.flags().contains(CommandFlags::READONLY));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 1);
+    }
+}

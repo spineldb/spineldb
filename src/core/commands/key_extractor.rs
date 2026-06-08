@@ -212,14 +212,7 @@ mod tests {
     #[test]
     fn test_mset_returns_keys_in_step() {
         // MSET key1 val1 key2 val2 key3 val3
-        let args = vec![
-            bs("k1"),
-            bs("v1"),
-            bs("k2"),
-            bs("v2"),
-            bs("k3"),
-            bs("v3"),
-        ];
+        let args = vec![bs("k1"), bs("v1"), bs("k2"), bs("v2"), bs("k3"), bs("v3")];
         let keys = extract_keys_from_command("mset", &args).unwrap();
         assert_eq!(keys.len(), 3);
         assert_eq!(keys[0], Bytes::from_static(b"k1"));

@@ -132,3 +132,114 @@ impl CommandSpec for Failover {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_errors() {
+        assert!(Failover::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn test_parse_poison() {
+        let cmd = Failover::parse(&[bulk("POISON"), bulk("runid123"), bulk("300")]).unwrap();
+        match &cmd.subcommand {
+            FailoverSubcommand::Poison { run_id, ttl_secs } => {
+                assert_eq!(run_id, "runid123");
+                assert_eq!(*ttl_secs, 300);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_poison_case_insensitive() {
+        let cmd = Failover::parse(&[bulk("poison"), bulk("abc"), bulk("10")]).unwrap();
+        match &cmd.subcommand {
+            FailoverSubcommand::Poison { run_id, ttl_secs } => {
+                assert_eq!(run_id, "abc");
+                assert_eq!(*ttl_secs, 10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_poison_missing_args_errors() {
+        assert!(Failover::parse(&[bulk("POISON")]).is_err());
+        assert!(Failover::parse(&[bulk("POISON"), bulk("runid")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_poison_bad_ttl_errors() {
+        assert!(Failover::parse(&[bulk("POISON"), bulk("id"), bulk("notnum")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_subcommand_errors() {
+        assert!(Failover::parse(&[bulk("UNKNOWN")]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Failover::default().name(), "failover");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Failover::default().arity(), -2);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Failover::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Failover::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Failover::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_poison() {
+        let cmd = Failover {
+            subcommand: FailoverSubcommand::Poison {
+                run_id: "rid".into(),
+                ttl_secs: 600,
+            },
+        };
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"POISON"));
+        assert_eq!(args[1], Bytes::from_static(b"rid"));
+        assert_eq!(args[2], Bytes::from_static(b"600"));
+    }
+
+    #[test]
+    fn test_failover_subcommand_default() {
+        let default = FailoverSubcommand::default();
+        match default {
+            FailoverSubcommand::Poison { run_id, ttl_secs } => {
+                assert!(run_id.is_empty());
+                assert_eq!(ttl_secs, 0);
+            }
+        }
+    }
+}

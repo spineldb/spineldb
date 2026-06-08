@@ -232,6 +232,9 @@ mod rpushx_tests {
     fn test_rpushx_to_resp_args_round_trips() {
         let c = RPushX::parse(&[bs("k"), bs("a")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"a")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"a")]
+        );
     }
 }

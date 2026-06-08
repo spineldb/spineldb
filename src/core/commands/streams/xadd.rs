@@ -339,8 +339,7 @@ mod tests {
 
     #[test]
     fn test_xadd_parses_nomkstream() {
-        let c =
-            XAdd::parse(&[bs("k"), bs("NOMKSTREAM"), bs("*"), bs("f1"), bs("v1")]).unwrap();
+        let c = XAdd::parse(&[bs("k"), bs("NOMKSTREAM"), bs("*"), bs("f1"), bs("v1")]).unwrap();
         assert!(c.options.nomkstream);
     }
 
@@ -391,15 +390,7 @@ mod tests {
 
     #[test]
     fn test_xadd_parses_multiple_fields() {
-        let c = XAdd::parse(&[
-            bs("k"),
-            bs("*"),
-            bs("f1"),
-            bs("v1"),
-            bs("f2"),
-            bs("v2"),
-        ])
-        .unwrap();
+        let c = XAdd::parse(&[bs("k"), bs("*"), bs("f1"), bs("v1"), bs("f2"), bs("v2")]).unwrap();
         assert_eq!(c.options.fields.len(), 2);
     }
 

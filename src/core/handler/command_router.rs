@@ -33,6 +33,7 @@ use tracing::error;
 use tracing::{Instrument, info_span};
 
 /// Represents the various types of responses a command can produce.
+#[derive(Debug)]
 pub enum RouteResponse {
     /// A single RESP value. This is the most common response type.
     Single(RespValue),
@@ -441,5 +442,70 @@ impl<'a> Router<'a> {
             }
         }
         Ok(RouteResponse::Single(resp_value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::connection::SessionState;
+    use crate::test_helpers::init_server_state;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_route_response_single() {
+        let resp = RouteResponse::Single(RespValue::SimpleString("OK".into()));
+        match resp {
+            RouteResponse::Single(v) => assert_eq!(v, RespValue::SimpleString("OK".into())),
+            _ => panic!("Expected Single variant"),
+        }
+    }
+
+    #[test]
+    fn test_route_response_multiple() {
+        let responses = vec![RespValue::SimpleString("OK".into()), RespValue::Integer(42)];
+        let resp = RouteResponse::Multiple(responses.clone());
+        match resp {
+            RouteResponse::Multiple(v) => {
+                assert_eq!(v.len(), 2);
+                assert_eq!(v[0], RespValue::SimpleString("OK".into()));
+                assert_eq!(v[1], RespValue::Integer(42));
+            }
+            _ => panic!("Expected Multiple variant"),
+        }
+    }
+
+    #[test]
+    fn test_route_response_noop() {
+        let resp = RouteResponse::NoOp;
+        assert!(matches!(resp, RouteResponse::NoOp));
+    }
+
+    #[test]
+    fn test_router_new() {
+        let state = init_server_state(Config::default());
+        let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let mut session = SessionState::new(false, false);
+        let session_id = 1u64;
+
+        let router = Router::new(state, session_id, addr, &mut session);
+        assert_eq!(router.session_id, session_id);
+        assert_eq!(router.addr, addr);
+    }
+
+    #[test]
+    fn test_evalsha_guard_decrements_counter() {
+        let state = init_server_state(Config::default());
+
+        assert_eq!(state.evalsha_in_flight.load(Ordering::Relaxed), 0);
+
+        {
+            let _guard_val = state.evalsha_in_flight.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(state.evalsha_in_flight.load(Ordering::Relaxed), 1);
+        }
+
+        state.evalsha_in_flight.fetch_sub(1, Ordering::Relaxed);
+        assert_eq!(state.evalsha_in_flight.load(Ordering::Relaxed), 0);
     }
 }

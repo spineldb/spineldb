@@ -64,3 +64,79 @@ impl CommandSpec for Replconf {
         self.args.iter().map(|s| s.clone().into()).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_errors() {
+        assert!(Replconf::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn test_parse_single_arg() {
+        let cmd = Replconf::parse(&[bulk("GETACK")]).unwrap();
+        assert_eq!(cmd.args, vec!["GETACK"]);
+    }
+
+    #[test]
+    fn test_parse_multiple_args() {
+        let cmd = Replconf::parse(&[bulk("ACK"), bulk("0")]).unwrap();
+        assert_eq!(cmd.args, vec!["ACK", "0"]);
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Replconf::default().name(), "replconf");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Replconf::default().arity(), -1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Replconf::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Replconf::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Replconf::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args() {
+        let cmd = Replconf {
+            args: vec!["ACK".into(), "100".into()],
+        };
+        assert_eq!(
+            cmd.to_resp_args(),
+            vec![Bytes::from_static(b"ACK"), Bytes::from_static(b"100")]
+        );
+    }
+
+    #[test]
+    fn test_to_resp_args_empty() {
+        let cmd = Replconf { args: vec![] };
+        assert!(cmd.to_resp_args().is_empty());
+    }
+}

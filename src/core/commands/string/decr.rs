@@ -58,3 +58,52 @@ impl CommandSpec for Decr {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_decr_parse_basic() {
+        let c = Decr::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+    }
+
+    #[test]
+    fn test_decr_parse_empty_args_is_error() {
+        let r = Decr::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_decr_parse_non_bulk_string_is_error() {
+        let r = Decr::parse(&[RespFrame::Integer(123)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_decr_to_resp_args() {
+        let c = Decr {
+            key: Bytes::from_static(b"counter"),
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"counter"));
+    }
+
+    #[test]
+    fn test_decr_spec() {
+        let c = Decr {
+            key: Bytes::from_static(b"k"),
+        };
+        assert_eq!(c.name(), "decr");
+        assert_eq!(c.arity(), 2);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 1);
+    }
+}

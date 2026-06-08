@@ -399,28 +399,37 @@ mod tests {
     fn test_xinfo_to_resp_args_round_trips_stream() {
         let c = XInfo::parse(&[bs("STREAM"), bs("k")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"STREAM"), Bytes::from_static(b"k")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"STREAM"), Bytes::from_static(b"k")]
+        );
     }
 
     #[test]
     fn test_xinfo_to_resp_args_round_trips_stream_full() {
         let c = XInfo::parse(&[bs("STREAM"), bs("k"), bs("FULL")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![
-            Bytes::from_static(b"STREAM"),
-            Bytes::from_static(b"k"),
-            Bytes::from_static(b"FULL"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"STREAM"),
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"FULL"),
+            ]
+        );
     }
 
     #[test]
     fn test_xinfo_to_resp_args_round_trips_consumers() {
         let c = XInfo::parse(&[bs("CONSUMERS"), bs("k"), bs("g1")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![
-            Bytes::from_static(b"CONSUMERS"),
-            Bytes::from_static(b"k"),
-            Bytes::from_static(b"g1"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"CONSUMERS"),
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"g1"),
+            ]
+        );
     }
 }

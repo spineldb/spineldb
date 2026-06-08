@@ -175,7 +175,13 @@ mod tests {
     fn test_zrangebyscore_parses_limit() {
         let c = ZRangeByScore::parse(&[bs("z"), bs("1"), bs("10"), bs("LIMIT"), bs("0"), bs("5")])
             .unwrap();
-        assert_eq!(c.limit, Some(Limit { offset: 0, count: 5 }));
+        assert_eq!(
+            c.limit,
+            Some(Limit {
+                offset: 0,
+                count: 5
+            })
+        );
     }
 
     #[test]
@@ -191,7 +197,13 @@ mod tests {
         ])
         .unwrap();
         assert!(c.with_scores);
-        assert_eq!(c.limit, Some(Limit { offset: 2, count: 3 }));
+        assert_eq!(
+            c.limit,
+            Some(Limit {
+                offset: 2,
+                count: 3
+            })
+        );
     }
 
     #[test]

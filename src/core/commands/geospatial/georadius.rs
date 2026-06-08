@@ -501,9 +501,12 @@ mod tests {
 
     #[test]
     fn test_georadius_parses_basic() {
-        let c = GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100"), bs("km")]).unwrap();
+        let c =
+            GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100"), bs("km")]).unwrap();
         assert_eq!(c.0.key, Bytes::from_static(b"k"));
-        assert!(matches!(c.0.center, GeoRadiusCenter::Coord(lon, lat) if (lon - 10.0).abs() < f64::EPSILON && (lat - 20.0).abs() < f64::EPSILON));
+        assert!(
+            matches!(c.0.center, GeoRadiusCenter::Coord(lon, lat) if (lon - 10.0).abs() < f64::EPSILON && (lat - 20.0).abs() < f64::EPSILON)
+        );
         assert!((c.0.radius - 100.0).abs() < f64::EPSILON);
         assert!(matches!(c.0.unit, GeoUnit::Kilometers));
     }
@@ -675,7 +678,8 @@ mod tests {
 
     #[test]
     fn test_georadius_to_resp_args_includes_source_key() {
-        let c = GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100"), bs("km")]).unwrap();
+        let c =
+            GeoRadiusCmd::parse(&[bs("k"), bs("10.0"), bs("20.0"), bs("100"), bs("km")]).unwrap();
         let args = c.to_resp_args();
         assert_eq!(args, vec![Bytes::from_static(b"k")]);
     }

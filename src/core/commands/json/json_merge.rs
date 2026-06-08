@@ -186,10 +186,13 @@ mod tests {
     fn test_json_merge_to_resp_args_round_trips() {
         let c = JsonMerge::parse(&[bs("k"), bs("$.o"), bs("{}")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![
-            Bytes::from_static(b"k"),
-            Bytes::from_static(b"$.o"),
-            Bytes::from_static(b"{}"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"$.o"),
+                Bytes::from_static(b"{}"),
+            ]
+        );
     }
 }

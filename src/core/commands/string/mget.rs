@@ -86,3 +86,56 @@ impl CommandSpec for MGet {
         self.keys.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_mget_parse_single_key() {
+        let c = MGet::parse(&[bs("key")]).unwrap();
+        assert_eq!(c.keys.len(), 1);
+        assert_eq!(c.keys[0], Bytes::from_static(b"key"));
+    }
+
+    #[test]
+    fn test_mget_parse_multiple_keys() {
+        let c = MGet::parse(&[bs("a"), bs("b"), bs("c")]).unwrap();
+        assert_eq!(c.keys.len(), 3);
+    }
+
+    #[test]
+    fn test_mget_parse_empty_is_error() {
+        let r = MGet::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_mget_parse_non_bulk_key_is_error() {
+        let r = MGet::parse(&[bs("a"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_mget_to_resp_args() {
+        let c = MGet {
+            keys: vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"a"));
+    }
+
+    #[test]
+    fn test_mget_spec() {
+        let c = MGet { keys: vec![] };
+        assert_eq!(c.name(), "mget");
+        assert_eq!(c.arity(), -2);
+        assert!(c.flags().contains(CommandFlags::READONLY));
+        assert_eq!(c.first_key(), 1);
+    }
+}

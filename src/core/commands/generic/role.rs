@@ -133,3 +133,28 @@ impl CommandSpec for Role {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_role_parse_no_args() -> Result<(), SpinelDBError> {
+        let c = Role::parse(&[])?;
+        assert!(matches!(c, Role));
+        Ok(())
+    }
+
+    #[test]
+    fn test_role_parse_with_args_is_error() {
+        let r = Role::parse(&[RespFrame::BulkString(Bytes::from_static(b"arg"))]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_role_to_resp_args_is_empty() {
+        let c = Role::parse(&[]).unwrap();
+        let args = c.to_resp_args();
+        assert!(args.is_empty());
+    }
+}

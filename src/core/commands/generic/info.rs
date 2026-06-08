@@ -209,3 +209,83 @@ impl CommandSpec for Info {
         self.section.clone().map_or(vec![], |s| vec![s.into()])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_no_args() {
+        let cmd = Info::parse(&[]).unwrap();
+        assert!(cmd.section.is_none());
+    }
+
+    #[test]
+    fn test_parse_with_section() {
+        let cmd = Info::parse(&[bulk("server")]).unwrap();
+        assert_eq!(cmd.section.as_deref(), Some("server"));
+    }
+
+    #[test]
+    fn test_parse_section_case_insensitive() {
+        let cmd = Info::parse(&[bulk("SERVER")]).unwrap();
+        assert_eq!(cmd.section.as_deref(), Some("server"));
+    }
+
+    #[test]
+    fn test_parse_too_many_args_errors() {
+        assert!(Info::parse(&[bulk("a"), bulk("b")]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Info::default().name(), "info");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Info::default().arity(), -1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Info::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+        assert!(flags.contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Info::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Info::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_no_section() {
+        let cmd = Info { section: None };
+        assert!(cmd.to_resp_args().is_empty());
+    }
+
+    #[test]
+    fn test_to_resp_args_with_section() {
+        let cmd = Info {
+            section: Some("server".into()),
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"server")]);
+    }
+}

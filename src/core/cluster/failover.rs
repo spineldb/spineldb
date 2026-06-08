@@ -360,3 +360,39 @@ async fn promote_to_master_internal(state: &Arc<ServerState>) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_failover_base_delay_ms() {
+        assert_eq!(FAILOVER_BASE_DELAY_MS, 500);
+    }
+
+    #[test]
+    fn test_min_quorum_to_elect() {
+        assert_eq!(MIN_QUORUM_TO_ELECT, 1);
+    }
+
+    #[test]
+    fn test_election_cooldown_ms() {
+        assert_eq!(ELECTION_COOLDOWN_MS, 30_000);
+    }
+
+    #[test]
+    fn test_constants_are_positive() {
+        const _CHECK: () = {
+            assert!(FAILOVER_BASE_DELAY_MS > 0);
+            assert!(MIN_QUORUM_TO_ELECT > 0);
+            assert!(ELECTION_COOLDOWN_MS > 0);
+        };
+    }
+
+    #[test]
+    fn test_election_cooldown_is_larger_than_base_delay() {
+        const _CHECK: () = {
+            assert!(ELECTION_COOLDOWN_MS > FAILOVER_BASE_DELAY_MS);
+        };
+    }
+}

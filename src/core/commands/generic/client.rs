@@ -265,3 +265,95 @@ impl CommandSpec for Client {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_client_parse_list() -> Result<(), SpinelDBError> {
+        let c = Client::parse(&[bs("list")]).unwrap();
+        assert!(matches!(c.subcommand, ClientSubcommand::List));
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_parse_setname() -> Result<(), SpinelDBError> {
+        let c = Client::parse(&[bs("setname"), bs("myclient")]).unwrap();
+        if let ClientSubcommand::SetName(n) = &c.subcommand {
+            assert_eq!(n.as_ref(), b"myclient");
+        } else {
+            panic!("Expected SetName subcommand");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_parse_getname() -> Result<(), SpinelDBError> {
+        let c = Client::parse(&[bs("getname")]).unwrap();
+        assert!(matches!(c.subcommand, ClientSubcommand::GetName));
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_parse_kill() -> Result<(), SpinelDBError> {
+        let c = Client::parse(&[bs("kill"), bs("123")]).unwrap();
+        assert!(matches!(c.subcommand, ClientSubcommand::Kill(123)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_parse_kill_invalid_id() {
+        let r = Client::parse(&[bs("kill"), bs("not_a_number")]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_client_parse_setinfo() -> Result<(), SpinelDBError> {
+        let c = Client::parse(&[
+            bs("setinfo"),
+            bs("LIB-NAME"),
+            bs("mylib"),
+            bs("LIB-VER"),
+            bs("1.0"),
+        ])
+        .unwrap();
+        if let ClientSubcommand::SetInfo { lib_name, lib_ver } = &c.subcommand {
+            assert_eq!(lib_name, &Some("mylib".to_string()));
+            assert_eq!(lib_ver, &Some("1.0".to_string()));
+        } else {
+            panic!("Expected SetInfo subcommand");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_parse_setinfo_invalid_arg_count() {
+        let r = Client::parse(&[bs("setinfo"), bs("LIB-NAME")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_client_parse_no_args() {
+        let r = Client::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_client_parse_unknown_subcommand() {
+        let r = Client::parse(&[bs("unknown")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_client_to_resp_args_list() -> Result<(), SpinelDBError> {
+        let c = Client::parse(&[bs("list")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"LIST")]);
+        Ok(())
+    }
+}

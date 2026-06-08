@@ -77,3 +77,18 @@ impl CacheTagValidatorTask {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validator_interval() {
+        assert_eq!(VALIDATOR_INTERVAL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_validator_sample_size() {
+        assert_eq!(VALIDATOR_SAMPLE_SIZE, 20);
+    }
+}

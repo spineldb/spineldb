@@ -132,3 +132,13 @@ impl AofRewriteManager {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aof_rewrite_check_interval() {
+        assert_eq!(AOF_REWRITE_CHECK_INTERVAL, Duration::from_secs(60));
+    }
+}

@@ -24,7 +24,7 @@ pub enum SetCondition {
 }
 
 /// Defines the TTL options for the `SET` command and its variants.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TtlOption {
     #[default]
     None, // No TTL option was provided; will remove existing TTL.
@@ -290,5 +290,235 @@ impl CommandSpec for Set {
             args.push("GET".into());
         }
         args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_set_parse_basic() {
+        let c = Set::parse(&[bs("k"), bs("v")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.value, Bytes::from_static(b"v"));
+        assert_eq!(c.ttl, TtlOption::None);
+        assert_eq!(c.condition, SetCondition::None);
+        assert!(!c.get);
+    }
+
+    #[test]
+    fn test_set_parse_ex() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("EX"), bs("10")]).unwrap();
+        assert_eq!(c.ttl, TtlOption::Seconds(10));
+    }
+
+    #[test]
+    fn test_set_parse_px() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("PX"), bs("1000")]).unwrap();
+        assert_eq!(c.ttl, TtlOption::Milliseconds(1000));
+    }
+
+    #[test]
+    fn test_set_parse_exat() {
+        let ts: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+        let ts_bytes = Bytes::from(ts.to_string());
+        let c = Set::parse(&[
+            bs("k"),
+            bs("v"),
+            bs("EXAT"),
+            RespFrame::BulkString(ts_bytes),
+        ])
+        .unwrap();
+        if let TtlOption::UnixSeconds(seconds) = c.ttl {
+            assert_eq!(seconds, ts);
+        } else {
+            panic!("Expected UnixSeconds");
+        }
+    }
+
+    #[test]
+    fn test_set_parse_pxat() {
+        let ts: u128 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            + 5000;
+        let ts_bytes = Bytes::from(ts.to_string());
+        let c = Set::parse(&[
+            bs("k"),
+            bs("v"),
+            bs("PXAT"),
+            RespFrame::BulkString(ts_bytes),
+        ])
+        .unwrap();
+        if let TtlOption::UnixMilliseconds(ms) = c.ttl {
+            assert_eq!(ms as u128, ts);
+        } else {
+            panic!("Expected UnixMilliseconds");
+        }
+    }
+
+    #[test]
+    fn test_set_parse_keepttl() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("KEEPTTL")]).unwrap();
+        assert_eq!(c.ttl, TtlOption::KeepExisting);
+    }
+
+    #[test]
+    fn test_set_parse_nx() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("NX")]).unwrap();
+        assert_eq!(c.condition, SetCondition::IfNotExists);
+    }
+
+    #[test]
+    fn test_set_parse_xx() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("XX")]).unwrap();
+        assert_eq!(c.condition, SetCondition::IfExists);
+    }
+
+    #[test]
+    fn test_set_parse_get() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("GET")]).unwrap();
+        assert!(c.get);
+    }
+
+    #[test]
+    fn test_set_parse_combined_options() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("NX"), bs("EX"), bs("10")]).unwrap();
+        assert_eq!(c.condition, SetCondition::IfNotExists);
+        assert_eq!(c.ttl, TtlOption::Seconds(10));
+    }
+
+    #[test]
+    fn test_set_parse_too_few_args() {
+        let r = Set::parse(&[bs("k")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_set_parse_empty_args() {
+        let r = Set::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_set_parse_multiple_ttl_options_is_error() {
+        let r = Set::parse(&[bs("k"), bs("v"), bs("EX"), bs("10"), bs("PX"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_set_parse_both_nx_and_xx_is_error() {
+        let r = Set::parse(&[bs("k"), bs("v"), bs("NX"), bs("XX")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_set_parse_unknown_option_is_error() {
+        let r = Set::parse(&[bs("k"), bs("v"), bs("UNKNOWN")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_basic() {
+        let c = Set::parse(&[bs("k"), bs("v")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_with_ex() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("EX"), bs("10")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[2], Bytes::from_static(b"EX"));
+        assert_eq!(args[3], Bytes::from_static(b"10"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_with_exat() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("EXAT"), bs("1234567890")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"EXAT"));
+        assert_eq!(args[3], Bytes::from_static(b"1234567890"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_with_keepttl() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("KEEPTTL")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"KEEPTTL"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_with_nx() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("NX")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"NX"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_with_xx() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("XX")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"XX"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_with_get() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("GET")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"GET"));
+    }
+
+    #[test]
+    fn test_set_to_resp_args_combined() {
+        let c = Set::parse(&[bs("k"), bs("v"), bs("NX"), bs("EX"), bs("10"), bs("GET")]).unwrap();
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 6);
+        // Order is: key, value, EX, 10 (TTL), NX (condition), GET (flag)
+        assert_eq!(args[0], Bytes::from_static(b"k"));
+        assert_eq!(args[1], Bytes::from_static(b"v"));
+        assert_eq!(args[2], Bytes::from_static(b"EX"));
+        assert_eq!(args[3], Bytes::from_static(b"10"));
+        assert_eq!(args[4], Bytes::from_static(b"NX"));
+        assert_eq!(args[5], Bytes::from_static(b"GET"));
+    }
+
+    #[test]
+    fn test_set_ttl_serialization() {
+        let c = Set {
+            key: Bytes::from_static(b"k"),
+            value: Bytes::from_static(b"v"),
+            ttl: TtlOption::Seconds(30),
+            ..Default::default()
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"EX"));
+        assert_eq!(args[3], Bytes::from_static(b"30"));
+    }
+
+    #[test]
+    fn test_set_px_ttl_serialization() {
+        let c = Set {
+            key: Bytes::from_static(b"k"),
+            value: Bytes::from_static(b"v"),
+            ttl: TtlOption::Milliseconds(500),
+            ..Default::default()
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[2], Bytes::from_static(b"PX"));
+        assert_eq!(args[3], Bytes::from_static(b"500"));
     }
 }

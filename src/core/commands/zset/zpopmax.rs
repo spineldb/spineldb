@@ -122,6 +122,9 @@ mod tests {
     fn test_zpopmax_to_resp_args_round_trips() {
         let c = ZPopMax::parse(&[bs("z"), bs("1")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"z"), Bytes::from_static(b"1")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"z"), Bytes::from_static(b"1")]
+        );
     }
 }

@@ -378,3 +378,198 @@ impl<'a> TransactionHandler<'a> {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::core::commands::string::Set;
+    use crate::test_helpers::init_server_state;
+
+    fn make_test_state_and_db() -> (Arc<ServerState>, Arc<Db>) {
+        let state = init_server_state(Config::default());
+        let db = state.get_db(0).unwrap();
+        (state, db)
+    }
+
+    #[test]
+    fn test_handle_multi_starts_transaction() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let result = handler.handle_multi();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RespValue::SimpleString("OK".into()));
+        assert!(db.tx_states.get(&session_id).unwrap().in_transaction);
+    }
+
+    #[test]
+    fn test_handle_multi_nested_fails() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let _ = handler.handle_multi();
+
+        let result = handler.handle_multi();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SpinelDBError::InvalidState(msg) => {
+                assert!(msg.contains("nested"))
+            }
+            other => panic!("Expected InvalidState error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_discard_aborts_transaction() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let _ = handler.handle_multi();
+        assert!(db.tx_states.get(&session_id).unwrap().in_transaction);
+
+        let result = handler.handle_discard();
+        assert!(result.is_ok());
+        // discard_transaction removes the entry entirely
+        assert!(db.tx_states.get(&session_id).is_none());
+    }
+
+    #[test]
+    fn test_handle_discard_without_multi_succeeds() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        // Per SpinelDB compatibility, DISCARD without MULTI is not an error.
+        let result = handler.handle_discard();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_watch_outside_multi() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let result = handler
+            .handle_watch(vec![Bytes::from_static(b"key1")])
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_watch_inside_multi_fails() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let _ = handler.handle_multi();
+
+        let result = handler
+            .handle_watch(vec![Bytes::from_static(b"key1")])
+            .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SpinelDBError::InvalidState(msg) => {
+                assert!(msg.contains("WATCH inside MULTI"))
+            }
+            other => panic!("Expected InvalidState error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_queueing_not_in_multi() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let cmd = Command::Ping(crate::core::commands::generic::Ping { message: None });
+        let result = handler.handle_queueing(cmd).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_queueing_in_multi() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let _ = handler.handle_multi();
+
+        let cmd = Command::Ping(crate::core::commands::generic::Ping { message: None });
+        let result = handler.handle_queueing(cmd).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RespValue::SimpleString("QUEUED".into()));
+    }
+
+    #[tokio::test]
+    async fn test_handle_queueing_sets_error_on_invalid_command() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let _ = handler.handle_multi();
+
+        let cmd = Command::Multi;
+        let result = handler.handle_queueing(cmd).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            RespValue::Error(msg) => {
+                assert!(msg.contains("cannot be used in a transaction"));
+            }
+            other => panic!("Expected Error response, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_collect_all_keys_from_watched_and_commands() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let mut tx_state = TransactionState {
+            in_transaction: true,
+            ..Default::default()
+        };
+        tx_state
+            .watched_keys
+            .insert(Bytes::from_static(b"watched_key"), Some(1));
+        tx_state.commands.push(Command::Set(Set {
+            key: Bytes::from_static(b"cmd_key"),
+            value: Bytes::from_static(b"val"),
+            ..Set::default()
+        }));
+
+        let keys = handler.collect_all_keys(&tx_state);
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&Bytes::from_static(b"watched_key")));
+        assert!(keys.contains(&Bytes::from_static(b"cmd_key")));
+    }
+
+    #[test]
+    fn test_collect_all_keys_deduplicates() {
+        let (state, db) = make_test_state_and_db();
+        let session_id = 1u64;
+        let handler = TransactionHandler::new(state, &db, session_id, None);
+
+        let mut tx_state = TransactionState {
+            in_transaction: true,
+            ..Default::default()
+        };
+        tx_state
+            .watched_keys
+            .insert(Bytes::from_static(b"same_key"), Some(1));
+        tx_state.commands.push(Command::Set(Set {
+            key: Bytes::from_static(b"same_key"),
+            value: Bytes::from_static(b"val"),
+            ..Set::default()
+        }));
+
+        let keys = handler.collect_all_keys(&tx_state);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], Bytes::from_static(b"same_key"));
+    }
+}

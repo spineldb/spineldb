@@ -106,3 +106,38 @@ impl CommandSpec for Memory {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_memory_parse_usage() -> Result<(), SpinelDBError> {
+        let c = Memory::parse(&[bs("usage"), bs("mykey")]).unwrap();
+        let MemorySubcommand::Usage(key) = &c.subcommand;
+        assert_eq!(key.as_ref(), b"mykey");
+        Ok(())
+    }
+
+    #[test]
+    fn test_memory_parse_usage_missing_key() {
+        let r = Memory::parse(&[bs("usage")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_memory_parse_no_args() {
+        let r = Memory::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_memory_parse_unknown_subcommand() {
+        let r = Memory::parse(&[bs("unknown")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+}

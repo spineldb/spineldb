@@ -106,3 +106,102 @@ fn format_node_info(node: &ClusterNode) -> Result<RespValue, SpinelDBError> {
         RespValue::BulkString(node.id.clone().into()),
     ]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::cluster::NodeFlags;
+
+    fn make_node(id: &str, addr: &str, flags: NodeFlags) -> ClusterNode {
+        ClusterNode {
+            id: id.to_string(),
+            addr: addr.to_string(),
+            bus_addr: "0.0.0.0:0".to_string(),
+            flags_raw: flags.bits(),
+            replica_of: None,
+            slots: BTreeSet::new(),
+            config_epoch: 0,
+            replication_offset: 0,
+            migrating_slots: BTreeMap::new(),
+            importing_slots: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_format_node_info_primary() {
+        let node = make_node("node1", "127.0.0.1:7000", NodeFlags::PRIMARY);
+        let result = format_node_info(&node).unwrap();
+        if let RespValue::Array(arr) = result {
+            assert_eq!(arr.len(), 3);
+            assert_eq!(arr[0], RespValue::BulkString("127.0.0.1".into()));
+            assert_eq!(arr[1], RespValue::Integer(7000));
+            assert_eq!(arr[2], RespValue::BulkString("node1".into()));
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn test_format_node_info_bad_addr_errors() {
+        let node = ClusterNode {
+            id: "n1".into(),
+            addr: "noport".into(),
+            bus_addr: "0.0.0.0:0".into(),
+            flags_raw: 0,
+            replica_of: None,
+            slots: BTreeSet::new(),
+            config_epoch: 0,
+            replication_offset: 0,
+            migrating_slots: BTreeMap::new(),
+            importing_slots: BTreeMap::new(),
+        };
+        assert!(format_node_info(&node).is_err());
+    }
+
+    #[test]
+    fn test_format_slot_range_no_replicas() {
+        let mut nodes = BTreeMap::new();
+        let master = make_node("m1", "10.0.0.1:6379", NodeFlags::PRIMARY);
+        nodes.insert("m1".to_string(), master);
+
+        let result = format_slot_range(0, 5460, "m1", &nodes).unwrap();
+        if let RespValue::Array(arr) = result {
+            assert_eq!(arr[0], RespValue::Integer(0));
+            assert_eq!(arr[1], RespValue::Integer(5460));
+            // Only master in the array
+            assert_eq!(arr.len(), 3);
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn test_format_slot_range_with_replica() {
+        let mut nodes = BTreeMap::new();
+        let mut master = make_node("m1", "10.0.0.1:6379", NodeFlags::PRIMARY);
+        master.slots.insert(0);
+        nodes.insert("m1".to_string(), master);
+
+        let mut replica = make_node("r1", "10.0.0.2:6379", NodeFlags::REPLICA);
+        replica.replica_of = Some("m1".to_string());
+        nodes.insert("r1".to_string(), replica);
+
+        let result = format_slot_range(0, 0, "m1", &nodes).unwrap();
+        if let RespValue::Array(arr) = result {
+            assert_eq!(arr.len(), 4); // start, end, master, replica
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn test_format_slot_range_missing_master() {
+        let nodes = BTreeMap::new();
+        let result = format_slot_range(0, 100, "nonexistent", &nodes).unwrap();
+        if let RespValue::Array(arr) = result {
+            assert_eq!(arr.len(), 2); // only start, end
+        } else {
+            panic!("expected array");
+        }
+    }
+}

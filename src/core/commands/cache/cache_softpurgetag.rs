@@ -115,3 +115,36 @@ impl CommandSpec for CacheSoftPurgeTag {
         self.tags.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_softpurgetag_parses_tags() -> Result<(), SpinelDBError> {
+        let c = CacheSoftPurgeTag::parse(&[bs("tag1"), bs("tag2")]).unwrap();
+        assert_eq!(c.tags.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_softpurgetag_no_args_is_error() {
+        let r = CacheSoftPurgeTag::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_softpurgetag_to_resp_args_returns_tags() -> Result<(), SpinelDBError> {
+        let c = CacheSoftPurgeTag::parse(&[bs("t1"), bs("t2")])?;
+        let args = c.to_resp_args();
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"t1"), Bytes::from_static(b"t2")]
+        );
+        Ok(())
+    }
+}

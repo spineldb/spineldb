@@ -63,3 +63,118 @@ pub fn calculate_variant_hash(vary_on: &[Bytes], headers: &Option<Vec<(Bytes, By
     }
     hasher.finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_accept_language_basic() {
+        let result = normalize_header_value(
+            &Bytes::from_static(b"accept-language"),
+            &Bytes::from_static(b"en-US,en;q=0.9, fr;q=0.8"),
+        );
+        assert_eq!(result, Bytes::from_static(b"en-us,en,fr"));
+    }
+
+    #[test]
+    fn test_normalize_accept_language_single() {
+        let result = normalize_header_value(
+            &Bytes::from_static(b"accept-language"),
+            &Bytes::from_static(b"en-US"),
+        );
+        assert_eq!(result, Bytes::from_static(b"en-us"));
+    }
+
+    #[test]
+    fn test_normalize_accept_encoding_basic() {
+        let result = normalize_header_value(
+            &Bytes::from_static(b"accept-encoding"),
+            &Bytes::from_static(b"gzip, deflate, br"),
+        );
+        assert_eq!(result, Bytes::from_static(b"br,deflate,gzip"));
+    }
+
+    #[test]
+    fn test_normalize_accept_encoding_with_q() {
+        let result = normalize_header_value(
+            &Bytes::from_static(b"accept-encoding"),
+            &Bytes::from_static(b"gzip;q=1.0, deflate;q=0.5"),
+        );
+        assert_eq!(result, Bytes::from_static(b"deflate,gzip"));
+    }
+
+    #[test]
+    fn test_normalize_other_header() {
+        let result = normalize_header_value(
+            &Bytes::from_static(b"x-custom"),
+            &Bytes::from_static(b"value"),
+        );
+        assert_eq!(result, Bytes::from_static(b"value"));
+    }
+
+    #[test]
+    fn test_calculate_variant_hash_empty_vary() {
+        let result = calculate_variant_hash(&[], &None);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_calculate_variant_hash_with_matching_header() {
+        let vary_on = vec![Bytes::from_static(b"accept-encoding")];
+        let headers = Some(vec![(
+            Bytes::from_static(b"accept-encoding"),
+            Bytes::from_static(b"gzip"),
+        )]);
+        let result = calculate_variant_hash(&vary_on, &headers);
+        assert!(result != 0);
+    }
+
+    #[test]
+    fn test_calculate_variant_hash_headers_sorted() {
+        let vary_on = vec![
+            Bytes::from_static(b"accept-encoding"),
+            Bytes::from_static(b"accept-language"),
+        ];
+        let headers = Some(vec![
+            (
+                Bytes::from_static(b"accept-language"),
+                Bytes::from_static(b"en"),
+            ),
+            (
+                Bytes::from_static(b"accept-encoding"),
+                Bytes::from_static(b"gzip"),
+            ),
+        ]);
+        let result = calculate_variant_hash(&vary_on, &headers);
+        assert!(result != 0);
+    }
+
+    #[test]
+    fn test_calculate_variant_hash_non_matching_header() {
+        // When vary_on is non-empty but no headers match, hasher is initialized but nothing is hashed.
+        // The result is still a deterministic hash (from empty hasher state).
+        let vary_on = vec![Bytes::from_static(b"accept-encoding")];
+        let result1 = calculate_variant_hash(
+            &vary_on,
+            &Some(vec![(
+                Bytes::from_static(b"x-custom"),
+                Bytes::from_static(b"value"),
+            )]),
+        );
+        let result2 = calculate_variant_hash(&vary_on, &None);
+        // Both should be the same since nothing gets hashed
+        assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn test_calculate_variant_hash_case_insensitive() {
+        let vary_on = vec![Bytes::from_static(b"Accept-Encoding")];
+        let headers = Some(vec![(
+            Bytes::from_static(b"accept-encoding"),
+            Bytes::from_static(b"gzip"),
+        )]);
+        let result = calculate_variant_hash(&vary_on, &headers);
+        assert!(result != 0);
+    }
+}

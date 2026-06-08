@@ -405,3 +405,73 @@ impl CommandSpec for CacheProxy {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_glob_to_regex_simple() {
+        assert_eq!(glob_to_regex("test"), r"^test$");
+    }
+
+    #[test]
+    fn test_glob_to_regex_with_star() {
+        assert_eq!(glob_to_regex("test*"), r"^test(.*)$");
+    }
+
+    #[test]
+    fn test_glob_to_regex_escape_chars() {
+        assert_eq!(glob_to_regex("test.com"), r"^test\.com$");
+    }
+
+    #[test]
+    fn test_cache_proxy_parses_key_and_url() -> Result<(), SpinelDBError> {
+        let c = CacheProxy::parse(&[bs("key"), bs("http://example.com/api")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"key"));
+        assert_eq!(c.url, Some("http://example.com/api".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_proxy_parses_key_only() -> Result<(), SpinelDBError> {
+        let c = CacheProxy::parse(&[bs("key")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"key"));
+        assert!(c.url.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_proxy_parses_options() -> Result<(), SpinelDBError> {
+        let c = CacheProxy::parse(&[
+            bs("key"),
+            bs("http://x"),
+            bs("TTL"),
+            bs("3600"),
+            bs("SWR"),
+            bs("60"),
+        ])
+        .unwrap();
+        assert_eq!(c.ttl, Some(3600));
+        assert_eq!(c.swr, Some(60));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_proxy_no_args_is_error() {
+        let r = CacheProxy::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_proxy_to_resp_args_is_empty() -> Result<(), SpinelDBError> {
+        let c = CacheProxy::parse(&[bs("key")])?;
+        let args = c.to_resp_args();
+        assert!(args.is_empty());
+        Ok(())
+    }
+}

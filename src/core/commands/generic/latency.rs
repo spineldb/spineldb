@@ -102,3 +102,119 @@ impl CommandSpec for Latency {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_errors() {
+        assert!(Latency::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn test_parse_doctor() {
+        let cmd = Latency::parse(&[bulk("DOCTOR")]).unwrap();
+        assert!(matches!(cmd.subcommand, LatencySubcommand::Doctor));
+    }
+
+    #[test]
+    fn test_parse_doctor_case_insensitive() {
+        let cmd = Latency::parse(&[bulk("doctor")]).unwrap();
+        assert!(matches!(cmd.subcommand, LatencySubcommand::Doctor));
+    }
+
+    #[test]
+    fn test_parse_doctor_extra_args_errors() {
+        assert!(Latency::parse(&[bulk("DOCTOR"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_history() {
+        let cmd = Latency::parse(&[bulk("HISTORY"), bulk("command")]).unwrap();
+        match &cmd.subcommand {
+            LatencySubcommand::History(e) => assert_eq!(e, "command"),
+            LatencySubcommand::Doctor => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn test_parse_history_no_event_errors() {
+        assert!(Latency::parse(&[bulk("HISTORY")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_history_extra_args_errors() {
+        assert!(Latency::parse(&[bulk("HISTORY"), bulk("event"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_subcommand_errors() {
+        assert!(Latency::parse(&[bulk("UNKNOWN")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_non_bulk_string_errors() {
+        assert!(Latency::parse(&[RespFrame::Integer(42)]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Latency::default().name(), "latency");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Latency::default().arity(), -2);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Latency::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+        assert!(flags.contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Latency::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Latency::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_doctor() {
+        let cmd = Latency {
+            subcommand: LatencySubcommand::Doctor,
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"DOCTOR")]);
+    }
+
+    #[test]
+    fn test_to_resp_args_history() {
+        let cmd = Latency {
+            subcommand: LatencySubcommand::History("command".into()),
+        };
+        assert_eq!(
+            cmd.to_resp_args(),
+            vec![
+                Bytes::from_static(b"HISTORY"),
+                Bytes::from_static(b"command")
+            ]
+        );
+    }
+}

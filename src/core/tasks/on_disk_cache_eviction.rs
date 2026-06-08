@@ -130,3 +130,13 @@ async fn get_manifest_path(state: &Arc<ServerState>) -> Result<PathBuf> {
     let cache_path = std::path::Path::new(&cache_path_str);
     Ok(cache_path.join("spineldb-cache.manifest"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eviction_interval() {
+        assert_eq!(EVICTION_INTERVAL, Duration::from_secs(10));
+    }
+}

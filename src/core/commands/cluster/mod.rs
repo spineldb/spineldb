@@ -394,13 +394,8 @@ mod tests {
 
     #[test]
     fn test_cluster_setslot_migrating() {
-        let c = ClusterInfo::parse(&[
-            bs("SETSLOT"),
-            bs("100"),
-            bs("MIGRATING"),
-            bs("node_id_1"),
-        ])
-        .unwrap();
+        let c = ClusterInfo::parse(&[bs("SETSLOT"), bs("100"), bs("MIGRATING"), bs("node_id_1")])
+            .unwrap();
         match c.subcommand {
             ClusterSubcommand::SetSlot(slot, SetSlotSubcommand::Migrating(id)) => {
                 assert_eq!(slot, 100);
@@ -412,13 +407,8 @@ mod tests {
 
     #[test]
     fn test_cluster_setslot_importing() {
-        let c = ClusterInfo::parse(&[
-            bs("SETSLOT"),
-            bs("100"),
-            bs("IMPORTING"),
-            bs("node_id_1"),
-        ])
-        .unwrap();
+        let c = ClusterInfo::parse(&[bs("SETSLOT"), bs("100"), bs("IMPORTING"), bs("node_id_1")])
+            .unwrap();
         match c.subcommand {
             ClusterSubcommand::SetSlot(_, SetSlotSubcommand::Importing(_)) => {}
             _ => panic!("expected SetSlot Importing"),
@@ -427,13 +417,8 @@ mod tests {
 
     #[test]
     fn test_cluster_setslot_node() {
-        let c = ClusterInfo::parse(&[
-            bs("SETSLOT"),
-            bs("100"),
-            bs("NODE"),
-            bs("node_id_1"),
-        ])
-        .unwrap();
+        let c =
+            ClusterInfo::parse(&[bs("SETSLOT"), bs("100"), bs("NODE"), bs("node_id_1")]).unwrap();
         match c.subcommand {
             ClusterSubcommand::SetSlot(_, SetSlotSubcommand::Node(_)) => {}
             _ => panic!("expected SetSlot Node"),
@@ -478,16 +463,14 @@ mod tests {
 
     #[test]
     fn test_cluster_reshard() {
-        let c = ClusterInfo::parse(&[
-            bs("RESHARD"),
-            bs("src"),
-            bs("dst"),
-            bs("100"),
-            bs("200"),
-        ])
-        .unwrap();
+        let c = ClusterInfo::parse(&[bs("RESHARD"), bs("src"), bs("dst"), bs("100"), bs("200")])
+            .unwrap();
         match c.subcommand {
-            ClusterSubcommand::Reshard { source_node_id, destination_node_id, slots } => {
+            ClusterSubcommand::Reshard {
+                source_node_id,
+                destination_node_id,
+                slots,
+            } => {
                 assert_eq!(source_node_id, "src");
                 assert_eq!(destination_node_id, "dst");
                 assert_eq!(slots, vec![100, 200]);

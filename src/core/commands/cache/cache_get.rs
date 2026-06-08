@@ -755,3 +755,151 @@ impl CommandSpec for CacheGet {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::protocol::RespFrame;
+
+    fn make_bulk_string(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_get_parses_key() -> Result<(), SpinelDBError> {
+        let args = [make_bulk_string("key1")];
+        let cmd = CacheGet::parse(&args)?;
+        assert_eq!(cmd.key, Bytes::from_static(b"key1"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_get_parses_revalidate() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("REVALIDATE"),
+            make_bulk_string("http://example.com/revalidate"),
+        ];
+        let cmd = CacheGet::parse(&args)?;
+        assert_eq!(
+            cmd.revalidate_url,
+            Some("http://example.com/revalidate".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_get_parses_if_none_match() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("IF-NONE-MATCH"),
+            make_bulk_string("\"abc123\""),
+        ];
+        let cmd = CacheGet::parse(&args)?;
+        assert_eq!(cmd.if_none_match, Some(Bytes::from_static(b"\"abc123\"")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_get_parses_if_modified_since() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("IF-MODIFIED-SINCE"),
+            make_bulk_string("Wed, 21 Oct 2015 07:28:00 GMT"),
+        ];
+        let cmd = CacheGet::parse(&args)?;
+        assert_eq!(
+            cmd.if_modified_since,
+            Some(Bytes::from_static(b"Wed, 21 Oct 2015 07:28:00 GMT"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_get_parses_force_revalidate_flag() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("FORCE-REVALIDATE"),
+        ];
+        let cmd = CacheGet::parse(&args)?;
+        assert!(cmd.force_revalidate);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_get_parses_headers() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("HEADERS"),
+            make_bulk_string("accept"),
+            make_bulk_string("text/html"),
+            make_bulk_string("accept-encoding"),
+            make_bulk_string("gzip"),
+        ];
+        let cmd = CacheGet::parse(&args)?;
+        assert_eq!(
+            cmd.headers,
+            Some(vec![
+                (
+                    Bytes::from_static(b"accept"),
+                    Bytes::from_static(b"text/html")
+                ),
+                (
+                    Bytes::from_static(b"accept-encoding"),
+                    Bytes::from_static(b"gzip")
+                )
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_get_wrong_arg_count() {
+        let args: [RespFrame; 0] = [];
+        let result = CacheGet::parse(&args);
+        assert!(matches!(result, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_parse_cache_control_max_age() {
+        let (ttl, swr) = parse_cache_control("max-age=3600");
+        assert_eq!(ttl, Some(3600));
+        assert_eq!(swr, None);
+    }
+
+    #[test]
+    fn test_parse_cache_control_s_maxage() {
+        let (ttl, swr) = parse_cache_control("s-maxage=7200");
+        assert_eq!(ttl, Some(7200));
+        assert_eq!(swr, None);
+    }
+
+    #[test]
+    fn test_parse_cache_control_stale_while_revalidate() {
+        let (ttl, swr) = parse_cache_control("max-age=3600, stale-while-revalidate=60");
+        assert_eq!(ttl, Some(3600));
+        assert_eq!(swr, Some(60));
+    }
+
+    #[test]
+    fn test_parse_cache_control_multiple_directives() {
+        let (ttl, swr) =
+            parse_cache_control("max-age=3600, stale-while-revalidate=60, must-revalidate");
+        assert_eq!(ttl, Some(3600));
+        assert_eq!(swr, Some(60));
+    }
+
+    #[test]
+    fn test_parse_cache_control_empty() {
+        let (ttl, swr) = parse_cache_control("");
+        assert_eq!(ttl, None);
+        assert_eq!(swr, None);
+    }
+
+    #[test]
+    fn test_parse_cache_control_invalid_number() {
+        let (ttl, swr) = parse_cache_control("max-age=invalid");
+        assert_eq!(ttl, None);
+        assert_eq!(swr, None);
+    }
+}

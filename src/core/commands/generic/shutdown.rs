@@ -92,3 +92,85 @@ impl CommandSpec for Shutdown {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_no_args() {
+        let cmd = Shutdown::parse(&[]).unwrap();
+        assert_eq!(cmd.name(), "shutdown");
+    }
+
+    #[test]
+    fn test_parse_save_option() {
+        let cmd = Shutdown::parse(&[bulk("SAVE")]).unwrap();
+        assert_eq!(cmd.name(), "shutdown");
+    }
+
+    #[test]
+    fn test_parse_nosave_option() {
+        let cmd = Shutdown::parse(&[bulk("NOSAVE")]).unwrap();
+        assert_eq!(cmd.name(), "shutdown");
+    }
+
+    #[test]
+    fn test_parse_save_case_insensitive() {
+        let cmd = Shutdown::parse(&[bulk("save")]).unwrap();
+        assert_eq!(cmd.name(), "shutdown");
+    }
+
+    #[test]
+    fn test_parse_nosave_case_insensitive() {
+        let cmd = Shutdown::parse(&[bulk("nosave")]).unwrap();
+        assert_eq!(cmd.name(), "shutdown");
+    }
+
+    #[test]
+    fn test_parse_invalid_option_errors() {
+        assert!(Shutdown::parse(&[bulk("INVALID")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_too_many_args_errors() {
+        assert!(Shutdown::parse(&[bulk("SAVE"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Shutdown.arity(), -1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Shutdown.flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Shutdown.get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Shutdown;
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_empty() {
+        assert!(Shutdown.to_resp_args().is_empty());
+    }
+}

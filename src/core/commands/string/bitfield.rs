@@ -419,3 +419,213 @@ impl CommandSpec for BitField {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bitfield_parse_empty_is_error() {
+        let r = BitField::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitfield_parse_single_key() {
+        let c = BitField::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+        assert!(c.operations.is_empty());
+    }
+
+    #[test]
+    fn test_bitfield_parse_get() {
+        let c = BitField::parse(&[bs("k"), bs("GET"), bs("i8"), bs("0")]).unwrap();
+        assert_eq!(c.operations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_parse_set() {
+        let c = BitField::parse(&[bs("k"), bs("SET"), bs("i16"), bs("0"), bs("100")]).unwrap();
+        assert_eq!(c.operations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_parse_incrby() {
+        let c = BitField::parse(&[bs("k"), bs("INCRBY"), bs("i32"), bs("0"), bs("5")]).unwrap();
+        assert_eq!(c.operations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_parse_overflow_wrap() {
+        let c = BitField::parse(&[bs("k"), bs("OVERFLOW"), bs("WRAP")]).unwrap();
+        assert_eq!(c.operations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_parse_overflow_sat() {
+        let c = BitField::parse(&[bs("k"), bs("OVERFLOW"), bs("SAT")]).unwrap();
+        assert_eq!(c.operations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_parse_overflow_fail() {
+        let c = BitField::parse(&[bs("k"), bs("OVERFLOW"), bs("FAIL")]).unwrap();
+        assert_eq!(c.operations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_parse_multiple_ops() {
+        let c = BitField::parse(&[
+            bs("k"),
+            bs("GET"),
+            bs("i8"),
+            bs("0"),
+            bs("SET"),
+            bs("i8"),
+            bs("8"),
+            bs("42"),
+        ])
+        .unwrap();
+        assert_eq!(c.operations.len(), 2);
+    }
+
+    #[test]
+    fn test_bitfield_parse_get_missing_args_is_error() {
+        let r = BitField::parse(&[bs("k"), bs("GET"), bs("i8")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_bitfield_parse_unknown_op_is_error() {
+        let r = BitField::parse(&[bs("k"), bs("UNKNOWN")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_bitfield_spec() {
+        let c = BitField {
+            key: Bytes::from_static(b"k"),
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "bitfield");
+        assert_eq!(c.arity(), -2);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 1);
+    }
+
+    #[test]
+    fn test_bitfield_to_resp_args_empty() {
+        let c = BitField {
+            key: Bytes::from_static(b"key"),
+            operations: vec![],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+    }
+
+    #[test]
+    fn test_bitfield_to_resp_args_get() {
+        let c = BitField {
+            key: Bytes::from_static(b"key"),
+            operations: vec![BitFieldOp::Get(
+                BitType {
+                    is_signed: true,
+                    bits: 8,
+                },
+                0,
+            )],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"GET"));
+    }
+
+    #[test]
+    fn test_bitfield_to_resp_args_set() {
+        let c = BitField {
+            key: Bytes::from_static(b"key"),
+            operations: vec![BitFieldOp::Set(
+                BitType {
+                    is_signed: false,
+                    bits: 16,
+                },
+                10,
+                1000,
+            )],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"SET"));
+    }
+
+    #[test]
+    fn test_bitfield_to_resp_args_incrby() {
+        let c = BitField {
+            key: Bytes::from_static(b"key"),
+            operations: vec![BitFieldOp::IncrBy(
+                BitType {
+                    is_signed: true,
+                    bits: 32,
+                },
+                0,
+                42,
+            )],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"INCRBY"));
+    }
+
+    #[test]
+    fn test_bitfield_to_resp_args_overflow() {
+        let c = BitField {
+            key: Bytes::from_static(b"key"),
+            operations: vec![BitFieldOp::Overflow(OverflowBehavior::Sat)],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[1], Bytes::from_static(b"OVERFLOW"));
+        assert_eq!(args[2], Bytes::from_static(b"SAT"));
+    }
+
+    #[test]
+    fn test_bit_type_from_str_signed() {
+        let bt = BitType::from_str("i8").unwrap();
+        assert!(bt.is_signed);
+        assert_eq!(bt.bits, 8);
+    }
+
+    #[test]
+    fn test_bit_type_from_str_unsigned() {
+        let bt = BitType::from_str("u16").unwrap();
+        assert!(!bt.is_signed);
+        assert_eq!(bt.bits, 16);
+    }
+
+    #[test]
+    fn test_bit_type_from_str_invalid_empty() {
+        assert!(BitType::from_str("").is_err());
+    }
+
+    #[test]
+    fn test_bit_type_from_str_invalid_prefix() {
+        assert!(BitType::from_str("x8").is_err());
+    }
+
+    #[test]
+    fn test_bit_type_from_str_zero_bits() {
+        assert!(BitType::from_str("i0").is_err());
+    }
+
+    #[test]
+    fn test_bit_type_from_str_too_many_bits_signed() {
+        assert!(BitType::from_str("i128").is_err());
+    }
+
+    #[test]
+    fn test_bit_type_from_str_u64_not_supported() {
+        assert!(BitType::from_str("u64").is_err());
+    }
+}

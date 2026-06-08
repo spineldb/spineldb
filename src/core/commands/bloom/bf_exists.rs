@@ -150,6 +150,9 @@ mod tests {
     fn test_bfexists_to_resp_args_round_trips() {
         let c = BfExists::parse(&[bs("k"), bs("item1")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"item1")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"item1")]
+        );
     }
 }

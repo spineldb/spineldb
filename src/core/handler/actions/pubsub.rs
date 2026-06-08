@@ -155,3 +155,172 @@ pub fn handle_punsubscribe(
     }
     Ok(RouteResponse::Multiple(responses))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::SessionState;
+    use std::collections::HashSet;
+
+    fn make_session() -> SessionState {
+        SessionState {
+            is_authenticated: true,
+            is_in_transaction: false,
+            is_asking: false,
+            is_subscribed: false,
+            is_pattern_subscribed: false,
+            subscribed_channels: HashSet::new(),
+            subscribed_patterns: HashSet::new(),
+            pubsub_receivers: Vec::new(),
+            current_db_index: 0,
+            authenticated_user: None,
+        }
+    }
+
+    #[test]
+    fn test_unsubscribe_empty_no_subs() {
+        let mut session = make_session();
+        let resp = handle_unsubscribe(vec![], &mut session).unwrap();
+        match resp {
+            RouteResponse::Multiple(arr) => {
+                assert_eq!(arr.len(), 1);
+                if let RespValue::Array(inner) = &arr[0] {
+                    assert_eq!(inner.len(), 3);
+                    assert_eq!(inner[1], RespValue::Null);
+                } else {
+                    panic!("expected array");
+                }
+            }
+            _ => panic!("expected Multiple"),
+        }
+    }
+
+    #[test]
+    fn test_unsubscribe_specific_channel() {
+        let mut session = make_session();
+        session.is_subscribed = true;
+        session
+            .subscribed_channels
+            .insert(Bytes::from_static(b"news"));
+        session
+            .subscribed_channels
+            .insert(Bytes::from_static(b"sports"));
+
+        let resp = handle_unsubscribe(vec![Bytes::from_static(b"news")], &mut session).unwrap();
+        match resp {
+            RouteResponse::Multiple(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert!(
+                    !session
+                        .subscribed_channels
+                        .contains(&Bytes::from_static(b"news"))
+                );
+                assert!(
+                    session
+                        .subscribed_channels
+                        .contains(&Bytes::from_static(b"sports"))
+                );
+            }
+            _ => panic!("expected Multiple"),
+        }
+    }
+
+    #[test]
+    fn test_unsubscribe_nonexistent_channel() {
+        let mut session = make_session();
+        let resp = handle_unsubscribe(vec![Bytes::from_static(b"nope")], &mut session).unwrap();
+        match resp {
+            RouteResponse::Multiple(arr) => {
+                assert!(arr.is_empty());
+            }
+            _ => panic!("expected Multiple"),
+        }
+    }
+
+    #[test]
+    fn test_unsubscribe_all_clears_subscription_flag() {
+        let mut session = make_session();
+        session.is_subscribed = true;
+        session.subscribed_channels.insert(Bytes::from_static(b"a"));
+
+        let _ = handle_unsubscribe(vec![], &mut session).unwrap();
+        assert!(session.subscribed_channels.is_empty());
+        assert!(!session.is_subscribed);
+    }
+
+    #[test]
+    fn test_punsubscribe_empty_no_subs() {
+        let mut session = make_session();
+        let resp = handle_punsubscribe(vec![], &mut session).unwrap();
+        match resp {
+            RouteResponse::Multiple(arr) => {
+                assert_eq!(arr.len(), 1);
+                if let RespValue::Array(inner) = &arr[0] {
+                    assert_eq!(inner[1], RespValue::Null);
+                } else {
+                    panic!("expected array");
+                }
+            }
+            _ => panic!("expected Multiple"),
+        }
+    }
+
+    #[test]
+    fn test_punsubscribe_specific_pattern() {
+        let mut session = make_session();
+        session.is_pattern_subscribed = true;
+        session
+            .subscribed_patterns
+            .insert(Bytes::from_static(b"news.*"));
+        session
+            .subscribed_patterns
+            .insert(Bytes::from_static(b"sports.*"));
+
+        let resp = handle_punsubscribe(vec![Bytes::from_static(b"news.*")], &mut session).unwrap();
+        match resp {
+            RouteResponse::Multiple(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert!(
+                    !session
+                        .subscribed_patterns
+                        .contains(&Bytes::from_static(b"news.*"))
+                );
+                assert!(
+                    session
+                        .subscribed_patterns
+                        .contains(&Bytes::from_static(b"sports.*"))
+                );
+            }
+            _ => panic!("expected Multiple"),
+        }
+    }
+
+    #[test]
+    fn test_punsubscribe_all_clears_flag() {
+        let mut session = make_session();
+        session.is_pattern_subscribed = true;
+        session
+            .subscribed_patterns
+            .insert(Bytes::from_static(b"a.*"));
+
+        let _ = handle_punsubscribe(vec![], &mut session).unwrap();
+        assert!(session.subscribed_patterns.is_empty());
+        assert!(!session.is_pattern_subscribed);
+    }
+
+    #[test]
+    fn test_unsubscribe_response_count_decrements() {
+        let mut session = make_session();
+        session.is_subscribed = true;
+        session.subscribed_channels.insert(Bytes::from_static(b"a"));
+        session.subscribed_channels.insert(Bytes::from_static(b"b"));
+
+        let resp = handle_unsubscribe(vec![Bytes::from_static(b"a")], &mut session).unwrap();
+        if let RouteResponse::Multiple(arr) = resp
+            && let RespValue::Array(inner) = &arr[0]
+            && let RespValue::Integer(count) = inner[2]
+        {
+            assert_eq!(count, 1); // 1 remaining sub
+        }
+    }
+}

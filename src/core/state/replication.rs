@@ -259,7 +259,12 @@ mod tests {
     fn test_replication_state_new_creates_fresh_state() {
         let s = ReplicationState::new("my-run-id".to_string());
         assert_eq!(s.replication_info.master_replid, "my-run-id");
-        assert_eq!(s.replication_info.master_repl_offset.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            s.replication_info
+                .master_repl_offset
+                .load(Ordering::Relaxed),
+            0
+        );
         assert!(s.poisoned_masters.is_empty());
     }
 
@@ -296,7 +301,8 @@ mod tests {
             .unwrap()
             .as_secs()
             + 86400;
-        s.poisoned_masters.insert("rt-master".to_string(), far_future);
+        s.poisoned_masters
+            .insert("rt-master".to_string(), far_future);
         s.save_poisoned_masters_to_disk().unwrap();
         // Load into a fresh state.
         let s2 = ReplicationState::new("test-rt2".to_string());

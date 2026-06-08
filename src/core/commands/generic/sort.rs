@@ -532,3 +532,308 @@ impl CommandSpec for Sort {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_args_errors() {
+        let result = Sort::parse(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_minimal() {
+        let args = vec![bulk("mylist")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.key, Bytes::from_static(b"mylist"));
+        assert!(cmd.by_pattern.is_none());
+        assert!(cmd.limit.is_none());
+        assert!(cmd.get_patterns.is_empty());
+        assert_eq!(cmd.order, SortOrder::Asc);
+        assert!(!cmd.alpha);
+        assert!(cmd.store_destination.is_none());
+    }
+
+    #[test]
+    fn test_parse_with_by_pattern() {
+        let args = vec![bulk("mylist"), bulk("BY"), bulk("weight_*")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.by_pattern, Some(Bytes::from_static(b"weight_*")));
+    }
+
+    #[test]
+    fn test_parse_by_without_pattern_errors() {
+        let args = vec![bulk("mylist"), bulk("BY")];
+        assert!(Sort::parse(&args).is_err());
+    }
+
+    #[test]
+    fn test_parse_with_limit() {
+        let args = vec![bulk("mylist"), bulk("LIMIT"), bulk("10"), bulk("5")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.limit, Some((10, 5)));
+    }
+
+    #[test]
+    fn test_parse_limit_missing_count_errors() {
+        let args = vec![bulk("mylist"), bulk("LIMIT"), bulk("10")];
+        assert!(Sort::parse(&args).is_err());
+    }
+
+    #[test]
+    fn test_parse_limit_non_numeric_errors() {
+        let args = vec![bulk("mylist"), bulk("LIMIT"), bulk("abc"), bulk("5")];
+        assert!(Sort::parse(&args).is_err());
+    }
+
+    #[test]
+    fn test_parse_with_get_pattern() {
+        let args = vec![bulk("mylist"), bulk("GET"), bulk("#")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.get_patterns, vec![Bytes::from_static(b"#")]);
+    }
+
+    #[test]
+    fn test_parse_multiple_get_patterns() {
+        let args = vec![
+            bulk("mylist"),
+            bulk("GET"),
+            bulk("#"),
+            bulk("GET"),
+            bulk("name_*"),
+        ];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.get_patterns.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_get_without_pattern_errors() {
+        let args = vec![bulk("mylist"), bulk("GET")];
+        assert!(Sort::parse(&args).is_err());
+    }
+
+    #[test]
+    fn test_parse_asc() {
+        let args = vec![bulk("mylist"), bulk("ASC")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.order, SortOrder::Asc);
+    }
+
+    #[test]
+    fn test_parse_desc() {
+        let args = vec![bulk("mylist"), bulk("DESC")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.order, SortOrder::Desc);
+    }
+
+    #[test]
+    fn test_parse_alpha() {
+        let args = vec![bulk("mylist"), bulk("ALPHA")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert!(cmd.alpha);
+    }
+
+    #[test]
+    fn test_parse_store() {
+        let args = vec![bulk("mylist"), bulk("STORE"), bulk("dest")];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.store_destination, Some(Bytes::from_static(b"dest")));
+    }
+
+    #[test]
+    fn test_parse_store_without_dest_errors() {
+        let args = vec![bulk("mylist"), bulk("STORE")];
+        assert!(Sort::parse(&args).is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_option_errors() {
+        let args = vec![bulk("mylist"), bulk("UNKNOWN")];
+        assert!(Sort::parse(&args).is_err());
+    }
+
+    #[test]
+    fn test_parse_combined_options() {
+        let args = vec![
+            bulk("mylist"),
+            bulk("BY"),
+            bulk("weight_*"),
+            bulk("LIMIT"),
+            bulk("0"),
+            bulk("10"),
+            bulk("GET"),
+            bulk("#"),
+            bulk("DESC"),
+            bulk("ALPHA"),
+            bulk("STORE"),
+            bulk("result"),
+        ];
+        let cmd = Sort::parse(&args).unwrap();
+        assert_eq!(cmd.key, Bytes::from_static(b"mylist"));
+        assert_eq!(cmd.by_pattern, Some(Bytes::from_static(b"weight_*")));
+        assert_eq!(cmd.limit, Some((0, 10)));
+        assert_eq!(cmd.get_patterns, vec![Bytes::from_static(b"#")]);
+        assert_eq!(cmd.order, SortOrder::Desc);
+        assert!(cmd.alpha);
+        assert_eq!(cmd.store_destination, Some(Bytes::from_static(b"result")));
+    }
+
+    #[test]
+    fn test_command_spec_name() {
+        let cmd = Sort::default();
+        assert_eq!(CommandSpec::name(&cmd), "sort");
+    }
+
+    #[test]
+    fn test_command_spec_arity() {
+        let cmd = Sort::default();
+        assert_eq!(CommandSpec::arity(&cmd), -2);
+    }
+
+    #[test]
+    fn test_command_spec_flags_readonly_without_store() {
+        let cmd = Sort::default();
+        let flags = CommandSpec::flags(&cmd);
+        assert!(flags.contains(CommandFlags::READONLY));
+        assert!(!flags.contains(CommandFlags::WRITE));
+    }
+
+    #[test]
+    fn test_command_spec_flags_write_with_store() {
+        let cmd = Sort {
+            store_destination: Some(Bytes::from_static(b"dest")),
+            ..Default::default()
+        };
+        let flags = CommandSpec::flags(&cmd);
+        assert!(flags.contains(CommandFlags::WRITE));
+        assert!(!flags.contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_command_spec_get_keys_without_store() {
+        let cmd = Sort {
+            key: Bytes::from_static(b"mylist"),
+            ..Default::default()
+        };
+        assert_eq!(cmd.get_keys(), vec![Bytes::from_static(b"mylist")]);
+    }
+
+    #[test]
+    fn test_command_spec_get_keys_with_store() {
+        let cmd = Sort {
+            key: Bytes::from_static(b"mylist"),
+            store_destination: Some(Bytes::from_static(b"dest")),
+            ..Default::default()
+        };
+        assert_eq!(
+            cmd.get_keys(),
+            vec![Bytes::from_static(b"mylist"), Bytes::from_static(b"dest")]
+        );
+    }
+
+    #[test]
+    fn test_to_resp_args_minimal() {
+        let cmd = Sort {
+            key: Bytes::from_static(b"k"),
+            ..Default::default()
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"k")]);
+    }
+
+    #[test]
+    fn test_to_resp_args_full() {
+        let cmd = Sort {
+            key: Bytes::from_static(b"k"),
+            by_pattern: Some(Bytes::from_static(b"by_*")),
+            limit: Some((0, 5)),
+            get_patterns: vec![Bytes::from_static(b"#")],
+            order: SortOrder::Desc,
+            alpha: true,
+            store_destination: Some(Bytes::from_static(b"dest")),
+        };
+        let args = cmd.to_resp_args();
+        assert!(args.contains(&Bytes::from_static(b"BY")));
+        assert!(args.contains(&Bytes::from_static(b"DESC")));
+        assert!(args.contains(&Bytes::from_static(b"ALPHA")));
+        assert!(args.contains(&Bytes::from_static(b"STORE")));
+    }
+
+    #[test]
+    fn test_apply_limit_no_limit() {
+        let cmd = Sort::default();
+        let items: Vec<(SortableWeight, Bytes)> = vec![
+            (
+                SortableWeight::Numeric(NotNan::new(1.0).unwrap()),
+                Bytes::from_static(b"a"),
+            ),
+            (
+                SortableWeight::Numeric(NotNan::new(2.0).unwrap()),
+                Bytes::from_static(b"b"),
+            ),
+        ];
+        let result = cmd.apply_limit(items.clone());
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_limit_with_limit() {
+        let cmd = Sort {
+            limit: Some((1, 2)),
+            ..Default::default()
+        };
+        let items: Vec<(SortableWeight, Bytes)> = vec![
+            (
+                SortableWeight::Numeric(NotNan::new(1.0).unwrap()),
+                Bytes::from_static(b"a"),
+            ),
+            (
+                SortableWeight::Numeric(NotNan::new(2.0).unwrap()),
+                Bytes::from_static(b"b"),
+            ),
+            (
+                SortableWeight::Numeric(NotNan::new(3.0).unwrap()),
+                Bytes::from_static(b"c"),
+            ),
+            (
+                SortableWeight::Numeric(NotNan::new(4.0).unwrap()),
+                Bytes::from_static(b"d"),
+            ),
+        ];
+        let result = cmd.apply_limit(items);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].1, Bytes::from_static(b"b"));
+        assert_eq!(result[1].1, Bytes::from_static(b"c"));
+    }
+
+    #[test]
+    fn test_resolve_pattern_simple() {
+        let cmd = Sort::default();
+        let (key, field) =
+            cmd.resolve_pattern(&Bytes::from_static(b"object_*"), &Bytes::from_static(b"42"));
+        assert_eq!(key, Bytes::from_static(b"object_42"));
+        assert!(field.is_none());
+    }
+
+    #[test]
+    fn test_resolve_pattern_with_arrow() {
+        let cmd = Sort::default();
+        let (key, field) = cmd.resolve_pattern(
+            &Bytes::from_static(b"object_*->weight"),
+            &Bytes::from_static(b"42"),
+        );
+        assert_eq!(key, Bytes::from_static(b"object_42"));
+        assert_eq!(field, Some(Bytes::from_static(b"weight")));
+    }
+
+    #[test]
+    fn test_sort_order_default_is_asc() {
+        assert_eq!(SortOrder::default(), SortOrder::Asc);
+    }
+}

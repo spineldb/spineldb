@@ -147,3 +147,31 @@ impl CacheRevalidator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_revalidator_interval() {
+        assert_eq!(CACHE_REVALIDATOR_INTERVAL, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_revalidator_sample_size() {
+        assert_eq!(CACHE_REVALIDATOR_SAMPLE_SIZE, 20);
+    }
+
+    #[test]
+    fn test_revalidator_pre_warm_window() {
+        assert_eq!(CACHE_REVALIDATOR_PRE_WARM_WINDOW, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_revalidator_sample_size_is_reasonable() {
+        const _CHECK: () = {
+            assert!(CACHE_REVALIDATOR_SAMPLE_SIZE > 0);
+            assert!(CACHE_REVALIDATOR_SAMPLE_SIZE <= 1000);
+        };
+    }
+}

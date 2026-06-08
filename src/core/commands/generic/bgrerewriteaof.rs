@@ -78,3 +78,52 @@ impl CommandSpec for BgRewriteAof {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    #[test]
+    fn test_parse_no_args() {
+        let cmd = BgRewriteAof::parse(&[]).unwrap();
+        assert_eq!(cmd.name(), "bgrewriteaof");
+    }
+
+    #[test]
+    fn test_parse_with_args_errors() {
+        assert!(BgRewriteAof::parse(&[RespFrame::BulkString(bytes::Bytes::from("x"))]).is_err());
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(BgRewriteAof.arity(), 1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = BgRewriteAof.flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(BgRewriteAof.get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = BgRewriteAof;
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_empty() {
+        assert!(BgRewriteAof.to_resp_args().is_empty());
+    }
+}

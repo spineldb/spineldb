@@ -15,6 +15,7 @@ use crate::core::{Command, RespValue, SpinelDBError};
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -570,9 +571,220 @@ impl ServerState {
                 reason
             );
         } else {
-            info!("Server exiting emergency read-only mode.");
+            info!("Server leaving emergency read-only mode.");
         }
-        self.is_emergency_read_only
-            .store(value, std::sync::atomic::Ordering::SeqCst);
+        self.is_emergency_read_only.store(value, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_waiter(
+        mgr: &BlockerManager,
+        key: &Bytes,
+        session_id: u64,
+    ) -> oneshot::Receiver<WokenValue> {
+        let (tx, rx) = oneshot::channel();
+        let waker: SharedWaker = Arc::new(Mutex::new(Some(tx)));
+        let info = WaiterInfo { session_id, waker };
+        mgr.waiters.entry(key.clone()).or_default().push_back(info);
+        rx
+    }
+
+    #[test]
+    fn test_new_blocker_manager_is_empty() {
+        let mgr = BlockerManager::new();
+        assert!(mgr.waiters.is_empty());
+    }
+
+    #[test]
+    fn test_default_matches_new() {
+        let mgr = BlockerManager::default();
+        assert!(mgr.waiters.is_empty());
+    }
+
+    #[test]
+    fn test_notify_and_consume_for_push_no_waiters_returns_none() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"mykey");
+        let values = vec![Bytes::from_static(b"val")];
+        assert!(mgr.notify_and_consume_for_push(&key, &values).is_none());
+    }
+
+    #[test]
+    fn test_notify_and_consume_for_push_with_waiter_notifies() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"mykey");
+        let mut rx = push_waiter(&mgr, &key, 1);
+        let values = vec![Bytes::from_static(b"val1")];
+        let result = mgr.notify_and_consume_for_push(&key, &values);
+        assert_eq!(result, Some(0));
+        let woken = rx.try_recv().unwrap();
+        match woken {
+            WokenValue::List(popped) => {
+                assert_eq!(popped.key, key);
+                assert_eq!(popped.value, Bytes::from_static(b"val1"));
+            }
+            _ => panic!("Expected List woken value"),
+        }
+    }
+
+    #[test]
+    fn test_notify_and_consume_for_push_multiple_values() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"mykey");
+        let _rx = push_waiter(&mgr, &key, 1);
+        let values = vec![
+            Bytes::from_static(b"v1"),
+            Bytes::from_static(b"v2"),
+            Bytes::from_static(b"v3"),
+        ];
+        let result = mgr.notify_and_consume_for_push(&key, &values);
+        assert_eq!(result, Some(2));
+    }
+
+    #[test]
+    fn test_notify_and_consume_for_push_cleans_stale_waiters() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"mykey");
+        let (tx, _rx) = oneshot::channel::<WokenValue>();
+        let waker: SharedWaker = Arc::new(Mutex::new(Some(tx)));
+        let info = WaiterInfo {
+            session_id: 1,
+            waker: waker.clone(),
+        };
+        mgr.waiters.entry(key.clone()).or_default().push_back(info);
+        drop(_rx);
+        let values = vec![Bytes::from_static(b"v1")];
+        let _ = mgr.notify_and_consume_for_push(&key, &values);
+    }
+
+    #[test]
+    fn test_wake_waiters_for_modification_no_waiters() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"mykey");
+        mgr.wake_waiters_for_modification(&key);
+    }
+
+    #[test]
+    fn test_wake_waiters_for_modification_notifies_waiters() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"mykey");
+        let mut rx1 = push_waiter(&mgr, &key, 1);
+        let mut rx2 = push_waiter(&mgr, &key, 2);
+        mgr.wake_waiters_for_modification(&key);
+        assert!(rx1.try_recv().is_ok());
+        assert!(rx2.try_recv().is_ok());
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session() {
+        let mgr = BlockerManager::new();
+        let key1 = Bytes::from_static(b"k1");
+        let key2 = Bytes::from_static(b"k2");
+        let _r1 = push_waiter(&mgr, &key1, 42);
+        let _r2 = push_waiter(&mgr, &key2, 99);
+        mgr.remove_waiters_for_session(42);
+        assert!(!mgr.waiters.contains_key(&key1));
+        assert!(mgr.waiters.contains_key(&key2));
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session_no_matches() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r = push_waiter(&mgr, &key, 1);
+        mgr.remove_waiters_for_session(999);
+        assert!(mgr.waiters.contains_key(&key));
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session_removes_empty_queues() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r = push_waiter(&mgr, &key, 1);
+        mgr.remove_waiters_for_session(1);
+        assert!(!mgr.waiters.contains_key(&key));
+    }
+
+    #[test]
+    fn test_remove_waiters_for_session_keeps_other_sessions() {
+        let mgr = BlockerManager::new();
+        let key = Bytes::from_static(b"k");
+        let _r1 = push_waiter(&mgr, &key, 1);
+        let _r2 = push_waiter(&mgr, &key, 2);
+        mgr.remove_waiters_for_session(1);
+        let q = mgr.waiters.get(&key).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].session_id, 2);
+    }
+
+    #[test]
+    fn test_popped_value_clone() {
+        let pv = PoppedValue {
+            key: Bytes::from_static(b"k"),
+            value: Bytes::from_static(b"v"),
+        };
+        let cloned = pv.clone();
+        assert_eq!(cloned.key, pv.key);
+        assert_eq!(cloned.value, pv.value);
+    }
+
+    #[test]
+    fn test_zset_popped_value_clone() {
+        let pv = ZSetPoppedValue {
+            key: Bytes::from_static(b"k"),
+            member: Bytes::from_static(b"m"),
+            score: std::f64::consts::PI,
+        };
+        let cloned = pv.clone();
+        assert_eq!(cloned.key, pv.key);
+        assert_eq!(cloned.member, pv.member);
+        assert_eq!(cloned.score, pv.score);
+    }
+
+    #[test]
+    fn test_woken_value_list_clone() {
+        let wv = WokenValue::List(PoppedValue {
+            key: Bytes::from_static(b"k"),
+            value: Bytes::from_static(b"v"),
+        });
+        let cloned = wv.clone();
+        match cloned {
+            WokenValue::List(p) => {
+                assert_eq!(p.key, Bytes::from_static(b"k"));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_woken_value_zset_clone() {
+        let wv = WokenValue::ZSet(ZSetPoppedValue {
+            key: Bytes::from_static(b"k"),
+            member: Bytes::from_static(b"m"),
+            score: 1.0,
+        });
+        let cloned = wv.clone();
+        match cloned {
+            WokenValue::ZSet(p) => {
+                assert_eq!(p.score, 1.0);
+            }
+            _ => panic!("Expected ZSet"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_keys_waiters_independent() {
+        let mgr = BlockerManager::new();
+        let k1 = Bytes::from_static(b"key1");
+        let k2 = Bytes::from_static(b"key2");
+        let mut rx1 = push_waiter(&mgr, &k1, 1);
+        let mut rx2 = push_waiter(&mgr, &k2, 2);
+        mgr.wake_waiters_for_modification(&k1);
+        assert!(rx1.try_recv().is_ok());
+        assert!(rx2.try_recv().is_err());
     }
 }

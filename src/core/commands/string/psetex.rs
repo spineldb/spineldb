@@ -84,3 +84,67 @@ impl CommandSpec for PSetEx {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_psetex_parse_valid() {
+        let c = PSetEx::parse(&[bs("k"), bs("100"), bs("v")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"k"));
+        assert_eq!(c.milliseconds, 100);
+        assert_eq!(c.value, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_psetex_parse_zero_milliseconds_is_error() {
+        let r = PSetEx::parse(&[bs("k"), bs("0"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_psetex_parse_too_few_args_is_error() {
+        let r = PSetEx::parse(&[bs("k"), bs("100")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_psetex_parse_too_many_args_is_error() {
+        let r = PSetEx::parse(&[bs("k"), bs("100"), bs("v"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_psetex_parse_non_numeric_ms_is_error() {
+        let r = PSetEx::parse(&[bs("k"), bs("soon"), bs("v")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_psetex_to_resp_args() {
+        let c = PSetEx {
+            key: Bytes::from_static(b"key"),
+            milliseconds: 500,
+            value: Bytes::from_static(b"val"),
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[1], Bytes::from_static(b"500"));
+    }
+
+    #[test]
+    fn test_psetex_spec() {
+        let c = PSetEx {
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "psetex");
+        assert_eq!(c.arity(), 4);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 1);
+    }
+}

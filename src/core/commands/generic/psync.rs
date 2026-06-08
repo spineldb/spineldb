@@ -65,3 +65,82 @@ impl CommandSpec for Psync {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_too_few_args_errors() {
+        assert!(Psync::parse(&[]).is_err());
+        assert!(Psync::parse(&[bulk("abc")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_valid() {
+        let cmd = Psync::parse(&[bulk("abc123"), bulk("0")]).unwrap();
+        assert_eq!(cmd.replication_id, "abc123");
+        assert_eq!(cmd.offset, "0");
+    }
+
+    #[test]
+    fn test_parse_questionmark() {
+        let cmd = Psync::parse(&[bulk("?"), bulk("-1")]).unwrap();
+        assert_eq!(cmd.replication_id, "?");
+        assert_eq!(cmd.offset, "-1");
+    }
+
+    #[test]
+    fn test_parse_too_many_args_errors() {
+        assert!(Psync::parse(&[bulk("a"), bulk("0"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Psync::default().name(), "psync");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Psync::default().arity(), 3);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Psync::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Psync::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Psync::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args() {
+        let cmd = Psync {
+            replication_id: "abc".into(),
+            offset: "100".into(),
+        };
+        assert_eq!(
+            cmd.to_resp_args(),
+            vec![Bytes::from_static(b"abc"), Bytes::from_static(b"100")]
+        );
+    }
+}

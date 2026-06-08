@@ -154,3 +154,33 @@ impl CommandSpec for CachePurgeTag {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_purgetag_parses_tags() -> Result<(), SpinelDBError> {
+        let c = CachePurgeTag::parse(&[bs("tag1"), bs("tag2")]).unwrap();
+        assert_eq!(c.tags.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_purgetag_no_args_is_error() {
+        let r = CachePurgeTag::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_purgetag_to_resp_args_includes_command_name() -> Result<(), SpinelDBError> {
+        let c = CachePurgeTag::parse(&[bs("tag1")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"CACHE.PURGETAG"));
+        Ok(())
+    }
+}

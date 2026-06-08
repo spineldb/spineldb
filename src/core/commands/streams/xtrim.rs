@@ -231,14 +231,26 @@ mod tests {
     fn test_xtrim_maxlen_exact() {
         let c = XTrim::parse(&[bs("k"), bs("MAXLEN"), bs("100")]).unwrap();
         assert_eq!(c.key, Bytes::from_static(b"k"));
-        assert!(matches!(c.strategy, TrimStrategy::MaxLen { approx: false, count: 100 }));
+        assert!(matches!(
+            c.strategy,
+            TrimStrategy::MaxLen {
+                approx: false,
+                count: 100
+            }
+        ));
         assert!(c.limit.is_none());
     }
 
     #[test]
     fn test_xtrim_maxlen_approximate() {
         let c = XTrim::parse(&[bs("k"), bs("MAXLEN"), bs("~"), bs("100")]).unwrap();
-        assert!(matches!(c.strategy, TrimStrategy::MaxLen { approx: true, count: 100 }));
+        assert!(matches!(
+            c.strategy,
+            TrimStrategy::MaxLen {
+                approx: true,
+                count: 100
+            }
+        ));
     }
 
     #[test]
@@ -253,7 +265,10 @@ mod tests {
     #[test]
     fn test_xtrim_minid_approximate() {
         let c = XTrim::parse(&[bs("k"), bs("MINID"), bs("~"), bs("1-0")]).unwrap();
-        assert!(matches!(c.strategy, TrimStrategy::MinId { approx: true, .. }));
+        assert!(matches!(
+            c.strategy,
+            TrimStrategy::MinId { approx: true, .. }
+        ));
     }
 
     #[test]
@@ -265,7 +280,10 @@ mod tests {
     #[test]
     fn test_xtrim_strategy_case_insensitive() {
         let c = XTrim::parse(&[bs("k"), bs("maxlen"), bs("100")]).unwrap();
-        assert!(matches!(c.strategy, TrimStrategy::MaxLen { count: 100, .. }));
+        assert!(matches!(
+            c.strategy,
+            TrimStrategy::MaxLen { count: 100, .. }
+        ));
     }
 
     #[test]

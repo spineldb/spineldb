@@ -456,7 +456,12 @@ mod tests {
     fn test_xgroup_create() {
         let c = XGroup::parse(&[bs("CREATE"), bs("k"), bs("g1"), bs("0")]).unwrap();
         match c.subcommand {
-            XGroupSubcommand::Create { key, group_name, id, mkstream } => {
+            XGroupSubcommand::Create {
+                key,
+                group_name,
+                id,
+                mkstream,
+            } => {
                 assert_eq!(key, Bytes::from_static(b"k"));
                 assert_eq!(group_name, Bytes::from_static(b"g1"));
                 assert_eq!(id, StreamId::new(0, 0));
@@ -501,7 +506,11 @@ mod tests {
     fn test_xgroup_setid() {
         let c = XGroup::parse(&[bs("SETID"), bs("k"), bs("g1"), bs("1-0")]).unwrap();
         match c.subcommand {
-            XGroupSubcommand::SetId { key, group_name, id } => {
+            XGroupSubcommand::SetId {
+                key,
+                group_name,
+                id,
+            } => {
                 assert_eq!(key, Bytes::from_static(b"k"));
                 assert_eq!(group_name, Bytes::from_static(b"g1"));
                 assert_eq!(id, StreamId::new(1, 0));
@@ -538,7 +547,11 @@ mod tests {
     fn test_xgroup_delconsumer() {
         let c = XGroup::parse(&[bs("DELCONSUMER"), bs("k"), bs("g1"), bs("c1")]).unwrap();
         match c.subcommand {
-            XGroupSubcommand::DelConsumer { key, group_name, consumer_name } => {
+            XGroupSubcommand::DelConsumer {
+                key,
+                group_name,
+                consumer_name,
+            } => {
                 assert_eq!(key, Bytes::from_static(b"k"));
                 assert_eq!(group_name, Bytes::from_static(b"g1"));
                 assert_eq!(consumer_name, Bytes::from_static(b"c1"));

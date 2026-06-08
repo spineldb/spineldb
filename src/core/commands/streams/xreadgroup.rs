@@ -408,7 +408,10 @@ mod tests {
             bs("0-0"),
         ])
         .unwrap();
-        assert_eq!(c.streams[0].1, GroupStreamIdSpec::Exact(StreamId::new(0, 0)));
+        assert_eq!(
+            c.streams[0].1,
+            GroupStreamIdSpec::Exact(StreamId::new(0, 0))
+        );
     }
 
     #[test]
@@ -473,7 +476,10 @@ mod tests {
         .unwrap();
         assert_eq!(c.streams.len(), 2);
         assert_eq!(c.streams[0].1, GroupStreamIdSpec::New);
-        assert_eq!(c.streams[1].1, GroupStreamIdSpec::Exact(StreamId::new(0, 0)));
+        assert_eq!(
+            c.streams[1].1,
+            GroupStreamIdSpec::Exact(StreamId::new(0, 0))
+        );
     }
 
     #[test]

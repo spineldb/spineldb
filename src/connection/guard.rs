@@ -76,3 +76,88 @@ impl Drop for ConnectionGuard {
             .remove_waiters_for_session(self.session_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::test_helpers::init_server_state;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn test_connection_guard_new_creates_with_defaults() {
+        let state = init_server_state(Config::default());
+        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let guard = ConnectionGuard::new(state, 42, addr);
+        assert_eq!(guard.session_id, 42);
+        assert_eq!(guard.addr, addr);
+        assert!(!guard.is_handed_off);
+    }
+
+    #[test]
+    fn test_set_handed_off_flag() {
+        let state = init_server_state(Config::default());
+        let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let mut guard = ConnectionGuard::new(state, 1, addr);
+        assert!(!guard.is_handed_off);
+        guard.set_handed_off();
+        assert!(guard.is_handed_off);
+    }
+
+    #[test]
+    fn test_guard_drop_removes_client_from_map() {
+        let state = init_server_state(Config::default());
+        let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let session_id = 99u64;
+
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let client_info = Arc::new(tokio::sync::Mutex::new(crate::core::state::ClientInfo {
+            addr,
+            session_id,
+            name: None,
+            db_index: 0,
+            role: crate::core::state::ClientRole::Normal,
+            created: std::time::Instant::now(),
+            last_command_time: std::time::Instant::now(),
+            library_name: None,
+            library_version: None,
+        }));
+        state.clients.insert(session_id, (client_info, shutdown_tx));
+
+        assert!(state.clients.contains_key(&session_id));
+
+        {
+            let _guard = ConnectionGuard::new(state.clone(), session_id, addr);
+            assert!(state.clients.contains_key(&session_id));
+        }
+        assert!(!state.clients.contains_key(&session_id));
+    }
+
+    #[test]
+    fn test_guard_drop_skips_cleanup_when_handed_off() {
+        let state = init_server_state(Config::default());
+        let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let session_id = 100u64;
+
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let client_info = Arc::new(tokio::sync::Mutex::new(crate::core::state::ClientInfo {
+            addr,
+            session_id,
+            name: None,
+            db_index: 0,
+            role: crate::core::state::ClientRole::Normal,
+            created: std::time::Instant::now(),
+            last_command_time: std::time::Instant::now(),
+            library_name: None,
+            library_version: None,
+        }));
+        state.clients.insert(session_id, (client_info, shutdown_tx));
+
+        {
+            let mut guard = ConnectionGuard::new(state.clone(), session_id, addr);
+            guard.set_handed_off();
+        }
+        assert!(state.clients.contains_key(&session_id));
+        state.clients.remove(&session_id);
+    }
+}

@@ -262,4 +262,152 @@ mod tests {
         assert_eq!(g.masters.len(), 1);
         assert!(g.masters.contains_key("m1"));
     }
+
+    #[test]
+    fn test_master_status_hash() {
+        // Test that all variants are distinct by comparing them
+        assert_ne!(MasterStatus::Ok, MasterStatus::Sdown);
+        assert_ne!(MasterStatus::Ok, MasterStatus::Odown);
+        assert_ne!(MasterStatus::Sdown, MasterStatus::Odown);
+    }
+
+    #[test]
+    fn test_failover_state_all_variants_distinct() {
+        let states = [
+            FailoverState::None,
+            FailoverState::Wait,
+            FailoverState::Vote,
+            FailoverState::Start,
+            FailoverState::SelectReplica,
+            FailoverState::PromoteReplica,
+        ];
+        for i in 0..states.len() {
+            for j in (i + 1)..states.len() {
+                assert_ne!(states[i], states[j]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_master_status_clone() {
+        let s = MasterStatus::Odown;
+        let c = s;
+        assert_eq!(s, c);
+    }
+
+    #[test]
+    fn test_failover_state_clone() {
+        let s = FailoverState::PromoteReplica;
+        let c = s;
+        assert_eq!(s, c);
+    }
+
+    #[test]
+    fn test_instance_state_clone() {
+        let addr: SocketAddr = "10.0.0.1:6379".parse().unwrap();
+        let mut s = InstanceState::new(addr);
+        s.run_id = "abc123".to_string();
+        s.replication_offset = 500;
+        s.down_since = Some(Instant::now());
+        let c = s.clone();
+        assert_eq!(c.addr, addr);
+        assert_eq!(c.run_id, "abc123");
+        assert_eq!(c.replication_offset, 500);
+        assert!(c.down_since.is_some());
+    }
+
+    #[test]
+    fn test_master_state_addresses() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert_eq!(s.addr, "127.0.0.1:6379".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_master_state_config_preserved() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg.clone());
+        assert_eq!(s.config.name, cfg.name);
+        assert_eq!(s.config.ip, cfg.ip);
+        assert_eq!(s.config.port, cfg.port);
+        assert_eq!(s.config.quorum, cfg.quorum);
+    }
+
+    #[test]
+    fn test_master_state_replicas_empty_initially() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert!(s.replicas.is_empty());
+    }
+
+    #[test]
+    fn test_master_state_peers_empty_initially() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert!(s.peers.is_empty());
+    }
+
+    #[test]
+    fn test_master_state_votes_empty_initially() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert!(s.votes.is_empty());
+    }
+
+    #[test]
+    fn test_master_state_pending_reconfiguration_empty_initially() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert!(s.replicas_pending_reconfiguration.is_empty());
+    }
+
+    #[test]
+    fn test_master_state_run_id_starts_unknown() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        assert_eq!(s.run_id, "?");
+    }
+
+    #[test]
+    fn test_master_state_last_failover_time_is_old() {
+        let cfg = make_monitored_master();
+        let s = MasterState::from(cfg);
+        // Should be at least 1 hour in the past
+        assert!(s.last_failover_time.elapsed() > Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_global_warden_state_multiple_masters() {
+        let g = GlobalWardenState {
+            my_run_id: "r".to_string(),
+            masters: DashMap::new(),
+        };
+        let cfg1 = MonitoredMaster {
+            name: "m1".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 6379,
+            quorum: 2,
+            down_after: Duration::from_secs(15),
+            failover_timeout: Duration::from_secs(60),
+            hello_interval: Duration::from_secs(2),
+        };
+        let cfg2 = MonitoredMaster {
+            name: "m2".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 6380,
+            quorum: 1,
+            down_after: Duration::from_secs(10),
+            failover_timeout: Duration::from_secs(30),
+            hello_interval: Duration::from_secs(1),
+        };
+        g.masters.insert(
+            "m1".to_string(),
+            Arc::new(Mutex::new(MasterState::from(cfg1))),
+        );
+        g.masters.insert(
+            "m2".to_string(),
+            Arc::new(Mutex::new(MasterState::from(cfg2))),
+        );
+        assert_eq!(g.masters.len(), 2);
+    }
 }

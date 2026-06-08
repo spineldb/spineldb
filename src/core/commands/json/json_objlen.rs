@@ -144,6 +144,9 @@ mod tests {
     fn test_json_objlen_to_resp_args_round_trips() {
         let c = JsonObjLen::parse(&[bs("k"), bs("$.o")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.o")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.o")]
+        );
     }
 }

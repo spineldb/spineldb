@@ -324,30 +324,55 @@ mod tests {
     #[test]
     fn test_cache_set_dispatch() {
         let r = Cache::parse(&[bs("SET"), bs("k"), bs("v")]);
-        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Set(_) })));
+        assert!(matches!(
+            r,
+            Ok(Cache {
+                subcommand: CacheSubcommand::Set(_)
+            })
+        ));
     }
 
     #[test]
     fn test_cache_get_dispatch() {
         let r = Cache::parse(&[bs("GET"), bs("k")]);
-        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Get(_) })));
+        assert!(matches!(
+            r,
+            Ok(Cache {
+                subcommand: CacheSubcommand::Get(_)
+            })
+        ));
     }
 
     #[test]
     fn test_cache_stats_dispatch() {
         let r = Cache::parse(&[bs("STATS")]);
-        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Stats(_) })));
+        assert!(matches!(
+            r,
+            Ok(Cache {
+                subcommand: CacheSubcommand::Stats(_)
+            })
+        ));
     }
 
     #[test]
     fn test_cache_info_dispatch() {
         let r = Cache::parse(&[bs("INFO"), bs("k")]);
-        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Info(_) })));
+        assert!(matches!(
+            r,
+            Ok(Cache {
+                subcommand: CacheSubcommand::Info(_)
+            })
+        ));
     }
 
     #[test]
     fn test_cache_subcommand_case_insensitive() {
         let r = Cache::parse(&[bs("stats")]);
-        assert!(matches!(r, Ok(Cache { subcommand: CacheSubcommand::Stats(_) })));
+        assert!(matches!(
+            r,
+            Ok(Cache {
+                subcommand: CacheSubcommand::Stats(_)
+            })
+        ));
     }
 }

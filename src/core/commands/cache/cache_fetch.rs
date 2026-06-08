@@ -633,3 +633,145 @@ impl CommandSpec for CacheFetch {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_fetch_parses_key_and_url() -> Result<(), SpinelDBError> {
+        let c = CacheFetch::parse(&[bs("key"), bs("http://example.com/api")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"key"));
+        assert_eq!(c.url, "http://example.com/api");
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_fetch_parses_ttl() -> Result<(), SpinelDBError> {
+        let c = CacheFetch::parse(&[bs("key"), bs("http://x"), bs("TTL"), bs("3600")]).unwrap();
+        assert_eq!(c.ttl, Some(3600));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_fetch_parses_swr_grace() -> Result<(), SpinelDBError> {
+        let c = CacheFetch::parse(&[
+            bs("key"),
+            bs("http://x"),
+            bs("SWR"),
+            bs("30"),
+            bs("GRACE"),
+            bs("60"),
+        ])
+        .unwrap();
+        assert_eq!(c.swr, Some(30));
+        assert_eq!(c.grace, Some(60));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_fetch_parses_vary() -> Result<(), SpinelDBError> {
+        let c = CacheFetch::parse(&[bs("key"), bs("http://x"), bs("VARY"), bs("Accept-Encoding")])
+            .unwrap();
+        assert_eq!(c.vary, Some(Bytes::from_static(b"Accept-Encoding")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_fetch_parses_tags() -> Result<(), SpinelDBError> {
+        let c = CacheFetch::parse(&[
+            bs("key"),
+            bs("http://x"),
+            bs("TAGS"),
+            bs("tag1"),
+            bs("tag2"),
+        ])
+        .unwrap();
+        assert_eq!(
+            c.tags,
+            vec![Bytes::from_static(b"tag1"), Bytes::from_static(b"tag2")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_fetch_parses_headers() -> Result<(), SpinelDBError> {
+        let c = CacheFetch::parse(&[
+            bs("key"),
+            bs("http://x"),
+            bs("HEADERS"),
+            bs("host"),
+            bs("example.com"),
+            bs("accept"),
+            bs("application/json"),
+        ])
+        .unwrap();
+        assert_eq!(
+            c.headers,
+            Some(vec![
+                (
+                    Bytes::from_static(b"host"),
+                    Bytes::from_static(b"example.com")
+                ),
+                (
+                    Bytes::from_static(b"accept"),
+                    Bytes::from_static(b"application/json")
+                )
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_fetch_wrong_arg_count() {
+        let r = CacheFetch::parse(&[bs("key")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_fetch_no_args() {
+        let r = CacheFetch::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_fetch_invalid_url_encoding() {
+        let r = CacheFetch::parse(&[
+            bs("key"),
+            RespFrame::BulkString(Bytes::from_static(b"\xff\xfe")),
+        ]);
+        assert!(r.is_err()); // Invalid UTF-8 should fail
+    }
+
+    #[test]
+    fn test_parse_cache_control_max_age() {
+        let (ttl, swr) = parse_cache_control("max-age=3600");
+        assert_eq!(ttl, Some(3600));
+        assert_eq!(swr, None);
+    }
+
+    #[test]
+    fn test_parse_cache_control_s_maxage() {
+        let (ttl, swr) = parse_cache_control("s-maxage=7200");
+        assert_eq!(ttl, Some(7200));
+        assert_eq!(swr, None);
+    }
+
+    #[test]
+    fn test_parse_cache_control_stale_while_revalidate() {
+        let (ttl, swr) = parse_cache_control("max-age=3600, stale-while-revalidate=60");
+        assert_eq!(ttl, Some(3600));
+        assert_eq!(swr, Some(60));
+    }
+
+    #[test]
+    fn test_parse_cache_control_empty() {
+        let (ttl, swr) = parse_cache_control("");
+        assert_eq!(ttl, None);
+        assert_eq!(swr, None);
+    }
+}

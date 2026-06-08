@@ -211,7 +211,10 @@ mod tests {
     fn test_spop_to_resp_args_round_trips_with_count() {
         let c = SPop::parse(&[bs("k"), bs("2")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"2")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"2")]
+        );
     }
 
     #[test]

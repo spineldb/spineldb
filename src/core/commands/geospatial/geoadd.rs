@@ -122,15 +122,7 @@ mod tests {
 
     #[test]
     fn test_geoadd_parses_multiple_members() {
-        let frames = make_frame(&[
-            "key",
-            "10.0",
-            "20.0",
-            "m1",
-            "30.0",
-            "40.0",
-            "m2",
-        ]);
+        let frames = make_frame(&["key", "10.0", "20.0", "m1", "30.0", "40.0", "m2"]);
         let c = GeoAdd::parse(&frames).unwrap();
         assert_eq!(c.members.len(), 2);
         assert_eq!(c.members[0].2, Bytes::from_static(b"m1"));

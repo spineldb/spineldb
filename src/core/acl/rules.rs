@@ -164,10 +164,7 @@ mod tests {
         assert_eq!(r.keys.as_ref().unwrap().len(), 2);
         assert_eq!(r.pubsub_channels.as_ref().unwrap().len(), 1);
         assert_eq!(r.conditions.len(), 1);
-        assert!(matches!(
-            r.conditions[0].target,
-            ConditionTarget::Command
-        ));
+        assert!(matches!(r.conditions[0].target, ConditionTarget::Command));
         assert_eq!(r.conditions[0].result, vec!["+SET", "+DEL"]);
     }
 

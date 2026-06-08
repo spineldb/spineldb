@@ -361,3 +361,78 @@ fn is_normal_disconnect(e: &SpinelDBError) -> bool {
             | std::io::ErrorKind::ConnectionAborted
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::SpinelDBError;
+    use std::io;
+
+    #[test]
+    fn test_is_normal_disconnect_connection_reset() {
+        let err = SpinelDBError::Io(Arc::new(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )));
+        assert!(is_normal_disconnect(&err));
+    }
+
+    #[test]
+    fn test_is_normal_disconnect_broken_pipe() {
+        let err = SpinelDBError::Io(Arc::new(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "broken pipe",
+        )));
+        assert!(is_normal_disconnect(&err));
+    }
+
+    #[test]
+    fn test_is_normal_disconnect_unexpected_eof() {
+        let err = SpinelDBError::Io(Arc::new(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "unexpected eof",
+        )));
+        assert!(is_normal_disconnect(&err));
+    }
+
+    #[test]
+    fn test_is_normal_disconnect_connection_aborted() {
+        let err = SpinelDBError::Io(Arc::new(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "connection aborted",
+        )));
+        assert!(is_normal_disconnect(&err));
+    }
+
+    #[test]
+    fn test_is_normal_disconnect_other_io_error() {
+        let err = SpinelDBError::Io(Arc::new(io::Error::other("other error")));
+        assert!(!is_normal_disconnect(&err));
+    }
+
+    #[test]
+    fn test_is_normal_disconnect_non_io_error() {
+        let err = SpinelDBError::InvalidPassword;
+        assert!(!is_normal_disconnect(&err));
+    }
+
+    #[test]
+    fn test_connection_role_variants() {
+        let client = ConnectionRole::Client;
+        let replica = ConnectionRole::ReplicaHandler;
+        assert_ne!(client, replica);
+        assert_eq!(client, ConnectionRole::Client);
+        assert_eq!(replica, ConnectionRole::ReplicaHandler);
+    }
+
+    #[test]
+    fn test_next_action_variants() {
+        let c = NextAction::Continue;
+        let p = NextAction::EnterPubSub;
+        let e = NextAction::ExitLoop;
+        // Just verify they can be constructed and are distinct
+        assert!(std::mem::discriminant(&c) != std::mem::discriminant(&p));
+        assert!(std::mem::discriminant(&p) != std::mem::discriminant(&e));
+        assert!(std::mem::discriminant(&c) != std::mem::discriminant(&e));
+    }
+}

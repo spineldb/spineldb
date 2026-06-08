@@ -103,3 +103,36 @@ impl CommandSpec for CacheSoftPurge {
         self.keys.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_softpurge_parses_keys() -> Result<(), SpinelDBError> {
+        let c = CacheSoftPurge::parse(&[bs("key1"), bs("key2")]).unwrap();
+        assert_eq!(c.keys.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_softpurge_no_args_is_error() {
+        let r = CacheSoftPurge::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_softpurge_to_resp_args_returns_keys() -> Result<(), SpinelDBError> {
+        let c = CacheSoftPurge::parse(&[bs("k1"), bs("k2")])?;
+        let args = c.to_resp_args();
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k1"), Bytes::from_static(b"k2")]
+        );
+        Ok(())
+    }
+}

@@ -80,3 +80,29 @@ pub async fn check_redirection(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::connection::SessionState;
+    use crate::test_helpers::init_server_state;
+
+    #[tokio::test]
+    async fn test_cluster_redirect_skips_when_not_cluster_mode() {
+        let state = init_server_state(Config::default());
+        let session = SessionState::new(false, false);
+        let keys = vec![Bytes::from_static(b"testkey")];
+        let result = check_redirection(&state, &keys, &session).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cluster_redirect_ok_with_no_keys() {
+        let state = init_server_state(Config::default());
+        let session = SessionState::new(false, false);
+        let keys = vec![];
+        let result = check_redirection(&state, &keys, &session).await;
+        assert!(result.is_ok());
+    }
+}

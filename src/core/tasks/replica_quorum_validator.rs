@@ -124,3 +124,13 @@ impl ReplicaQuorumValidatorTask {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validator_check_interval() {
+        assert_eq!(VALIDATOR_CHECK_INTERVAL, Duration::from_secs(1));
+    }
+}

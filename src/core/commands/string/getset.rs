@@ -128,6 +128,9 @@ mod tests {
     fn test_getset_to_resp_args_round_trips() {
         let g = GetSet::parse(&[bs("k"), bs("v")]).unwrap();
         let args = g.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")]
+        );
     }
 }

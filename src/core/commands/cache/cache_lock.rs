@@ -126,3 +126,74 @@ impl CommandSpec for CacheLock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_lock_parse_lock() -> Result<(), SpinelDBError> {
+        let c = CacheLock::parse(&[bs("lock"), bs("key"), bs("60")]).unwrap();
+        if let CacheLockSubcommand::Lock { key, ttl_seconds } = &c.subcommand {
+            assert_eq!(key.as_ref(), b"key");
+            assert_eq!(*ttl_seconds, 60);
+        } else {
+            panic!("Expected Lock subcommand");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_lock_parse_unlock() -> Result<(), SpinelDBError> {
+        let c = CacheLock::parse(&[bs("unlock"), bs("key")]).unwrap();
+        if let CacheLockSubcommand::Unlock(k) = &c.subcommand {
+            assert_eq!(k.as_ref(), b"key");
+        } else {
+            panic!("Expected Unlock subcommand");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_lock_parse_unlock_case_insensitive() -> Result<(), SpinelDBError> {
+        let c = CacheLock::parse(&[bs("UNLOCK"), bs("key")]).unwrap();
+        assert!(matches!(c.subcommand, CacheLockSubcommand::Unlock(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_lock_parse_lock_missing_ttl() -> Result<(), SpinelDBError> {
+        let r = CacheLock::parse(&[bs("lock"), bs("key")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_lock_parse_unlock_missing_key() -> Result<(), SpinelDBError> {
+        let r = CacheLock::parse(&[bs("unlock")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_lock_parse_no_args() {
+        let r = CacheLock::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_lock_parse_unknown_subcommand() {
+        let r = CacheLock::parse(&[bs("unknown"), bs("key")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_cache_lock_lock_invalid_ttl() {
+        let r = CacheLock::parse(&[bs("lock"), bs("key"), bs("not_a_number")]);
+        assert!(r.is_err());
+    }
+}

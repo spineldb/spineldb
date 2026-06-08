@@ -206,11 +206,14 @@ mod tests {
     fn test_json_arrtrim_to_resp_args_round_trips() {
         let c = JsonArrTrim::parse(&[bs("k"), bs("$.a"), bs("1"), bs("5")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![
-            Bytes::from_static(b"k"),
-            Bytes::from_static(b"$.a"),
-            Bytes::from_static(b"1"),
-            Bytes::from_static(b"5"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"$.a"),
+                Bytes::from_static(b"1"),
+                Bytes::from_static(b"5"),
+            ]
+        );
     }
 }

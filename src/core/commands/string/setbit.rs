@@ -146,3 +146,89 @@ impl CommandSpec for SetBit {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_setbit_parse_basic() {
+        let c = SetBit::parse(&[bs("mykey"), bs("0"), bs("1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+        assert_eq!(c.offset, 0);
+        assert_eq!(c.value, 1);
+    }
+
+    #[test]
+    fn test_setbit_parse_with_large_offset() {
+        let c = SetBit::parse(&[bs("mykey"), bs("1000"), bs("0")]).unwrap();
+        assert_eq!(c.offset, 1000);
+        assert_eq!(c.value, 0);
+    }
+
+    #[test]
+    fn test_setbit_parse_empty_is_error() {
+        let r = SetBit::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_setbit_parse_missing_args_is_error() {
+        let r = SetBit::parse(&[bs("mykey"), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_setbit_parse_non_numeric_offset_is_error() {
+        let r = SetBit::parse(&[bs("mykey"), bs("abc"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_setbit_parse_non_numeric_value_is_error() {
+        let r = SetBit::parse(&[bs("mykey"), bs("0"), bs("abc")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_setbit_parse_value_greater_than_one_is_error() {
+        let r = SetBit::parse(&[bs("mykey"), bs("0"), bs("2")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_setbit_parse_non_bulk_key_is_error() {
+        let r = SetBit::parse(&[RespFrame::Integer(123), bs("0"), bs("1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_setbit_to_resp_args() {
+        let c = SetBit {
+            key: Bytes::from_static(b"key"),
+            offset: 10,
+            value: 1,
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+        assert_eq!(args[1], Bytes::from_static(b"10"));
+        assert_eq!(args[2], Bytes::from_static(b"1"));
+    }
+
+    #[test]
+    fn test_setbit_spec() {
+        let c = SetBit {
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "setbit");
+        assert_eq!(c.arity(), 4);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 1);
+    }
+}

@@ -317,7 +317,14 @@ mod tests {
 
     #[test]
     fn test_xautoclaim_count_missing_value_is_syntax_error() {
-        let r = XAutoClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("100"), bs("0-0"), bs("COUNT")]);
+        let r = XAutoClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("100"),
+            bs("0-0"),
+            bs("COUNT"),
+        ]);
         assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
     }
 

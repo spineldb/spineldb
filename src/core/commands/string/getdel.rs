@@ -88,3 +88,57 @@ impl CommandSpec for GetDel {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_getdel_parse_basic() {
+        let c = GetDel::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+    }
+
+    #[test]
+    fn test_getdel_parse_empty_is_error() {
+        let r = GetDel::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getdel_parse_too_many_args_is_error() {
+        let r = GetDel::parse(&[bs("k"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getdel_parse_non_bulk_is_error() {
+        let r = GetDel::parse(&[RespFrame::Integer(123)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_getdel_to_resp_args() {
+        let c = GetDel {
+            key: Bytes::from_static(b"key"),
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+    }
+
+    #[test]
+    fn test_getdel_spec() {
+        let c = GetDel {
+            key: Bytes::from_static(b"k"),
+        };
+        assert_eq!(c.name(), "getdel");
+        assert_eq!(c.arity(), 2);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 1);
+    }
+}

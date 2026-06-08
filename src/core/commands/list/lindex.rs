@@ -135,6 +135,9 @@ mod tests {
     fn test_lindex_to_resp_args_round_trips() {
         let c = LIndex::parse(&[bs("k"), bs("5")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"5")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"5")]
+        );
     }
 }

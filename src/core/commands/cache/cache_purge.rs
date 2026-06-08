@@ -97,3 +97,34 @@ impl CommandSpec for CachePurge {
         self.patterns.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_purge_parses_patterns() -> Result<(), SpinelDBError> {
+        let c = CachePurge::parse(&[bs("pattern1"), bs("pattern2")]).unwrap();
+        assert_eq!(c.patterns.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_purge_no_args_is_error() {
+        let r = CachePurge::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_purge_to_resp_args_returns_patterns() -> Result<(), SpinelDBError> {
+        let c = CachePurge::parse(&[bs("p1"), bs("p2")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"p1"));
+        Ok(())
+    }
+}

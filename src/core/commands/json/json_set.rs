@@ -232,10 +232,13 @@ mod tests {
     fn test_json_set_to_resp_args_round_trips() {
         let c = JsonSet::parse(&[bs("k"), bs("$.f"), bs("1")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![
-            Bytes::from_static(b"k"),
-            Bytes::from_static(b"$.f"),
-            Bytes::from_static(b"1"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"k"),
+                Bytes::from_static(b"$.f"),
+                Bytes::from_static(b"1"),
+            ]
+        );
     }
 }

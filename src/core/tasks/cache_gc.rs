@@ -225,3 +225,29 @@ async fn get_manifest_path(state: &Arc<ServerState>) -> anyhow::Result<PathBuf> 
     let cache_path = std::path::Path::new(&cache_path_str);
     Ok(cache_path.join("spineldb-cache.manifest"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_gc_interval() {
+        assert_eq!(DEFAULT_GC_COMPACTION_INTERVAL, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn test_min_gc_interval() {
+        assert_eq!(MIN_GC_COMPACTION_INTERVAL, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_gc_pending_grace_period() {
+        assert_eq!(GC_PENDING_GRACE_PERIOD, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_gc_interval_constants_ordering() {
+        assert!(MIN_GC_COMPACTION_INTERVAL < DEFAULT_GC_COMPACTION_INTERVAL);
+        assert!(GC_PENDING_GRACE_PERIOD < DEFAULT_GC_COMPACTION_INTERVAL);
+    }
+}

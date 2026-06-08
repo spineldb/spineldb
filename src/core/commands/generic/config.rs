@@ -250,3 +250,89 @@ impl CommandSpec for ConfigGetSet {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_config_parse_get() -> Result<(), SpinelDBError> {
+        let c = ConfigGetSet::parse(&[bs("GET"), bs("maxmemory")]).unwrap();
+        assert!(matches!(c.subcommand, ConfigSubcommand::Get(p) if p == "maxmemory"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_parse_set() -> Result<(), SpinelDBError> {
+        let c = ConfigGetSet::parse(&[bs("SET"), bs("maxmemory"), bs("1gb")]).unwrap();
+        assert!(
+            matches!(c.subcommand, ConfigSubcommand::Set(p, v) if p == "maxmemory" && v == "1gb")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_parse_rewrite() -> Result<(), SpinelDBError> {
+        let c = ConfigGetSet::parse(&[bs("REWRITE")]).unwrap();
+        assert!(matches!(c.subcommand, ConfigSubcommand::Rewrite));
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_parse_get_missing_arg() {
+        let r = ConfigGetSet::parse(&[bs("GET")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_config_parse_set_missing_args() {
+        let r = ConfigGetSet::parse(&[bs("SET"), bs("maxmemory")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_config_parse_rewrite_with_args() {
+        let r = ConfigGetSet::parse(&[bs("REWRITE"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_config_parse_no_args() {
+        let r = ConfigGetSet::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_config_parse_unknown_subcommand() {
+        let r = ConfigGetSet::parse(&[bs("UNKNOWN")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+
+    #[test]
+    fn test_config_to_resp_args_get() -> Result<(), SpinelDBError> {
+        let c = ConfigGetSet::parse(&[bs("GET"), bs("maxmemory")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_to_resp_args_set() -> Result<(), SpinelDBError> {
+        let c = ConfigGetSet::parse(&[bs("SET"), bs("maxmemory"), bs("1gb")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_to_resp_args_rewrite() -> Result<(), SpinelDBError> {
+        let c = ConfigGetSet::parse(&[bs("REWRITE")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 1);
+        Ok(())
+    }
+}

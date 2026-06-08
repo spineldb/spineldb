@@ -121,3 +121,47 @@ impl CommandSpec for CacheBypass {
         vec![self.key.clone(), self.url.clone().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_bypass_parses_key_and_url() -> Result<(), SpinelDBError> {
+        let c = CacheBypass::parse(&[bs("key1"), bs("http://example.com/api")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"key1"));
+        assert_eq!(c.url, "http://example.com/api");
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_bypass_wrong_arg_count() {
+        let r = CacheBypass::parse(&[bs("key1")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_bypass_no_args() {
+        let r = CacheBypass::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_bypass_too_many_args() {
+        let r = CacheBypass::parse(&[bs("k"), bs("url"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_bypass_to_resp_args_round_trips() -> Result<(), SpinelDBError> {
+        let c = CacheBypass::parse(&[bs("key"), bs("http://x")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+        Ok(())
+    }
+}

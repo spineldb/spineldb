@@ -308,16 +308,16 @@ mod tests {
 
     #[test]
     fn test_xpending_detailed() {
-        let c = XPending::parse(&[
-            bs("k"),
-            bs("g1"),
-            bs("1-0"),
-            bs("9999-0"),
-            bs("10"),
-        ])
-        .unwrap();
+        let c = XPending::parse(&[bs("k"), bs("g1"), bs("1-0"), bs("9999-0"), bs("10")]).unwrap();
         match c.subcommand {
-            XPendingSubcommand::Detailed { start, end, count, consumer, idle_time_filter, .. } => {
+            XPendingSubcommand::Detailed {
+                start,
+                end,
+                count,
+                consumer,
+                idle_time_filter,
+                ..
+            } => {
                 assert_eq!(start, StreamId::new(1, 0));
                 assert_eq!(end, StreamId::new(9999, 0));
                 assert_eq!(count, 10);
@@ -360,7 +360,9 @@ mod tests {
         ])
         .unwrap();
         match c.subcommand {
-            XPendingSubcommand::Detailed { idle_time_filter, .. } => {
+            XPendingSubcommand::Detailed {
+                idle_time_filter, ..
+            } => {
                 assert_eq!(idle_time_filter, Some(1000));
             }
             _ => panic!("expected Detailed"),
@@ -387,7 +389,13 @@ mod tests {
 
     #[test]
     fn test_xpending_invalid_count_is_error() {
-        let r = XPending::parse(&[bs("k"), bs("g1"), bs("0-0"), bs("9999-0"), bs("not_a_number")]);
+        let r = XPending::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("0-0"),
+            bs("9999-0"),
+            bs("not_a_number"),
+        ]);
         assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
     }
 

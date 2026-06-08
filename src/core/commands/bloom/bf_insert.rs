@@ -221,14 +221,8 @@ mod tests {
 
     #[test]
     fn test_bfinsert_with_error_rate() {
-        let c = BfInsert::parse(&[
-            bs("k"),
-            bs("ERROR"),
-            bs("0.005"),
-            bs("ITEMS"),
-            bs("item1"),
-        ])
-        .unwrap();
+        let c = BfInsert::parse(&[bs("k"), bs("ERROR"), bs("0.005"), bs("ITEMS"), bs("item1")])
+            .unwrap();
         assert_eq!(c.error_rate, Some(0.005));
     }
 
@@ -267,12 +261,7 @@ mod tests {
     fn test_bfinsert_capacity_after_items_succeeds() {
         // Once ITEMS is seen, parser breaks. CAPACITY after ITEMS is treated as an item
         // (not the keyword) in this implementation.
-        let c = BfInsert::parse(&[
-            bs("k"),
-            bs("ITEMS"),
-            bs("item1"),
-        ])
-        .unwrap();
+        let c = BfInsert::parse(&[bs("k"), bs("ITEMS"), bs("item1")]).unwrap();
         assert_eq!(c.items.len(), 1);
     }
 
@@ -285,7 +274,13 @@ mod tests {
 
     #[test]
     fn test_bfinsert_invalid_capacity_value_is_error() {
-        let r = BfInsert::parse(&[bs("k"), bs("CAPACITY"), bs("not_a_number"), bs("ITEMS"), bs("i")]);
+        let r = BfInsert::parse(&[
+            bs("k"),
+            bs("CAPACITY"),
+            bs("not_a_number"),
+            bs("ITEMS"),
+            bs("i"),
+        ]);
         assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
     }
 
@@ -303,14 +298,8 @@ mod tests {
 
     #[test]
     fn test_bfinsert_to_resp_args_round_trips() {
-        let c = BfInsert::parse(&[
-            bs("k"),
-            bs("CAPACITY"),
-            bs("100"),
-            bs("ITEMS"),
-            bs("i1"),
-        ])
-        .unwrap();
+        let c =
+            BfInsert::parse(&[bs("k"), bs("CAPACITY"), bs("100"), bs("ITEMS"), bs("i1")]).unwrap();
         let args = c.to_resp_args();
         assert_eq!(args[0], Bytes::from_static(b"k"));
         assert_eq!(args[1], Bytes::from_static(b"CAPACITY"));

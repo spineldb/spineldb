@@ -106,3 +106,46 @@ pub async fn check_safety_limits(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::config::SafetyConfig;
+
+    #[test]
+    fn test_safety_config_default_values() {
+        let config = SafetyConfig::default();
+        assert_eq!(config.max_collection_scan_keys, 0);
+        assert_eq!(config.max_set_operation_keys, 0);
+        assert_eq!(config.script_timeout_ms, 5000);
+        assert_eq!(config.script_memory_limit_mb, 32);
+        assert_eq!(config.auto_unlink_on_del_threshold, 0);
+        assert_eq!(config.max_bitop_alloc_size, 128 * 1024 * 1024);
+        assert_eq!(config.max_bulk_string_size, 0);
+        assert_eq!(config.lua_vm_pool_size, 0);
+        assert!(config.reject_nan_scores);
+    }
+
+    #[test]
+    fn test_safety_config_custom_values() {
+        let config = SafetyConfig {
+            max_collection_scan_keys: 100,
+            max_set_operation_keys: 50,
+            script_timeout_ms: 10000,
+            script_memory_limit_mb: 64,
+            auto_unlink_on_del_threshold: 1024,
+            max_bitop_alloc_size: 256 * 1024 * 1024,
+            max_bulk_string_size: 1024 * 1024,
+            lua_vm_pool_size: 8,
+            reject_nan_scores: false,
+        };
+        assert_eq!(config.max_collection_scan_keys, 100);
+        assert_eq!(config.max_set_operation_keys, 50);
+        assert_eq!(config.script_timeout_ms, 10000);
+        assert_eq!(config.script_memory_limit_mb, 64);
+        assert_eq!(config.auto_unlink_on_del_threshold, 1024);
+        assert_eq!(config.max_bitop_alloc_size, 256 * 1024 * 1024);
+        assert_eq!(config.max_bulk_string_size, 1024 * 1024);
+        assert_eq!(config.lua_vm_pool_size, 8);
+        assert!(!config.reject_nan_scores);
+    }
+}

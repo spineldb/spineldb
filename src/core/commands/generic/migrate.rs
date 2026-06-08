@@ -366,3 +366,217 @@ impl CommandSpec for Migrate {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_too_few_args_errors() {
+        assert!(Migrate::parse(&[]).is_err());
+        assert!(Migrate::parse(&[bulk("host"), bulk("6379"), bulk("k"), bulk("0")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_minimal() {
+        let cmd = Migrate::parse(&[
+            bulk("127.0.0.1"),
+            bulk("6380"),
+            bulk("mykey"),
+            bulk("0"),
+            bulk("5000"),
+        ])
+        .unwrap();
+        assert_eq!(cmd.host, "127.0.0.1");
+        assert_eq!(cmd.port, 6380);
+        assert_eq!(cmd.key, Bytes::from_static(b"mykey"));
+        assert_eq!(cmd.db_index, 0);
+        assert_eq!(cmd.timeout_ms, 5000);
+        assert!(!cmd.copy);
+        assert!(!cmd.replace);
+    }
+
+    #[test]
+    fn test_parse_with_copy() {
+        let cmd = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("0"),
+            bulk("1000"),
+            bulk("COPY"),
+        ])
+        .unwrap();
+        assert!(cmd.copy);
+        assert!(!cmd.replace);
+    }
+
+    #[test]
+    fn test_parse_with_replace() {
+        let cmd = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("0"),
+            bulk("1000"),
+            bulk("REPLACE"),
+        ])
+        .unwrap();
+        assert!(!cmd.copy);
+        assert!(cmd.replace);
+    }
+
+    #[test]
+    fn test_parse_with_both_flags() {
+        let cmd = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("0"),
+            bulk("1000"),
+            bulk("COPY"),
+            bulk("REPLACE"),
+        ])
+        .unwrap();
+        assert!(cmd.copy);
+        assert!(cmd.replace);
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_flags() {
+        let cmd = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("0"),
+            bulk("1000"),
+            bulk("copy"),
+        ])
+        .unwrap();
+        assert!(cmd.copy);
+    }
+
+    #[test]
+    fn test_parse_unknown_option_errors() {
+        let result = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("0"),
+            bulk("1000"),
+            bulk("INVALID"),
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_bad_port_errors() {
+        let result = Migrate::parse(&[
+            bulk("host"),
+            bulk("notaport"),
+            bulk("k"),
+            bulk("0"),
+            bulk("1000"),
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_bad_timeout_errors() {
+        let result = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("0"),
+            bulk("badtime"),
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_bad_db_index_errors() {
+        let result = Migrate::parse(&[
+            bulk("host"),
+            bulk("6379"),
+            bulk("k"),
+            bulk("notanum"),
+            bulk("1000"),
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Migrate::default().name(), "migrate");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Migrate::default().arity(), -6);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Migrate::default().flags();
+        assert!(flags.contains(CommandFlags::WRITE));
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+        assert!(flags.contains(CommandFlags::MOVABLEKEYS));
+    }
+
+    #[test]
+    fn test_get_keys() {
+        let cmd = Migrate {
+            key: Bytes::from_static(b"mykey"),
+            ..Default::default()
+        };
+        assert_eq!(cmd.get_keys(), vec![Bytes::from_static(b"mykey")]);
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Migrate::default();
+        assert_eq!(cmd.first_key(), 3);
+        assert_eq!(cmd.last_key(), 3);
+        assert_eq!(cmd.step(), 1);
+    }
+
+    #[test]
+    fn test_to_resp_args_minimal() {
+        let cmd = Migrate {
+            host: "h".into(),
+            port: 6379,
+            key: Bytes::from_static(b"k"),
+            db_index: 0,
+            timeout_ms: 100,
+            copy: false,
+            replace: false,
+        };
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 5);
+    }
+
+    #[test]
+    fn test_to_resp_args_with_flags() {
+        let cmd = Migrate {
+            host: "h".into(),
+            port: 6379,
+            key: Bytes::from_static(b"k"),
+            db_index: 0,
+            timeout_ms: 100,
+            copy: true,
+            replace: true,
+        };
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 7);
+        assert!(args.contains(&Bytes::from_static(b"COPY")));
+        assert!(args.contains(&Bytes::from_static(b"REPLACE")));
+    }
+}

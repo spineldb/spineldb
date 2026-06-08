@@ -105,6 +105,9 @@ mod tests {
     fn test_sdiff_to_resp_args_round_trips() {
         let c = Sdiff::parse(&[bs("k1"), bs("k2")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k1"), Bytes::from_static(b"k2")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k1"), Bytes::from_static(b"k2")]
+        );
     }
 }

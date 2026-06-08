@@ -267,15 +267,15 @@ mod tests {
 
     #[test]
     fn test_zrangestore_parses_byscore() {
-        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("1"), bs("10"), bs("BYSCORE")])
-            .unwrap();
+        let c =
+            ZRangeStore::parse(&[bs("dst"), bs("src"), bs("1"), bs("10"), bs("BYSCORE")]).unwrap();
         assert!(matches!(c.range_type, RangeType::Score));
     }
 
     #[test]
     fn test_zrangestore_parses_bylex() {
-        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("[a"), bs("[b"), bs("BYLEX")])
-            .unwrap();
+        let c =
+            ZRangeStore::parse(&[bs("dst"), bs("src"), bs("[a"), bs("[b"), bs("BYLEX")]).unwrap();
         assert!(matches!(c.range_type, RangeType::Lex));
     }
 
@@ -302,8 +302,8 @@ mod tests {
 
     #[test]
     fn test_zrangestore_options_case_insensitive() {
-        let c = ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1"), bs("byscore")])
-            .unwrap();
+        let c =
+            ZRangeStore::parse(&[bs("dst"), bs("src"), bs("0"), bs("-1"), bs("byscore")]).unwrap();
         assert!(matches!(c.range_type, RangeType::Score));
     }
 

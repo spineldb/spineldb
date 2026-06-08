@@ -316,3 +316,129 @@ async fn handle_save(
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_errors() {
+        assert!(Acl::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn test_parse_setuser() {
+        let cmd =
+            Acl::parse(&[bulk("SETUSER"), bulk("alice"), bulk(">pass123"), bulk("on")]).unwrap();
+        match &cmd.subcommand {
+            AclSubcommand::SetUser { username, rules } => {
+                assert_eq!(username, "alice");
+                assert_eq!(rules, &vec![">pass123".to_string(), "on".to_string()]);
+            }
+            _ => panic!("expected SetUser"),
+        }
+    }
+
+    #[test]
+    fn test_parse_setuser_no_username_errors() {
+        assert!(Acl::parse(&[bulk("SETUSER")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_getuser() {
+        let cmd = Acl::parse(&[bulk("GETUSER"), bulk("alice")]).unwrap();
+        assert!(matches!(cmd.subcommand, AclSubcommand::GetUser(u) if u == "alice"));
+    }
+
+    #[test]
+    fn test_parse_getuser_wrong_arg_count_errors() {
+        assert!(Acl::parse(&[bulk("GETUSER")]).is_err());
+        assert!(Acl::parse(&[bulk("GETUSER"), bulk("a"), bulk("b")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_deluser() {
+        let cmd = Acl::parse(&[bulk("DELUSER"), bulk("bob")]).unwrap();
+        assert!(matches!(cmd.subcommand, AclSubcommand::DelUser(u) if u == "bob"));
+    }
+
+    #[test]
+    fn test_parse_deluser_wrong_arg_count_errors() {
+        assert!(Acl::parse(&[bulk("DELUSER")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_list() {
+        let cmd = Acl::parse(&[bulk("LIST")]).unwrap();
+        assert!(matches!(cmd.subcommand, AclSubcommand::List));
+    }
+
+    #[test]
+    fn test_parse_list_extra_args_errors() {
+        assert!(Acl::parse(&[bulk("LIST"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_save() {
+        let cmd = Acl::parse(&[bulk("SAVE")]).unwrap();
+        assert!(matches!(cmd.subcommand, AclSubcommand::Save));
+    }
+
+    #[test]
+    fn test_parse_save_extra_args_errors() {
+        assert!(Acl::parse(&[bulk("SAVE"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_subcommand_errors() {
+        assert!(Acl::parse(&[bulk("UNKNOWN")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_case_insensitive() {
+        let cmd = Acl::parse(&[bulk("list")]).unwrap();
+        assert!(matches!(cmd.subcommand, AclSubcommand::List));
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Acl::default().name(), "acl");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Acl::default().arity(), -2);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Acl::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Acl::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Acl::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_empty() {
+        assert!(Acl::default().to_resp_args().is_empty());
+    }
+}

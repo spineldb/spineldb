@@ -966,7 +966,10 @@ mod tests {
         match restored.data {
             DataValue::Hash(h) => {
                 assert_eq!(h.len(), 2);
-                assert_eq!(h.get(&Bytes::from_static(b"f1")), Some(&Bytes::from_static(b"v1")));
+                assert_eq!(
+                    h.get(&Bytes::from_static(b"f1")),
+                    Some(&Bytes::from_static(b"v1"))
+                );
             }
             _ => panic!("expected Hash"),
         }
@@ -1117,7 +1120,9 @@ mod tests {
         let bytes = serialize_value(&val).unwrap();
         let restored = deserialize_value(&bytes).unwrap();
         match restored.data {
-            DataValue::HttpCache { variants, vary_on, .. } => {
+            DataValue::HttpCache {
+                variants, vary_on, ..
+            } => {
                 assert_eq!(vary_on, vec![Bytes::from_static(b"Accept")]);
                 let v = variants.get(&42).unwrap();
                 match &v.body {

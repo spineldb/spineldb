@@ -151,3 +151,102 @@ impl CommandSpec for BitPos {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bitpos_parse_basic() {
+        let c = BitPos::parse(&[bs("mykey"), bs("0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+        assert_eq!(c.bit, 0);
+        assert!(c.range.is_none());
+    }
+
+    #[test]
+    fn test_bitpos_parse_with_range() {
+        let c = BitPos::parse(&[bs("mykey"), bs("1"), bs("0"), bs("10")]).unwrap();
+        assert_eq!(c.bit, 1);
+        assert_eq!(c.range, Some((0, 10)));
+    }
+
+    #[test]
+    fn test_bitpos_parse_with_start_only() {
+        let c = BitPos::parse(&[bs("mykey"), bs("1"), bs("5")]).unwrap();
+        assert_eq!(c.range, Some((5, -1)));
+    }
+
+    #[test]
+    fn test_bitpos_parse_empty_is_error() {
+        let r = BitPos::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitpos_parse_too_many_args_is_error() {
+        let r = BitPos::parse(&[bs("k"), bs("0"), bs("a"), bs("b"), bs("c")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitpos_parse_bit_not_zero_or_one_is_error() {
+        let r = BitPos::parse(&[bs("mykey"), bs("2")]);
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_bitpos_parse_non_bulk_string_key_is_error() {
+        let r = BitPos::parse(&[RespFrame::Integer(123), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_bitpos_parse_non_numeric_bit_is_error() {
+        let r = BitPos::parse(&[bs("mykey"), bs("not-a-number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_bitpos_to_resp_args_basic() {
+        let c = BitPos {
+            key: Bytes::from_static(b"key"),
+            bit: 0,
+            ..Default::default()
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+        assert_eq!(args[1], Bytes::from_static(b"0"));
+    }
+
+    #[test]
+    fn test_bitpos_to_resp_args_with_range() {
+        let c = BitPos {
+            key: Bytes::from_static(b"key"),
+            bit: 1,
+            range: Some((0, 100)),
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[2], Bytes::from_static(b"0"));
+        assert_eq!(args[3], Bytes::from_static(b"100"));
+    }
+
+    #[test]
+    fn test_bitpos_spec() {
+        let c = BitPos {
+            key: Bytes::from_static(b"k"),
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "bitpos");
+        assert_eq!(c.arity(), -3);
+        assert!(c.flags().contains(CommandFlags::READONLY));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 1);
+    }
+}

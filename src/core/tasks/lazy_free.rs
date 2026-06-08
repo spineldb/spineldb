@@ -77,3 +77,29 @@ impl LazyFreeManager {
         debug!("Lazy-freed {} values.", items_len);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::data_types::{DataValue, StoredValue};
+
+    #[test]
+    fn test_lazy_free_item_type_alias() {
+        // Verify the type alias works correctly
+        let key = Bytes::from_static(b"test_key");
+        let value = StoredValue::new(DataValue::String(Bytes::from_static(b"test_value")));
+        let item: LazyFreeItem = (key.clone(), value);
+        assert_eq!(item.0, key);
+    }
+
+    #[test]
+    fn test_lazy_free_item_with_string_value() {
+        let key = Bytes::from_static(b"my_key");
+        let value = StoredValue::new(DataValue::String(Bytes::from_static(b"my_value")));
+        let item: LazyFreeItem = (key, value);
+        match &item.1.data {
+            DataValue::String(s) => assert_eq!(s, &Bytes::from_static(b"my_value")),
+            _ => panic!("Expected String data"),
+        }
+    }
+}

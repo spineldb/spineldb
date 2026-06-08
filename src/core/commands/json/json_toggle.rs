@@ -163,6 +163,9 @@ mod tests {
     fn test_json_toggle_to_resp_args_round_trips() {
         let c = JsonToggle::parse(&[bs("k"), bs("$.b")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.b")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"$.b")]
+        );
     }
 }

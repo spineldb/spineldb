@@ -136,7 +136,10 @@ mod tests {
         s.watched_keys.insert(Bytes::from_static(b"k"), Some(7));
         let cloned = s.clone();
         assert!(cloned.in_transaction);
-        assert_eq!(cloned.watched_keys.get(&Bytes::from_static(b"k")), Some(&Some(7)));
+        assert_eq!(
+            cloned.watched_keys.get(&Bytes::from_static(b"k")),
+            Some(&Some(7))
+        );
     }
 
     #[test]
@@ -183,11 +186,14 @@ mod tests {
     fn test_start_transaction_resets_has_error_flag() {
         let db = Db::new();
         // Manually set has_error to true.
-        db.tx_states.insert(1, TransactionState {
-            in_transaction: true,
-            has_error: true,
-            ..Default::default()
-        });
+        db.tx_states.insert(
+            1,
+            TransactionState {
+                in_transaction: true,
+                has_error: true,
+                ..Default::default()
+            },
+        );
         db.start_transaction(1);
         let state = db.take_transaction_state(1).unwrap();
         assert!(!state.has_error, "start_transaction must reset has_error");

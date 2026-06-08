@@ -135,3 +135,119 @@ impl CommandSpec for Scan {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_cursor_only() {
+        let cmd = Scan::parse(&[bulk("0")]).unwrap();
+        assert_eq!(cmd.cursor, 0);
+        assert!(cmd.pattern.is_none());
+        assert!(cmd.count.is_none());
+    }
+
+    #[test]
+    fn test_parse_with_count() {
+        let cmd = Scan::parse(&[bulk("0"), bulk("COUNT"), bulk("20")]).unwrap();
+        assert_eq!(cmd.cursor, 0);
+        assert_eq!(cmd.count, Some(20));
+    }
+
+    #[test]
+    fn test_parse_with_pattern() {
+        let cmd = Scan::parse(&[bulk("0"), bulk("MATCH"), bulk("user:*")]).unwrap();
+        assert_eq!(cmd.cursor, 0);
+        assert_eq!(cmd.pattern, Some(Bytes::from_static(b"user:*")));
+    }
+
+    #[test]
+    fn test_parse_with_pattern_and_count() {
+        let cmd = Scan::parse(&[
+            bulk("0"),
+            bulk("MATCH"),
+            bulk("k*"),
+            bulk("COUNT"),
+            bulk("5"),
+        ])
+        .unwrap();
+        assert_eq!(cmd.pattern, Some(Bytes::from_static(b"k*")));
+        assert_eq!(cmd.count, Some(5));
+    }
+
+    #[test]
+    fn test_parse_nonzero_cursor() {
+        let cmd = Scan::parse(&[bulk("42")]).unwrap();
+        assert_eq!(cmd.cursor, 42);
+    }
+
+    #[test]
+    fn test_parse_bad_cursor_errors() {
+        assert!(Scan::parse(&[bulk("notanumber")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_bad_count_errors() {
+        assert!(Scan::parse(&[bulk("0"), bulk("COUNT"), bulk("abc")]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Scan::default().name(), "scan");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Scan::default().arity(), -2);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        assert!(Scan::default().flags().contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Scan::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Scan::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_cursor_only() {
+        let cmd = Scan {
+            cursor: 0,
+            pattern: None,
+            count: None,
+        };
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"0"));
+    }
+
+    #[test]
+    fn test_to_resp_args_with_options() {
+        let cmd = Scan {
+            cursor: 100,
+            pattern: Some(Bytes::from_static(b"a*")),
+            count: Some(50),
+        };
+        let args = cmd.to_resp_args();
+        assert!(args.len() > 1);
+        assert_eq!(args[0], Bytes::from_static(b"100"));
+    }
+}

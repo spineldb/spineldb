@@ -87,3 +87,19 @@ impl CacheLockCleanerTask {
         before_count - after_count
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_cleaner_interval_value() {
+        assert_eq!(CLEANER_INTERVAL, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn test_cleaner_interval_is_10_minutes() {
+        assert_eq!(CLEANER_INTERVAL, Duration::from_secs(10 * 60));
+    }
+}

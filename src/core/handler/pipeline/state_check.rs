@@ -67,3 +67,60 @@ pub async fn check_server_state(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::core::commands::string::Set;
+    use crate::test_helpers::init_server_state;
+    use bytes::Bytes;
+
+    fn make_test_state_read_only() -> Arc<ServerState> {
+        let state = init_server_state(Config::default());
+        state.set_read_only(true, "test");
+        state
+    }
+
+    fn make_test_state_normal() -> Arc<ServerState> {
+        init_server_state(Config::default())
+    }
+
+    #[tokio::test]
+    async fn test_read_only_blocks_write_command() {
+        let state = make_test_state_read_only();
+        let cmd = Command::Set(Set {
+            key: Bytes::from_static(b"test"),
+            value: Bytes::from_static(b"val"),
+            ..Set::default()
+        });
+        let result = check_server_state(&state, &cmd).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SpinelDBError::ReadOnly(_) => {}
+            other => panic!("Expected ReadOnly error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_only_allows_read_command() {
+        let state = make_test_state_read_only();
+        let cmd = Command::Get(crate::core::commands::string::Get {
+            key: Bytes::from_static(b"test"),
+        });
+        let result = check_server_state(&state, &cmd).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_normal_state_allows_write() {
+        let state = make_test_state_normal();
+        let cmd = Command::Set(Set {
+            key: Bytes::from_static(b"test"),
+            value: Bytes::from_static(b"val"),
+            ..Set::default()
+        });
+        let result = check_server_state(&state, &cmd).await;
+        assert!(result.is_ok());
+    }
+}

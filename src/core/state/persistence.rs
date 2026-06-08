@@ -90,3 +90,100 @@ impl PersistenceState {
         self.lazy_free_queue_full_errors.load(Ordering::Relaxed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_persistence_state() -> PersistenceState {
+        let (fsync_tx, _fsync_rx) = tokio::sync::mpsc::channel(1);
+        let (rewrite_tx, _rewrite_rx) = tokio::sync::watch::channel(());
+        let (lazy_free_tx, _lazy_free_rx) = tokio::sync::mpsc::channel(1);
+        PersistenceState::new(fsync_tx, rewrite_tx, lazy_free_tx)
+    }
+
+    #[test]
+    fn test_new_starts_not_saving() {
+        let s = make_persistence_state();
+        assert!(!s.is_saving_spldb.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_new_starts_with_zero_dirty_keys() {
+        let s = make_persistence_state();
+        assert_eq!(s.dirty_keys_counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_new_starts_with_zero_lazy_free_errors() {
+        let s = make_persistence_state();
+        assert_eq!(s.get_lazy_free_errors(), 0);
+    }
+
+    #[test]
+    fn test_increment_dirty_keys() {
+        let s = make_persistence_state();
+        s.increment_dirty_keys(5);
+        assert_eq!(s.dirty_keys_counter.load(Ordering::Relaxed), 5);
+        s.increment_dirty_keys(3);
+        assert_eq!(s.dirty_keys_counter.load(Ordering::Relaxed), 8);
+    }
+
+    #[test]
+    fn test_increment_dirty_keys_zero() {
+        let s = make_persistence_state();
+        s.increment_dirty_keys(0);
+        assert_eq!(s.dirty_keys_counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_increment_lazy_free_errors() {
+        let s = make_persistence_state();
+        s.increment_lazy_free_errors();
+        assert_eq!(s.get_lazy_free_errors(), 1);
+        s.increment_lazy_free_errors();
+        s.increment_lazy_free_errors();
+        assert_eq!(s.get_lazy_free_errors(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_aof_rewrite_state_default() {
+        let state = AofRewriteState::default();
+        assert!(!state.is_in_progress);
+        assert!(state.buffer.is_empty());
+        assert_eq!(state.buffer_size, 0);
+    }
+
+    #[tokio::test]
+    async fn test_aof_rewrite_state_buffer_tracks_size() {
+        let state = AofRewriteState {
+            is_in_progress: true,
+            buffer_size: 1024,
+            ..Default::default()
+        };
+        assert!(state.is_in_progress);
+        assert_eq!(state.buffer_size, 1024);
+    }
+
+    #[test]
+    fn test_is_saving_spldb_can_be_set() {
+        let s = make_persistence_state();
+        s.is_saving_spldb.store(true, Ordering::Relaxed);
+        assert!(s.is_saving_spldb.load(Ordering::Relaxed));
+        s.is_saving_spldb.store(false, Ordering::Relaxed);
+        assert!(!s.is_saving_spldb.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_aof_last_rewrite_size_default_zero() {
+        let s = make_persistence_state();
+        assert_eq!(s.aof_last_rewrite_size.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_aof_last_rewrite_size_can_be_updated() {
+        let s = make_persistence_state();
+        s.aof_last_rewrite_size.store(4096, Ordering::Relaxed);
+        assert_eq!(s.aof_last_rewrite_size.load(Ordering::Relaxed), 4096);
+    }
+}

@@ -389,3 +389,58 @@ impl From<SpinelDBError> for mlua::Error {
         mlua::Error::external(e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_eval_parse_script_and_num_keys() -> Result<(), SpinelDBError> {
+        let c = Eval::parse(&[bs("return 1"), bs("0")]).unwrap();
+        assert_eq!(c.script, Bytes::from_static(b"return 1"));
+        assert_eq!(c.num_keys, 0);
+        assert!(c.keys.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_parse_with_keys_and_args() -> Result<(), SpinelDBError> {
+        let c = Eval::parse(&[
+            bs("return KEYS[1]"),
+            bs("1"),     // num_keys
+            bs("mykey"), // key 1
+            bs("arg1"),  // arg 1
+            bs("arg2"),  // arg 2
+        ])
+        .unwrap();
+        assert_eq!(c.num_keys, 1);
+        assert_eq!(c.keys[0].as_ref(), b"mykey");
+        assert_eq!(c.args.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_parse_too_few_args() {
+        let r = Eval::parse(&[bs("script")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_eval_parse_too_few_keys() {
+        let r = Eval::parse(&[bs("script"), bs("2"), bs("key1")]); // num_keys=2 but only 1 key
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
+    }
+
+    #[test]
+    fn test_eval_to_resp_args_round_trips() -> Result<(), SpinelDBError> {
+        let c = Eval::parse(&[bs("return 1"), bs("1"), bs("key")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"return 1"));
+        assert_eq!(args[1], Bytes::from_static(b"1"));
+        Ok(())
+    }
+}

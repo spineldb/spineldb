@@ -190,8 +190,14 @@ mod tests {
     #[test]
     fn test_format_zrange_response_without_scores() {
         let entries = vec![
-            ZSetEntry { score: 1.0, member: bs("a") },
-            ZSetEntry { score: 2.0, member: bs("b") },
+            ZSetEntry {
+                score: 1.0,
+                member: bs("a"),
+            },
+            ZSetEntry {
+                score: 2.0,
+                member: bs("b"),
+            },
         ];
         let r = format_zrange_response(entries, false);
         if let RespValue::Array(arr) = r {
@@ -205,7 +211,10 @@ mod tests {
 
     #[test]
     fn test_format_zrange_response_with_scores() {
-        let entries = vec![ZSetEntry { score: 1.5, member: bs("a") }];
+        let entries = vec![ZSetEntry {
+            score: 1.5,
+            member: bs("a"),
+        }];
         let r = format_zrange_response(entries, true);
         if let RespValue::Array(arr) = r {
             assert_eq!(arr.len(), 2);
@@ -232,7 +241,12 @@ mod tests {
 
     #[test]
     fn test_parse_range_args_with_withscores() {
-        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("10"), bs_frame("WITHSCORES")];
+        let args = [
+            bs_frame("ZRANGE"),
+            bs_frame("0"),
+            bs_frame("10"),
+            bs_frame("WITHSCORES"),
+        ];
         let (s, e, ws) = parse_range_args(&args).unwrap();
         assert_eq!(s, 0);
         assert_eq!(e, 10);
@@ -241,14 +255,24 @@ mod tests {
 
     #[test]
     fn test_parse_range_args_withscores_case_insensitive() {
-        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("-1"), bs_frame("withscores")];
+        let args = [
+            bs_frame("ZRANGE"),
+            bs_frame("0"),
+            bs_frame("-1"),
+            bs_frame("withscores"),
+        ];
         let (_, _, ws) = parse_range_args(&args).unwrap();
         assert!(ws);
     }
 
     #[test]
     fn test_parse_range_args_invalid_option_is_syntax_error() {
-        let args = [bs_frame("ZRANGE"), bs_frame("0"), bs_frame("10"), bs_frame("LIMIT")];
+        let args = [
+            bs_frame("ZRANGE"),
+            bs_frame("0"),
+            bs_frame("10"),
+            bs_frame("LIMIT"),
+        ];
         let r = parse_range_args(&args);
         assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
     }

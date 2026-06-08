@@ -96,3 +96,74 @@ impl CommandSpec for GetBit {
         vec![self.key.clone(), self.offset.to_string().into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_getbit_parse_basic() {
+        let c = GetBit::parse(&[bs("mykey"), bs("0")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+        assert_eq!(c.offset, 0);
+    }
+
+    #[test]
+    fn test_getbit_parse_with_offset() {
+        let c = GetBit::parse(&[bs("mykey"), bs("100")]).unwrap();
+        assert_eq!(c.offset, 100);
+    }
+
+    #[test]
+    fn test_getbit_parse_empty_is_error() {
+        let r = GetBit::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getbit_parse_missing_offset_is_error() {
+        let r = GetBit::parse(&[bs("mykey")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getbit_parse_non_bulk_key_is_error() {
+        let r = GetBit::parse(&[RespFrame::Integer(123), bs("0")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_getbit_parse_non_numeric_offset_is_error() {
+        let r = GetBit::parse(&[bs("mykey"), bs("not-a-number")]);
+        assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
+    }
+
+    #[test]
+    fn test_getbit_to_resp_args() {
+        let c = GetBit {
+            key: Bytes::from_static(b"key"),
+            offset: 42,
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+        assert_eq!(args[1], Bytes::from_static(b"42"));
+    }
+
+    #[test]
+    fn test_getbit_spec() {
+        let c = GetBit {
+            key: Bytes::from_static(b"k"),
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "getbit");
+        assert_eq!(c.arity(), 3);
+        assert!(c.flags().contains(CommandFlags::READONLY));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 1);
+    }
+}

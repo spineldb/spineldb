@@ -632,11 +632,7 @@ mod tests {
 
     #[test]
     fn test_key_glob_allow_matches() {
-        let cfg = enabled_config_with(vec![rule_with_keys(
-            "r",
-            &["+get"],
-            &["~user:*"],
-        )]);
+        let cfg = enabled_config_with(vec![rule_with_keys("r", &["+get"], &["~user:*"])]);
         let e = AclEnforcer::new(&cfg);
         let u = user_with_rules(&["r"]);
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"user:42"))];
@@ -652,11 +648,7 @@ mod tests {
 
     #[test]
     fn test_key_glob_deny_takes_precedence() {
-        let cfg = enabled_config_with(vec![rule_with_keys(
-            "r",
-            &["+@all"],
-            &["~*", "-admin:*"],
-        )]);
+        let cfg = enabled_config_with(vec![rule_with_keys("r", &["+@all"], &["~*", "-admin:*"])]);
         let e = AclEnforcer::new(&cfg);
         let u = user_with_rules(&["r"]);
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"admin:secret"))];
@@ -672,11 +664,7 @@ mod tests {
 
     #[test]
     fn test_key_pattern_does_not_match_other_keys() {
-        let cfg = enabled_config_with(vec![rule_with_keys(
-            "r",
-            &["+@all"],
-            &["~user:*"],
-        )]);
+        let cfg = enabled_config_with(vec![rule_with_keys("r", &["+@all"], &["~user:*"])]);
         let e = AclEnforcer::new(&cfg);
         let u = user_with_rules(&["r"]);
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"order:1"))];
@@ -693,11 +681,7 @@ mod tests {
 
     #[test]
     fn test_allkeys_shortcut_allows_any_key() {
-        let cfg = enabled_config_with(vec![rule_with_keys(
-            "r",
-            &["+@all"],
-            &["allkeys"],
-        )]);
+        let cfg = enabled_config_with(vec![rule_with_keys("r", &["+@all"], &["allkeys"])]);
         let e = AclEnforcer::new(&cfg);
         let u = user_with_rules(&["r"]);
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"anything"))];
@@ -713,11 +697,7 @@ mod tests {
 
     #[test]
     fn test_pubsub_glob_allow() {
-        let cfg = enabled_config_with(vec![rule_with_channels(
-            "r",
-            &["+@all"],
-            &["&news.*"],
-        )]);
+        let cfg = enabled_config_with(vec![rule_with_channels("r", &["+@all"], &["&news.*"])]);
         let e = AclEnforcer::new(&cfg);
         let u = user_with_rules(&["r"]);
         let args: Vec<RespFrame> = vec![];
@@ -753,11 +733,7 @@ mod tests {
 
     #[test]
     fn test_allchannels_shortcut_allows_any_channel() {
-        let cfg = enabled_config_with(vec![rule_with_channels(
-            "r",
-            &["+@all"],
-            &["allchannels"],
-        )]);
+        let cfg = enabled_config_with(vec![rule_with_channels("r", &["+@all"], &["allchannels"])]);
         let e = AclEnforcer::new(&cfg);
         let u = user_with_rules(&["r"]);
         let args: Vec<RespFrame> = vec![];
@@ -777,14 +753,7 @@ mod tests {
         let cfg = enabled_config_with(vec![rule("r", &["+@all"])]);
         let e = AclEnforcer::new(&cfg);
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"user"))];
-        assert!(e.check_permission(
-            None,
-            &args,
-            "AUTH",
-            CommandFlags::ADMIN,
-            &[],
-            &[]
-        ));
+        assert!(e.check_permission(None, &args, "AUTH", CommandFlags::ADMIN, &[], &[]));
     }
 
     #[test]
@@ -793,14 +762,7 @@ mod tests {
         let cfg = enabled_config_with(vec![rule("r", &["+@all"])]);
         let e = AclEnforcer::new(&cfg);
         let args: Vec<RespFrame> = vec![];
-        assert!(e.check_permission(
-            None,
-            &args,
-            "auth",
-            CommandFlags::ADMIN,
-            &[],
-            &[]
-        ));
+        assert!(e.check_permission(None, &args, "auth", CommandFlags::ADMIN, &[], &[]));
     }
 
     #[test]
@@ -823,14 +785,7 @@ mod tests {
         let u = user_with_rules(&["r"]);
         // raw_args len is 1 (just the key) → argc = 2 < 3 → GET allowed.
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
-        assert!(e.check_permission(
-            Some(&u),
-            &args,
-            "GET",
-            CommandFlags::READONLY,
-            &[],
-            &[]
-        ));
+        assert!(e.check_permission(Some(&u), &args, "GET", CommandFlags::READONLY, &[], &[]));
     }
 
     #[test]
@@ -852,14 +807,7 @@ mod tests {
         let u = user_with_rules(&["r"]);
         // argc = 2, not greater than 5 → condition does not fire → denied.
         let args = vec![RespFrame::BulkString(Bytes::from_static(b"k"))];
-        assert!(!e.check_permission(
-            Some(&u),
-            &args,
-            "GET",
-            CommandFlags::READONLY,
-            &[],
-            &[]
-        ));
+        assert!(!e.check_permission(Some(&u), &args, "GET", CommandFlags::READONLY, &[], &[]));
     }
 
     #[test]
@@ -883,14 +831,7 @@ mod tests {
 
         // arg[0] = "user:42" → matches → SET allowed.
         let args_match = vec![RespFrame::BulkString(Bytes::from_static(b"user:42"))];
-        assert!(e.check_permission(
-            Some(&u),
-            &args_match,
-            "SET",
-            CommandFlags::WRITE,
-            &[],
-            &[]
-        ));
+        assert!(e.check_permission(Some(&u), &args_match, "SET", CommandFlags::WRITE, &[], &[]));
 
         // arg[0] = "other:1" → no match → denied.
         let args_nomatch = vec![RespFrame::BulkString(Bytes::from_static(b"other:1"))];
@@ -924,24 +865,10 @@ mod tests {
 
         // "42" is a number → INCRBY allowed.
         let args_num = vec![RespFrame::BulkString(Bytes::from_static(b"42"))];
-        assert!(e.check_permission(
-            Some(&u),
-            &args_num,
-            "INCRBY",
-            CommandFlags::WRITE,
-            &[],
-            &[]
-        ));
+        assert!(e.check_permission(Some(&u), &args_num, "INCRBY", CommandFlags::WRITE, &[], &[]));
 
         // "notanumber" is not a number → INCRBY denied.
         let args_str = vec![RespFrame::BulkString(Bytes::from_static(b"notanumber"))];
-        assert!(!e.check_permission(
-            Some(&u),
-            &args_str,
-            "INCRBY",
-            CommandFlags::WRITE,
-            &[],
-            &[]
-        ));
+        assert!(!e.check_permission(Some(&u), &args_str, "INCRBY", CommandFlags::WRITE, &[], &[]));
     }
 }

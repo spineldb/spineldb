@@ -96,3 +96,33 @@ impl CommandSpec for Keys {
         vec![self.pattern.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_keys_parse_pattern() -> Result<(), SpinelDBError> {
+        let c = Keys::parse(&[bs("user:*")]).unwrap();
+        assert_eq!(c.pattern, Bytes::from_static(b"user:*"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_keys_parse_no_args() {
+        let r = Keys::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_keys_to_resp_args_returns_pattern() -> Result<(), SpinelDBError> {
+        let c = Keys::parse(&[bs("user:*")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args, vec![Bytes::from_static(b"user:*")]);
+        Ok(())
+    }
+}

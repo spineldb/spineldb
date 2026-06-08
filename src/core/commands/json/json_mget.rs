@@ -162,10 +162,13 @@ mod tests {
     fn test_json_mget_to_resp_args_round_trips() {
         let c = JsonMGet::parse(&[bs("k1"), bs("k2"), bs("$.a")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![
-            Bytes::from_static(b"k1"),
-            Bytes::from_static(b"k2"),
-            Bytes::from_static(b"$.a"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                Bytes::from_static(b"k1"),
+                Bytes::from_static(b"k2"),
+                Bytes::from_static(b"$.a"),
+            ]
+        );
     }
 }

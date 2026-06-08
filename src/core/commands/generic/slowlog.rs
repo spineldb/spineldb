@@ -112,3 +112,142 @@ impl CommandSpec for Slowlog {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_errors() {
+        assert!(Slowlog::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn test_parse_get_no_args() {
+        let cmd = Slowlog::parse(&[bulk("GET")]).unwrap();
+        assert!(matches!(cmd.subcommand, SlowlogSubcommand::Get(None)));
+    }
+
+    #[test]
+    fn test_parse_get_with_count() {
+        let cmd = Slowlog::parse(&[bulk("GET"), bulk("5")]).unwrap();
+        assert!(matches!(cmd.subcommand, SlowlogSubcommand::Get(Some(5))));
+    }
+
+    #[test]
+    fn test_parse_get_case_insensitive() {
+        let cmd = Slowlog::parse(&[bulk("get")]).unwrap();
+        assert!(matches!(cmd.subcommand, SlowlogSubcommand::Get(None)));
+    }
+
+    #[test]
+    fn test_parse_get_too_many_args_errors() {
+        assert!(Slowlog::parse(&[bulk("GET"), bulk("5"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_get_bad_count_errors() {
+        assert!(Slowlog::parse(&[bulk("GET"), bulk("abc")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_len() {
+        let cmd = Slowlog::parse(&[bulk("LEN")]).unwrap();
+        assert!(matches!(cmd.subcommand, SlowlogSubcommand::Len));
+    }
+
+    #[test]
+    fn test_parse_len_extra_args_errors() {
+        assert!(Slowlog::parse(&[bulk("LEN"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_reset() {
+        let cmd = Slowlog::parse(&[bulk("RESET")]).unwrap();
+        assert!(matches!(cmd.subcommand, SlowlogSubcommand::Reset));
+    }
+
+    #[test]
+    fn test_parse_reset_extra_args_errors() {
+        assert!(Slowlog::parse(&[bulk("RESET"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_subcommand_errors() {
+        let result = Slowlog::parse(&[bulk("UNKNOWN")]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Slowlog::default().name(), "slowlog");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Slowlog::default().arity(), -2);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Slowlog::default().flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+        assert!(flags.contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Slowlog::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Slowlog::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_get_none() {
+        let cmd = Slowlog {
+            subcommand: SlowlogSubcommand::Get(None),
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"GET")]);
+    }
+
+    #[test]
+    fn test_to_resp_args_get_with_count() {
+        let cmd = Slowlog {
+            subcommand: SlowlogSubcommand::Get(Some(10)),
+        };
+        assert_eq!(
+            cmd.to_resp_args(),
+            vec![Bytes::from_static(b"GET"), Bytes::from_static(b"10")]
+        );
+    }
+
+    #[test]
+    fn test_to_resp_args_len() {
+        let cmd = Slowlog {
+            subcommand: SlowlogSubcommand::Len,
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"LEN")]);
+    }
+
+    #[test]
+    fn test_to_resp_args_reset() {
+        let cmd = Slowlog {
+            subcommand: SlowlogSubcommand::Reset,
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"RESET")]);
+    }
+}

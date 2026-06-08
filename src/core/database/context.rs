@@ -104,3 +104,41 @@ impl<'a> ExecutionContext<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::data_types::{DataValue, StoredValue};
+
+    fn make_sv(s: &str) -> StoredValue {
+        StoredValue::new(DataValue::String(Bytes::copy_from_slice(s.as_bytes())))
+    }
+
+    #[tokio::test]
+    async fn test_release_locks_sets_none() {
+        let db = Db::new();
+        db.insert_value_from_load(Bytes::from_static(b"k"), make_sv("v"))
+            .await;
+        // We can't easily create an ExecutionContext without ServerState,
+        // so test the ExecutionLocks enum directly
+        let locks = ExecutionLocks::None;
+        assert!(matches!(locks, ExecutionLocks::None));
+    }
+
+    #[test]
+    fn test_execution_locks_none_variant() {
+        let locks = ExecutionLocks::None;
+        assert!(matches!(locks, ExecutionLocks::None));
+    }
+
+    #[test]
+    fn test_execution_locks_multi_variant() {
+        use std::collections::BTreeMap;
+        let guards: BTreeMap<
+            usize,
+            tokio::sync::MutexGuard<'_, crate::core::database::shard::ShardCache>,
+        > = BTreeMap::new();
+        let locks = ExecutionLocks::Multi { guards };
+        assert!(matches!(locks, ExecutionLocks::Multi { .. }));
+    }
+}

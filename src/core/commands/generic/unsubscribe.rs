@@ -62,3 +62,63 @@ impl CommandSpec for Unsubscribe {
         self.channels.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    #[test]
+    fn test_parse_empty_no_channels() {
+        let cmd = Unsubscribe::parse(&[]).unwrap();
+        assert!(cmd.channels.is_empty());
+    }
+
+    #[test]
+    fn test_parse_single_channel() {
+        let cmd = Unsubscribe::parse(&[bulk("news")]).unwrap();
+        assert_eq!(cmd.channels, vec![Bytes::from_static(b"news")]);
+    }
+
+    #[test]
+    fn test_parse_multiple_channels() {
+        let cmd = Unsubscribe::parse(&[bulk("ch1"), bulk("ch2")]).unwrap();
+        assert_eq!(cmd.channels.len(), 2);
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Unsubscribe::default().name(), "unsubscribe");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Unsubscribe::default().arity(), -1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Unsubscribe::default().flags();
+        assert!(flags.contains(CommandFlags::PUBSUB));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Unsubscribe::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_to_resp_args() {
+        let cmd = Unsubscribe {
+            channels: vec![Bytes::from_static(b"a")],
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"a")]);
+    }
+}

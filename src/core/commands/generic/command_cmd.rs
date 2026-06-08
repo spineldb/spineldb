@@ -134,3 +134,122 @@ impl ExecutableCommand for CommandInfo {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    #[test]
+    fn test_parse_no_args() {
+        let cmd = CommandInfo::parse(&[]).unwrap();
+        assert_eq!(cmd.name(), "command");
+    }
+
+    #[test]
+    fn test_parse_with_args_errors() {
+        assert!(CommandInfo::parse(&[RespFrame::BulkString(bytes::Bytes::from("info"))]).is_err());
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(CommandInfo.arity(), -1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = CommandInfo.flags();
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+        assert!(flags.contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(CommandInfo.get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = CommandInfo;
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_empty() {
+        assert!(CommandInfo.to_resp_args().is_empty());
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_write() {
+        let vals = flags_to_resp_values(CommandFlags::WRITE);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "write"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_readonly() {
+        let vals = flags_to_resp_values(CommandFlags::READONLY);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "readonly"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_admin() {
+        let vals = flags_to_resp_values(CommandFlags::ADMIN);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "admin"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_denyoom() {
+        let vals = flags_to_resp_values(CommandFlags::DENY_OOM);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "denyoom"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_pubsub() {
+        let vals = flags_to_resp_values(CommandFlags::PUBSUB);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "pubsub"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_no_propagate() {
+        let vals = flags_to_resp_values(CommandFlags::NO_PROPAGATE);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "no_propagate"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_transaction() {
+        let vals = flags_to_resp_values(CommandFlags::TRANSACTION);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "transaction"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_movablekeys() {
+        let vals = flags_to_resp_values(CommandFlags::MOVABLEKEYS);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0], RespValue::SimpleString(s) if s == "movablekeys"));
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_empty() {
+        let vals = flags_to_resp_values(CommandFlags::empty());
+        assert!(vals.is_empty());
+    }
+
+    #[test]
+    fn test_flags_to_resp_values_multiple() {
+        let flags = CommandFlags::WRITE | CommandFlags::DENY_OOM;
+        let vals = flags_to_resp_values(flags);
+        assert_eq!(vals.len(), 2);
+    }
+}

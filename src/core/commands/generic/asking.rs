@@ -64,3 +64,21 @@ impl CommandSpec for Asking {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_asking_parse_no_args() -> Result<(), SpinelDBError> {
+        let c = Asking::parse(&[])?;
+        assert!(matches!(c, Asking));
+        Ok(())
+    }
+
+    #[test]
+    fn test_asking_parse_with_args_is_error() {
+        let r = Asking::parse(&[RespFrame::BulkString(Bytes::from_static(b"arg"))]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+}

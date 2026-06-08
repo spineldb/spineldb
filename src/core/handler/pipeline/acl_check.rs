@@ -62,3 +62,55 @@ pub async fn check_permissions(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::connection::SessionState;
+    use crate::test_helpers::init_server_state;
+
+    #[tokio::test]
+    async fn test_acl_check_skips_when_disabled() {
+        let state = init_server_state(Config::default());
+        let session = SessionState::new(false, false);
+        let cmd = Command::Get(crate::core::commands::string::Get {
+            key: Bytes::from_static(b"test"),
+        });
+        let raw_args = vec![];
+        let keys = vec![];
+        let result = check_permissions(&state, &session, &cmd, &raw_args, &keys).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acl_check_rejects_unauthenticated_when_enabled() {
+        let mut config = Config::default();
+        config.acl.enabled = true;
+        let state = init_server_state(config);
+        let session = SessionState::new(false, true);
+        let cmd = Command::Get(crate::core::commands::string::Get {
+            key: Bytes::from_static(b"test"),
+        });
+        let raw_args = vec![];
+        let keys = vec![];
+        let result = check_permissions(&state, &session, &cmd, &raw_args, &keys).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SpinelDBError::NoPermission));
+    }
+
+    #[tokio::test]
+    async fn test_acl_check_allows_auth_command_when_unauthenticated() {
+        let mut config = Config::default();
+        config.acl.enabled = true;
+        let state = init_server_state(config);
+        let session = SessionState::new(false, true);
+        let cmd = Command::Auth(crate::core::commands::generic::Auth {
+            password: "test".to_string(),
+        });
+        let raw_args = vec![];
+        let keys = vec![];
+        let result = check_permissions(&state, &session, &cmd, &raw_args, &keys).await;
+        assert!(result.is_ok());
+    }
+}

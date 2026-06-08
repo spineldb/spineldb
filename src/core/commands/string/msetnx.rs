@@ -89,3 +89,63 @@ impl CommandSpec for MSetNx {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_msetnx_parse_single_pair() {
+        let c = MSetNx::parse(&[bs("k"), bs("v")]).unwrap();
+        assert_eq!(c.pairs.len(), 1);
+        assert_eq!(c.pairs[0].0, Bytes::from_static(b"k"));
+        assert_eq!(c.pairs[0].1, Bytes::from_static(b"v"));
+    }
+
+    #[test]
+    fn test_msetnx_parse_multiple_pairs() {
+        let c = MSetNx::parse(&[bs("k1"), bs("v1"), bs("k2"), bs("v2")]).unwrap();
+        assert_eq!(c.pairs.len(), 2);
+    }
+
+    #[test]
+    fn test_msetnx_parse_empty_is_error() {
+        let r = MSetNx::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_msetnx_parse_odd_args_is_error() {
+        let r = MSetNx::parse(&[bs("k"), bs("v"), bs("k2")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_msetnx_parse_non_bulk_is_error() {
+        let r = MSetNx::parse(&[bs("k"), RespFrame::Integer(1)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_msetnx_to_resp_args() {
+        let c = MSetNx {
+            pairs: vec![(Bytes::from_static(b"a"), Bytes::from_static(b"1"))],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn test_msetnx_spec() {
+        let c = MSetNx { pairs: vec![] };
+        assert_eq!(c.name(), "msetnx");
+        assert_eq!(c.arity(), -3);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 1);
+        assert_eq!(c.step(), 2);
+    }
+}

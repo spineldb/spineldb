@@ -60,3 +60,56 @@ impl CommandSpec for Unwatch {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    #[test]
+    fn test_parse_no_args() {
+        let cmd = Unwatch::parse(&[]).unwrap();
+        assert_eq!(cmd.name(), "unwatch");
+    }
+
+    #[test]
+    fn test_parse_with_args_errors() {
+        assert!(Unwatch::parse(&[RespFrame::BulkString(bytes::Bytes::from("x"))]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Unwatch.name(), "unwatch");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Unwatch.arity(), 1);
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let flags = Unwatch.flags();
+        assert!(flags.contains(CommandFlags::TRANSACTION));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Unwatch.get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        assert_eq!(Unwatch.first_key(), 0);
+        assert_eq!(Unwatch.last_key(), 0);
+        assert_eq!(Unwatch.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_empty() {
+        assert!(Unwatch.to_resp_args().is_empty());
+    }
+}

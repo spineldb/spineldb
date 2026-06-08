@@ -46,3 +46,128 @@ pub async fn handle_replconf(
     }
     Ok(RouteResponse::Single(RespValue::SimpleString("OK".into())))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::core::state::{ReplicaStateInfo, ReplicaSyncState};
+    use crate::test_helpers::init_server_state;
+
+    fn make_test_state() -> Arc<ServerState> {
+        init_server_state(Config::default())
+    }
+
+    #[tokio::test]
+    async fn test_handle_select_valid_db() {
+        let state = make_test_state();
+        let mut session = SessionState::new(false, false);
+        let session_id = 1u64;
+        let cmd = Select { db_index: 5 };
+
+        let result = handle_select(cmd, &mut session, &state, session_id).await;
+        assert!(result.is_ok());
+        assert_eq!(session.current_db_index, 5);
+
+        match result.unwrap() {
+            RouteResponse::Single(RespValue::SimpleString(s)) => assert_eq!(s, "OK"),
+            _ => panic!("Expected SimpleString OK"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_select_db_zero() {
+        let state = make_test_state();
+        let mut session = SessionState::new(false, false);
+        session.current_db_index = 3;
+        let session_id = 1u64;
+        let cmd = Select { db_index: 0 };
+
+        let result = handle_select(cmd, &mut session, &state, session_id).await;
+        assert!(result.is_ok());
+        assert_eq!(session.current_db_index, 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_select_out_of_range() {
+        let state = make_test_state();
+        let mut session = SessionState::new(false, false);
+        let session_id = 1u64;
+        let cmd = Select { db_index: 100 };
+
+        let result = handle_select(cmd, &mut session, &state, session_id).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            RouteResponse::Single(RespValue::Error(s)) => {
+                assert!(s.contains("DB index out of range"))
+            }
+            _ => panic!("Expected Error response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_replconf_ok() {
+        let state = make_test_state();
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let cmd = Replconf {
+            args: vec!["ACK".to_string(), "1000".to_string()],
+        };
+
+        let result = handle_replconf(&cmd, &state, &addr).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            RouteResponse::Single(RespValue::SimpleString(s)) => assert_eq!(s, "OK"),
+            _ => panic!("Expected SimpleString OK"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_replconf_updates_replica_state() {
+        let state = make_test_state();
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+
+        state.replica_states.insert(
+            addr,
+            ReplicaStateInfo {
+                sync_state: ReplicaSyncState::Online,
+                ack_offset: 0,
+                last_ack_time: Instant::now(),
+            },
+        );
+
+        let cmd = Replconf {
+            args: vec!["ACK".to_string(), "5000".to_string()],
+        };
+
+        let _ = handle_replconf(&cmd, &state, &addr).await;
+
+        let replica = state.replica_states.get(&addr).unwrap();
+        assert_eq!(replica.ack_offset, 5000);
+    }
+
+    #[tokio::test]
+    async fn test_handle_replconf_non_ack_ignored() {
+        let state = make_test_state();
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+
+        state.replica_states.insert(
+            addr,
+            ReplicaStateInfo {
+                sync_state: ReplicaSyncState::Online,
+                ack_offset: 0,
+                last_ack_time: Instant::now(),
+            },
+        );
+
+        let cmd = Replconf {
+            args: vec!["GETACK".to_string(), "1000".to_string()],
+        };
+
+        let _ = handle_replconf(&cmd, &state, &addr).await;
+
+        let replica = state.replica_states.get(&addr).unwrap();
+        assert_eq!(replica.ack_offset, 0);
+    }
+}

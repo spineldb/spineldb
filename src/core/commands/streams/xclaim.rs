@@ -335,7 +335,15 @@ mod tests {
 
     #[test]
     fn test_xclaim_parses_justid() {
-        let c = XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0"), bs("JUSTID"), bs("1-0")]).unwrap();
+        let c = XClaim::parse(&[
+            bs("k"),
+            bs("g1"),
+            bs("c1"),
+            bs("0"),
+            bs("JUSTID"),
+            bs("1-0"),
+        ])
+        .unwrap();
         assert!(c.justid);
     }
 
@@ -386,15 +394,8 @@ mod tests {
 
     #[test]
     fn test_xclaim_parses_force() {
-        let c = XClaim::parse(&[
-            bs("k"),
-            bs("g1"),
-            bs("c1"),
-            bs("0"),
-            bs("FORCE"),
-            bs("1-0"),
-        ])
-        .unwrap();
+        let c =
+            XClaim::parse(&[bs("k"), bs("g1"), bs("c1"), bs("0"), bs("FORCE"), bs("1-0")]).unwrap();
         assert!(c.force);
     }
 

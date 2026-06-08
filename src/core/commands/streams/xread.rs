@@ -369,14 +369,7 @@ mod tests {
 
     #[test]
     fn test_xread_multiple_streams() {
-        let c = XRead::parse(&[
-            bs("STREAMS"),
-            bs("k1"),
-            bs("k2"),
-            bs("0"),
-            bs("$"),
-        ])
-        .unwrap();
+        let c = XRead::parse(&[bs("STREAMS"), bs("k1"), bs("k2"), bs("0"), bs("$")]).unwrap();
         assert_eq!(c.streams.len(), 2);
         assert_eq!(c.streams[0].0, Bytes::from_static(b"k1"));
         assert_eq!(c.streams[1].0, Bytes::from_static(b"k2"));
@@ -426,7 +419,13 @@ mod tests {
 
     #[test]
     fn test_xread_invalid_block_value_is_error() {
-        let r = XRead::parse(&[bs("BLOCK"), bs("not_a_number"), bs("STREAMS"), bs("k1"), bs("0")]);
+        let r = XRead::parse(&[
+            bs("BLOCK"),
+            bs("not_a_number"),
+            bs("STREAMS"),
+            bs("k1"),
+            bs("0"),
+        ]);
         assert!(matches!(r, Err(SpinelDBError::NotAnInteger)));
     }
 

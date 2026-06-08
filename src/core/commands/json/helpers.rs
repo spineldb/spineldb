@@ -320,17 +320,26 @@ mod tests {
 
     #[test]
     fn test_parse_path_unclosed_bracket_is_error() {
-        assert!(matches!(parse_path("$.a["), Err(SpinelDBError::SyntaxError)));
+        assert!(matches!(
+            parse_path("$.a["),
+            Err(SpinelDBError::SyntaxError)
+        ));
     }
 
     #[test]
     fn test_parse_path_non_numeric_index_is_error() {
-        assert!(matches!(parse_path("$.a[abc]"), Err(SpinelDBError::SyntaxError)));
+        assert!(matches!(
+            parse_path("$.a[abc]"),
+            Err(SpinelDBError::SyntaxError)
+        ));
     }
 
     #[test]
     fn test_parse_path_double_dot_is_error() {
-        assert!(matches!(parse_path("$..a"), Err(SpinelDBError::SyntaxError)));
+        assert!(matches!(
+            parse_path("$..a"),
+            Err(SpinelDBError::SyntaxError)
+        ));
     }
 
     #[test]

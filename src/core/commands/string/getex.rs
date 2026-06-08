@@ -188,3 +188,130 @@ impl CommandSpec for GetEx {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_getex_parse_basic() {
+        let c = GetEx::parse(&[bs("mykey")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"mykey"));
+        assert_eq!(c.ttl, TtlOption::None);
+    }
+
+    #[test]
+    fn test_getex_parse_with_ex() {
+        let c = GetEx::parse(&[bs("mykey"), bs("EX"), bs("60")]).unwrap();
+        assert_eq!(c.ttl, TtlOption::Seconds(60));
+    }
+
+    #[test]
+    fn test_getex_parse_with_px() {
+        let c = GetEx::parse(&[bs("mykey"), bs("PX"), bs("1000")]).unwrap();
+        assert_eq!(c.ttl, TtlOption::Milliseconds(1000));
+    }
+
+    #[test]
+    fn test_getex_parse_with_persist() {
+        let c = GetEx::parse(&[bs("mykey"), bs("PERSIST")]).unwrap();
+        assert_eq!(c.ttl, TtlOption::Persist);
+    }
+
+    #[test]
+    fn test_getex_parse_empty_is_error() {
+        let r = GetEx::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_getex_parse_ex_missing_value_is_error() {
+        let r = GetEx::parse(&[bs("mykey"), bs("EX")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_getex_parse_persist_with_extra_arg_is_error() {
+        let r = GetEx::parse(&[bs("mykey"), bs("PERSIST"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_getex_parse_unknown_option_is_error() {
+        let r = GetEx::parse(&[bs("mykey"), bs("UNKNOWN")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_getex_parse_non_bulk_key_is_error() {
+        let r = GetEx::parse(&[RespFrame::Integer(123)]);
+        assert!(matches!(r, Err(SpinelDBError::WrongType)));
+    }
+
+    #[test]
+    fn test_getex_to_resp_args_basic() {
+        let c = GetEx {
+            key: Bytes::from_static(b"key"),
+            ..Default::default()
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], Bytes::from_static(b"key"));
+    }
+
+    #[test]
+    fn test_getex_to_resp_args_with_ex() {
+        let c = GetEx {
+            key: Bytes::from_static(b"key"),
+            ttl: TtlOption::Seconds(30),
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[1], Bytes::from_static(b"EX"));
+        assert_eq!(args[2], Bytes::from_static(b"30"));
+    }
+
+    #[test]
+    fn test_getex_to_resp_args_with_persist() {
+        let c = GetEx {
+            key: Bytes::from_static(b"key"),
+            ttl: TtlOption::Persist,
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[1], Bytes::from_static(b"PERSIST"));
+    }
+
+    #[test]
+    fn test_getex_flags_readonly_when_no_ttl() {
+        let c = GetEx {
+            ttl: TtlOption::None,
+            ..Default::default()
+        };
+        assert!(c.flags().contains(CommandFlags::READONLY));
+    }
+
+    #[test]
+    fn test_getex_flags_write_when_ttl() {
+        let c = GetEx {
+            ttl: TtlOption::Seconds(10),
+            ..Default::default()
+        };
+        assert!(c.flags().contains(CommandFlags::WRITE));
+    }
+
+    #[test]
+    fn test_getex_spec() {
+        let c = GetEx {
+            key: Bytes::from_static(b"k"),
+            ..Default::default()
+        };
+        assert_eq!(c.name(), "getex");
+        assert_eq!(c.arity(), -2);
+        assert_eq!(c.first_key(), 1);
+    }
+}

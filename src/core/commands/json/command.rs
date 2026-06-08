@@ -380,66 +380,121 @@ mod tests {
     #[test]
     fn test_json_get_dispatch() {
         let r = Json::parse(&[bs("GET"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Get(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Get(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_set_dispatch() {
         let r = Json::parse(&[bs("SET"), bs("k"), bs("$.f"), bs("v")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Set(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Set(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_del_dispatch() {
         let r = Json::parse(&[bs("DEL"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Del(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Del(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_forget_is_alias_for_del() {
         let r = Json::parse(&[bs("FORGET"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Del(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Del(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_arrlen_dispatch() {
         let r = Json::parse(&[bs("ARRLEN"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::ArrLen(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::ArrLen(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_objlen_dispatch() {
         let r = Json::parse(&[bs("OBJLEN"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::ObjLen(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::ObjLen(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_strlen_dispatch() {
         let r = Json::parse(&[bs("STRLEN"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::StrLen(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::StrLen(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_type_dispatch() {
         let r = Json::parse(&[bs("TYPE"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Type(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Type(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_toggle_dispatch() {
         let r = Json::parse(&[bs("TOGGLE"), bs("k"), bs("$.f")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Toggle(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Toggle(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_clear_dispatch() {
         let r = Json::parse(&[bs("CLEAR"), bs("k"), bs("$.f")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Clear(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Clear(_)
+            })
+        ));
     }
 
     #[test]
     fn test_json_subcommand_case_insensitive() {
         let r = Json::parse(&[bs("get"), bs("k")]);
-        assert!(matches!(r, Ok(Json { subcommand: JsonSubcommand::Get(_) })));
+        assert!(matches!(
+            r,
+            Ok(Json {
+                subcommand: JsonSubcommand::Get(_)
+            })
+        ));
     }
 }

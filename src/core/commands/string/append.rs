@@ -184,6 +184,9 @@ mod tests {
     fn test_append_to_resp_args_round_trips() {
         let a = Append::parse(&[bs("k"), bs("payload")]).unwrap();
         let args = a.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"k"), Bytes::from_static(b"payload")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"payload")]
+        );
     }
 }

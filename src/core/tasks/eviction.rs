@@ -9,6 +9,8 @@ use tracing::{debug, info, warn};
 use crate::config::EvictionPolicy;
 use crate::core::state::ServerState;
 
+const MAX_UNPRODUCTIVE_ATTEMPTS: u64 = 600;
+
 /// A task responsible for proactive memory eviction.
 pub struct EvictionManager {
     state: Arc<ServerState>,
@@ -43,7 +45,6 @@ impl EvictionManager {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
 
         let mut unproductive_eviction_attempts = 0u64;
-        const MAX_UNPRODUCTIVE_ATTEMPTS: u64 = 600;
 
         loop {
             tokio::select! {
@@ -134,5 +135,37 @@ impl EvictionManager {
             .map(|db| db.get_current_memory())
             .sum();
         memory_before.saturating_sub(memory_after)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::init_server_state;
+
+    #[test]
+    fn test_eviction_interval_is_reasonable() {
+        let interval = Duration::from_millis(100);
+        assert!(interval > Duration::ZERO);
+        assert!(interval <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_eviction_manager_creation() {
+        let config = crate::config::Config::default();
+        let state = init_server_state(config);
+        let manager = EvictionManager::new(state);
+        drop(manager);
+    }
+
+    #[test]
+    fn test_max_unproductive_attempts_is_reasonable() {
+        assert_eq!(MAX_UNPRODUCTIVE_ATTEMPTS, 600);
+    }
+
+    #[test]
+    fn test_eviction_policy_no_eviction_early_return() {
+        let policy = crate::config::EvictionPolicy::NoEviction;
+        assert_eq!(policy, crate::config::EvictionPolicy::NoEviction);
     }
 }

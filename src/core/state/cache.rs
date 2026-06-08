@@ -297,3 +297,134 @@ impl CacheState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_cache_state() -> CacheState {
+        let (tx, _rx) = mpsc::channel(1);
+        CacheState::new(tx, 0)
+    }
+
+    #[test]
+    fn test_cache_state_new_initializes_counters_to_zero() {
+        let state = make_test_cache_state();
+        assert_eq!(state.hits.load(Ordering::Relaxed), 0);
+        assert_eq!(state.misses.load(Ordering::Relaxed), 0);
+        assert_eq!(state.stale_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(state.revalidations.load(Ordering::Relaxed), 0);
+        assert_eq!(state.evictions.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_cache_state_new_initializes_maps_empty() {
+        let state = make_test_cache_state();
+        assert!(state.fetch_locks.is_empty());
+        assert!(state.swr_locks.is_empty());
+        assert!(state.tag_purge_epochs.is_empty());
+        assert!(state.purge_patterns.is_empty());
+        assert!(state.manual_locks.is_empty());
+    }
+
+    #[test]
+    fn test_increment_hits() {
+        let state = make_test_cache_state();
+        state.increment_hits();
+        state.increment_hits();
+        state.increment_hits();
+        assert_eq!(state.hits.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn test_increment_misses() {
+        let state = make_test_cache_state();
+        state.increment_misses();
+        state.increment_misses();
+        assert_eq!(state.misses.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_increment_stale_hits() {
+        let state = make_test_cache_state();
+        state.increment_stale_hits();
+        assert_eq!(state.stale_hits.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_increment_revalidations() {
+        let state = make_test_cache_state();
+        state.increment_revalidations();
+        state.increment_revalidations();
+        state.increment_revalidations();
+        state.increment_revalidations();
+        assert_eq!(state.revalidations.load(Ordering::Relaxed), 4);
+    }
+
+    #[test]
+    fn test_increment_evictions() {
+        let state = make_test_cache_state();
+        state.increment_evictions();
+        state.increment_evictions();
+        assert_eq!(state.evictions.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_counters_are_independent() {
+        let state = make_test_cache_state();
+        state.increment_hits();
+        state.increment_hits();
+        state.increment_misses();
+        state.increment_stale_hits();
+        state.increment_revalidations();
+        state.increment_evictions();
+        state.increment_evictions();
+        state.increment_evictions();
+
+        assert_eq!(state.hits.load(Ordering::Relaxed), 2);
+        assert_eq!(state.misses.load(Ordering::Relaxed), 1);
+        assert_eq!(state.stale_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(state.revalidations.load(Ordering::Relaxed), 1);
+        assert_eq!(state.evictions.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn test_cache_state_new_with_default_semaphore() {
+        let state = make_test_cache_state();
+        // Default semaphore should have 1024 permits when on_disk_max_open_files is 0
+        assert_eq!(state.on_disk_read_semaphore.available_permits(), 1024);
+    }
+
+    #[test]
+    fn test_cache_state_new_with_custom_semaphore() {
+        let (tx, _rx) = mpsc::channel(1);
+        let state = CacheState::new(tx, 512);
+        assert_eq!(state.on_disk_read_semaphore.available_permits(), 512);
+    }
+
+    #[test]
+    fn test_policies_start_empty() {
+        let state = make_test_cache_state();
+        let policies = state.policies.blocking_read();
+        assert!(policies.is_empty());
+    }
+
+    #[test]
+    fn test_prewarm_keys_start_empty() {
+        let state = make_test_cache_state();
+        let keys = state.prewarm_keys.blocking_read();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn test_revalidation_job_creation() {
+        let job = RevalidationJob {
+            key: Bytes::from_static(b"cache-key"),
+            url: "https://example.com".to_string(),
+            variant_hash: 12345,
+        };
+        assert_eq!(job.key, Bytes::from_static(b"cache-key"));
+        assert_eq!(job.url, "https://example.com");
+        assert_eq!(job.variant_hash, 12345);
+    }
+}

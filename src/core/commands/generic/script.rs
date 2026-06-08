@@ -144,3 +144,180 @@ impl CommandSpec for Script {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::command_spec::CommandSpec;
+    use crate::core::commands::command_trait::ParseCommand;
+    use crate::core::protocol::RespFrame;
+
+    fn bulk(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(s.to_owned()))
+    }
+
+    fn bulk_bytes(b: &[u8]) -> RespFrame {
+        RespFrame::BulkString(Bytes::from(b.to_vec()))
+    }
+
+    #[test]
+    fn test_parse_empty_errors() {
+        assert!(Script::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn test_parse_flush() {
+        let cmd = Script::parse(&[bulk("FLUSH")]).unwrap();
+        assert!(matches!(cmd.subcommand, ScriptSubcommand::Flush));
+    }
+
+    #[test]
+    fn test_parse_flush_case_insensitive() {
+        let cmd = Script::parse(&[bulk("flush")]).unwrap();
+        assert!(matches!(cmd.subcommand, ScriptSubcommand::Flush));
+    }
+
+    #[test]
+    fn test_parse_flush_extra_args_errors() {
+        assert!(Script::parse(&[bulk("FLUSH"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_exists_no_sha1_errors() {
+        assert!(Script::parse(&[bulk("EXISTS")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_exists_one_sha1() {
+        let cmd = Script::parse(&[bulk("EXISTS"), bulk("abc123")]).unwrap();
+        match &cmd.subcommand {
+            ScriptSubcommand::Exists(sha1s) => {
+                assert_eq!(sha1s.len(), 1);
+                assert_eq!(sha1s[0], "abc123");
+            }
+            _ => panic!("expected Exists"),
+        }
+    }
+
+    #[test]
+    fn test_parse_exists_multiple_sha1s() {
+        let cmd =
+            Script::parse(&[bulk("EXISTS"), bulk("sha1a"), bulk("sha1b"), bulk("sha1c")]).unwrap();
+        match &cmd.subcommand {
+            ScriptSubcommand::Exists(sha1s) => {
+                assert_eq!(sha1s.len(), 3);
+            }
+            _ => panic!("expected Exists"),
+        }
+    }
+
+    #[test]
+    fn test_parse_load() {
+        let cmd = Script::parse(&[bulk("LOAD"), bulk_bytes(b"return 1")]).unwrap();
+        match &cmd.subcommand {
+            ScriptSubcommand::Load(script) => {
+                assert_eq!(script.as_ref(), b"return 1");
+            }
+            _ => panic!("expected Load"),
+        }
+    }
+
+    #[test]
+    fn test_parse_load_no_script_errors() {
+        assert!(Script::parse(&[bulk("LOAD")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_load_extra_args_errors() {
+        assert!(Script::parse(&[bulk("LOAD"), bulk("s"), bulk("extra")]).is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_subcommand_errors() {
+        assert!(Script::parse(&[bulk("UNKNOWN")]).is_err());
+    }
+
+    #[test]
+    fn test_command_name() {
+        assert_eq!(Script::default().name(), "script");
+    }
+
+    #[test]
+    fn test_command_arity() {
+        assert_eq!(Script::default().arity(), -2);
+    }
+
+    #[test]
+    fn test_flags_flush() {
+        let cmd = Script {
+            subcommand: ScriptSubcommand::Flush,
+        };
+        let flags = CommandSpec::flags(&cmd);
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::WRITE));
+    }
+
+    #[test]
+    fn test_flags_load() {
+        let cmd = Script {
+            subcommand: ScriptSubcommand::Load(Bytes::from_static(b"s")),
+        };
+        let flags = CommandSpec::flags(&cmd);
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::WRITE));
+    }
+
+    #[test]
+    fn test_flags_exists() {
+        let cmd = Script {
+            subcommand: ScriptSubcommand::Exists(vec!["sha".into()]),
+        };
+        let flags = CommandSpec::flags(&cmd);
+        assert!(flags.contains(CommandFlags::ADMIN));
+        assert!(flags.contains(CommandFlags::NO_PROPAGATE));
+    }
+
+    #[test]
+    fn test_get_keys_empty() {
+        assert!(Script::default().get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_first_last_step() {
+        let cmd = Script::default();
+        assert_eq!(cmd.first_key(), 0);
+        assert_eq!(cmd.last_key(), 0);
+        assert_eq!(cmd.step(), 0);
+    }
+
+    #[test]
+    fn test_to_resp_args_flush() {
+        let cmd = Script {
+            subcommand: ScriptSubcommand::Flush,
+        };
+        assert_eq!(cmd.to_resp_args(), vec![Bytes::from_static(b"FLUSH")]);
+    }
+
+    #[test]
+    fn test_to_resp_args_exists() {
+        let cmd = Script {
+            subcommand: ScriptSubcommand::Exists(vec!["s1".into(), "s2".into()]),
+        };
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], Bytes::from_static(b"EXISTS"));
+        assert_eq!(args[1], Bytes::from_static(b"s1"));
+        assert_eq!(args[2], Bytes::from_static(b"s2"));
+    }
+
+    #[test]
+    fn test_to_resp_args_load() {
+        let cmd = Script {
+            subcommand: ScriptSubcommand::Load(Bytes::from_static(b"body")),
+        };
+        let args = cmd.to_resp_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Bytes::from_static(b"LOAD"));
+        assert_eq!(args[1], Bytes::from_static(b"body"));
+    }
+}

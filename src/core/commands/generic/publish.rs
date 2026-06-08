@@ -91,3 +91,34 @@ impl CommandSpec for Publish {
         vec![self.channel.clone(), self.message.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_publish_parse_channel_and_message() -> Result<(), SpinelDBError> {
+        let c = Publish::parse(&[bs("channel"), bs("message")]).unwrap();
+        assert_eq!(c.channel, Bytes::from_static(b"channel"));
+        assert_eq!(c.message, Bytes::from_static(b"message"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_publish_parse_too_few_args() {
+        let r = Publish::parse(&[bs("channel")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_publish_to_resp_args_returns_both() -> Result<(), SpinelDBError> {
+        let c = Publish::parse(&[bs("ch"), bs("msg")])?;
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 2);
+        Ok(())
+    }
+}

@@ -122,6 +122,9 @@ mod tests {
     fn test_zpopmin_to_resp_args_round_trips() {
         let c = ZPopMin::parse(&[bs("z"), bs("3")]).unwrap();
         let args = c.to_resp_args();
-        assert_eq!(args, vec![Bytes::from_static(b"z"), Bytes::from_static(b"3")]);
+        assert_eq!(
+            args,
+            vec![Bytes::from_static(b"z"), Bytes::from_static(b"3")]
+        );
     }
 }

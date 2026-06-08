@@ -254,3 +254,96 @@ fn get_temp_aof_path(original_path: &str) -> Result<PathBuf, SpinelDBError> {
     );
     Ok(parent.join(temp_file_name))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_temp_aof_path_basic() {
+        let result = get_temp_aof_path("/data/spineldb.aof").unwrap();
+        assert_eq!(result, PathBuf::from("/data/temp-rewrite-spineldb.aof"));
+    }
+
+    #[test]
+    fn test_get_temp_aof_path_no_directory() {
+        let result = get_temp_aof_path("spineldb.aof").unwrap();
+        assert_eq!(result, PathBuf::from("temp-rewrite-spineldb.aof"));
+    }
+
+    #[test]
+    fn test_get_temp_aof_path_nested_directory() {
+        let result = get_temp_aof_path("/a/b/c/data.aof").unwrap();
+        assert_eq!(result, PathBuf::from("/a/b/c/temp-rewrite-data.aof"));
+    }
+
+    #[test]
+    fn test_get_temp_aof_path_empty_filename_falls_back() {
+        // A path like "/" has no file_name, so it should error
+        let result = get_temp_aof_path("/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_write_uow_to_file_command() {
+        use crate::core::events::UnitOfWork;
+
+        let dir = std::env::temp_dir().join("spineldb_test_aof_rewriter");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("test_uow_command.bin");
+        let mut temp_file = StdFile::create(&path).unwrap();
+        let cmd = Command::Select(crate::core::commands::generic::Select { db_index: 0 });
+        let uow = UnitOfWork::Command(Box::new(cmd));
+        let result = write_uow_to_file(&mut temp_file, uow);
+        assert!(result.is_ok());
+        let metadata = temp_file.metadata().unwrap();
+        assert!(metadata.len() > 0);
+        drop(temp_file);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_write_uow_to_file_empty_transaction() {
+        use crate::core::events::{TransactionData, UnitOfWork};
+
+        let dir = std::env::temp_dir().join("spineldb_test_aof_rewriter");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("test_empty_tx.bin");
+        let mut temp_file = StdFile::create(&path).unwrap();
+        let tx_data = TransactionData {
+            all_commands: vec![],
+            write_commands: vec![],
+        };
+        let uow = UnitOfWork::Transaction(Box::new(tx_data));
+        let result = write_uow_to_file(&mut temp_file, uow);
+        assert!(result.is_ok());
+        let metadata = temp_file.metadata().unwrap();
+        // Empty transaction still writes MULTI + EXEC frames
+        assert!(metadata.len() > 0);
+        drop(temp_file);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_write_uow_to_file_transaction_with_commands() {
+        use crate::core::events::{TransactionData, UnitOfWork};
+
+        let dir = std::env::temp_dir().join("spineldb_test_aof_rewriter");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("test_tx_cmds.bin");
+        let mut temp_file = StdFile::create(&path).unwrap();
+        let cmd1 = Command::Select(crate::core::commands::generic::Select { db_index: 0 });
+        let cmd2 = Command::Select(crate::core::commands::generic::Select { db_index: 1 });
+        let tx_data = TransactionData {
+            all_commands: vec![cmd1, cmd2],
+            write_commands: vec![],
+        };
+        let uow = UnitOfWork::Transaction(Box::new(tx_data));
+        let result = write_uow_to_file(&mut temp_file, uow);
+        assert!(result.is_ok());
+        let metadata = temp_file.metadata().unwrap();
+        assert!(metadata.len() > 0);
+        drop(temp_file);
+        std::fs::remove_file(&path).ok();
+    }
+}

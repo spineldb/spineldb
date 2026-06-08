@@ -362,13 +362,7 @@ mod tests {
     #[test]
     fn test_intersection_uses_smallest_set_as_base() {
         // The smallest set (b) should be the iteration base. Only common members appear.
-        let a = make_zset(&[
-            ("a", 1.0),
-            ("b", 2.0),
-            ("c", 3.0),
-            ("d", 4.0),
-            ("e", 5.0),
-        ]);
+        let a = make_zset(&[("a", 1.0), ("b", 2.0), ("c", 3.0), ("d", 4.0), ("e", 5.0)]);
         let b = make_zset(&[("a", 10.0), ("c", 30.0)]);
         let result = ZSetOp::intersection(&[a, b], &[1.0, 1.0], Aggregate::Sum);
         // a=1+10=11, c=3+30=33
@@ -390,7 +384,12 @@ mod tests {
 
     #[test]
     fn test_parse_store_args_weights_only() {
-        let args = [bs_frame("WEIGHTS"), bs_frame("1.0"), bs_frame("2.0"), bs_frame("3.0")];
+        let args = [
+            bs_frame("WEIGHTS"),
+            bs_frame("1.0"),
+            bs_frame("2.0"),
+            bs_frame("3.0"),
+        ];
         let (w, agg) = parse_store_args(&args, 3).unwrap();
         assert_eq!(w, vec![1.0, 2.0, 3.0]);
         assert_eq!(agg, Aggregate::Sum);
@@ -434,7 +433,11 @@ mod tests {
 
     #[test]
     fn test_parse_store_args_weights_not_float_is_error() {
-        let args = [bs_frame("WEIGHTS"), bs_frame("1.0"), bs_frame("not-a-float")];
+        let args = [
+            bs_frame("WEIGHTS"),
+            bs_frame("1.0"),
+            bs_frame("not-a-float"),
+        ];
         let r = parse_store_args(&args, 2);
         assert!(matches!(r, Err(SpinelDBError::NotAFloat)));
     }

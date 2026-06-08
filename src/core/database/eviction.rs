@@ -238,3 +238,64 @@ impl Db {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::test_helpers::init_server_state;
+
+    fn make_test_state_and_db() -> (Arc<ServerState>, Db) {
+        let state = init_server_state(Config::default());
+        (state, Db::new())
+    }
+
+    #[tokio::test]
+    async fn test_evict_one_key_no_eviction_policy() {
+        let (state, db) = make_test_state_and_db();
+        let key = Bytes::from_static(b"testkey");
+        let value = StoredValue::new(DataValue::String(Bytes::from_static(b"testval")));
+        db.insert_value_from_load(key.clone(), value).await;
+        assert_eq!(db.get_key_count(), 1);
+
+        let result = db.evict_one_key(&state).await;
+        assert!(!result);
+        assert_eq!(db.get_key_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_evict_one_key_empty_db() {
+        let config = Config {
+            maxmemory_policy: EvictionPolicy::AllkeysLru,
+            ..Default::default()
+        };
+        let state = init_server_state(config);
+        let db = Db::new();
+
+        let result = db.evict_one_key(&state).await;
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_evict_one_key_with_entries() {
+        let config = Config {
+            maxmemory_policy: EvictionPolicy::AllkeysRandom,
+            ..Default::default()
+        };
+        let state = init_server_state(config);
+        let db = Db::new();
+
+        // Insert enough keys to guarantee all 16 shards have at least one entry
+        for i in 0..32 {
+            let key = Bytes::from(format!("key{:04}", i));
+            let value = StoredValue::new(DataValue::String(Bytes::from(format!("val{}", i))));
+            db.insert_value_from_load(key, value).await;
+        }
+        let initial_count = db.get_key_count();
+        assert_eq!(initial_count, 32);
+
+        let result = db.evict_one_key(&state).await;
+        assert!(result);
+        assert_eq!(db.get_key_count(), initial_count - 1);
+    }
+}

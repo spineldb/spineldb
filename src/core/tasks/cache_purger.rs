@@ -125,3 +125,19 @@ impl CachePurgerTask {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_purge_interval() {
+        assert_eq!(CACHE_PURGE_INTERVAL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_cache_purge_interval_is_reasonable() {
+        assert!(CACHE_PURGE_INTERVAL >= Duration::from_millis(100));
+        assert!(CACHE_PURGE_INTERVAL <= Duration::from_secs(60));
+    }
+}

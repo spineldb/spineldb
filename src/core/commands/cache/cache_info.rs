@@ -167,3 +167,25 @@ impl CommandSpec for CacheInfo {
         vec![self.key.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_info_parses_key() -> Result<(), SpinelDBError> {
+        let c = CacheInfo::parse(&[bs("key1")]).unwrap();
+        assert_eq!(c.key, Bytes::from_static(b"key1"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_info_no_args_is_error() {
+        let r = CacheInfo::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+}

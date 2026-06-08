@@ -214,3 +214,124 @@ impl CommandSpec for BitOp {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &str) -> RespFrame {
+        RespFrame::BulkString(Bytes::copy_from_slice(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_bitop_parse_empty_is_error() {
+        let r = BitOp::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitop_parse_too_few_args_is_error() {
+        let r = BitOp::parse(&[bs("AND"), bs("dst")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitop_parse_and() {
+        let c = BitOp::parse(&[bs("AND"), bs("dst"), bs("src1"), bs("src2")]).unwrap();
+        assert_eq!(c.operation, BitOpOperation::And);
+        assert_eq!(c.dest_key, Bytes::from_static(b"dst"));
+        assert_eq!(c.src_keys.len(), 2);
+    }
+
+    #[test]
+    fn test_bitop_parse_or() {
+        let c = BitOp::parse(&[bs("OR"), bs("dst"), bs("src1")]).unwrap();
+        assert_eq!(c.operation, BitOpOperation::Or);
+    }
+
+    #[test]
+    fn test_bitop_parse_xor() {
+        let c = BitOp::parse(&[bs("XOR"), bs("dst"), bs("src1")]).unwrap();
+        assert_eq!(c.operation, BitOpOperation::Xor);
+    }
+
+    #[test]
+    fn test_bitop_parse_not_requires_one_src() {
+        let r = BitOp::parse(&[bs("NOT"), bs("dst"), bs("src1"), bs("src2")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_bitop_parse_not_valid() {
+        let c = BitOp::parse(&[bs("NOT"), bs("dst"), bs("src1")]).unwrap();
+        assert_eq!(c.operation, BitOpOperation::Not);
+        assert_eq!(c.src_keys.len(), 1);
+    }
+
+    #[test]
+    fn test_bitop_parse_unknown_op_is_error() {
+        let r = BitOp::parse(&[bs("UNKNOWN"), bs("dst"), bs("src")]);
+        assert!(matches!(r, Err(SpinelDBError::SyntaxError)));
+    }
+
+    #[test]
+    fn test_bitop_parse_case_insensitive() {
+        let c = BitOp::parse(&[bs("and"), bs("dst"), bs("src")]).unwrap();
+        assert_eq!(c.operation, BitOpOperation::And);
+    }
+
+    #[test]
+    fn test_bitop_spec() {
+        let c = BitOp {
+            operation: BitOpOperation::And,
+            dest_key: Bytes::from_static(b"dst"),
+            src_keys: vec![Bytes::from_static(b"src")],
+        };
+        assert_eq!(c.name(), "bitop");
+        assert_eq!(c.arity(), -4);
+        assert!(c.flags().contains(CommandFlags::WRITE));
+        assert_eq!(c.first_key(), 2);
+        assert_eq!(c.step(), 1);
+    }
+
+    #[test]
+    fn test_bitop_to_resp_args_and() {
+        let c = BitOp {
+            operation: BitOpOperation::And,
+            dest_key: Bytes::from_static(b"dst"),
+            src_keys: vec![Bytes::from_static(b"src1")],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args[0], Bytes::from_static(b"AND"));
+        assert_eq!(args[1], Bytes::from_static(b"dst"));
+    }
+
+    #[test]
+    fn test_bitop_to_resp_args_all_ops() {
+        for (op, op_str) in [
+            (BitOpOperation::And, "AND"),
+            (BitOpOperation::Or, "OR"),
+            (BitOpOperation::Xor, "XOR"),
+            (BitOpOperation::Not, "NOT"),
+        ] {
+            let c = BitOp {
+                operation: op,
+                dest_key: Bytes::from_static(b"dst"),
+                src_keys: vec![Bytes::from_static(b"src")],
+            };
+            let args = c.to_resp_args();
+            assert_eq!(args[0], Bytes::from_static(op_str.as_bytes()));
+        }
+    }
+
+    #[test]
+    fn test_bitop_to_resp_args_multiple_src() {
+        let c = BitOp {
+            operation: BitOpOperation::And,
+            dest_key: Bytes::from_static(b"dst"),
+            src_keys: vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")],
+        };
+        let args = c.to_resp_args();
+        assert_eq!(args.len(), 4);
+    }
+}

@@ -332,3 +332,93 @@ impl CommandSpec for CachePolicyCmd {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bs(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_policy_parse_set_min_args() -> Result<(), SpinelDBError> {
+        let c = CachePolicyCmd::parse(&[
+            bs("set"),
+            bs("mypolicy"),
+            bs("key*"),
+            bs("http://example.com"),
+        ])
+        .unwrap();
+        assert!(matches!(c.subcommand, CachePolicySubcommand::Set(p) if p.name == "mypolicy"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_policy_parse_set_with_ttl() -> Result<(), SpinelDBError> {
+        let c = CachePolicyCmd::parse(&[
+            bs("set"),
+            bs("policy"),
+            bs("key*"),
+            bs("http://x"),
+            bs("TTL"),
+            bs("3600"),
+        ])
+        .unwrap();
+        if let CachePolicySubcommand::Set(p) = &c.subcommand {
+            assert_eq!(p.ttl, Some(3600));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_policy_parse_del() -> Result<(), SpinelDBError> {
+        let c = CachePolicyCmd::parse(&[bs("del"), bs("policy_name")]).unwrap();
+        assert!(matches!(c.subcommand, CachePolicySubcommand::Del(n) if n == "policy_name"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_policy_parse_get() -> Result<(), SpinelDBError> {
+        let c = CachePolicyCmd::parse(&[bs("get"), bs("policy_name")]).unwrap();
+        assert!(matches!(c.subcommand, CachePolicySubcommand::Get(n) if n == "policy_name"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_policy_parse_list() -> Result<(), SpinelDBError> {
+        let c = CachePolicyCmd::parse(&[bs("list")]).unwrap();
+        assert!(matches!(c.subcommand, CachePolicySubcommand::List));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_policy_parse_list_with_args_is_error() {
+        let r = CachePolicyCmd::parse(&[bs("list"), bs("extra")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_policy_parse_no_args_is_error() {
+        let r = CachePolicyCmd::parse(&[]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_policy_parse_set_missing_args() {
+        let r = CachePolicyCmd::parse(&[bs("set"), bs("name")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_policy_parse_del_missing_arg() {
+        let r = CachePolicyCmd::parse(&[bs("del")]);
+        assert!(matches!(r, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_policy_parse_unknown_subcommand() {
+        let r = CachePolicyCmd::parse(&[bs("unknown")]);
+        assert!(matches!(r, Err(SpinelDBError::UnknownCommand(_))));
+    }
+}

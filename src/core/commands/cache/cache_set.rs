@@ -398,3 +398,203 @@ impl CommandSpec for CacheSet {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::protocol::RespFrame;
+
+    fn make_bulk_string(s: &'static str) -> RespFrame {
+        RespFrame::BulkString(Bytes::from_static(s.as_bytes()))
+    }
+
+    #[test]
+    fn test_cache_set_parses_key_body() -> Result<(), SpinelDBError> {
+        let args = [make_bulk_string("key1"), make_bulk_string("value")];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(cmd.key, Bytes::from_static(b"key1"));
+        assert_eq!(cmd.body_data, Bytes::from_static(b"value"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_ttl() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("TTL"),
+            make_bulk_string("3600"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(cmd.ttl, Some(3600));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_etag() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("ETAG"),
+            make_bulk_string("\"abc123\""),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(cmd.etag, Some(Bytes::from_static(b"\"abc123\"")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_vary() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("VARY"),
+            make_bulk_string("accept-encoding, accept-language"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(
+            cmd.vary,
+            Some(Bytes::from_static(b"accept-encoding, accept-language"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_tags() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("TAGS"),
+            make_bulk_string("tag1"),
+            make_bulk_string("tag2"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(
+            cmd.tags,
+            vec![Bytes::from_static(b"tag1"), Bytes::from_static(b"tag2")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_headers() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("HEADERS"),
+            make_bulk_string("content-type"),
+            make_bulk_string("text/html"),
+            make_bulk_string("x-custom"),
+            make_bulk_string("header-value"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(
+            cmd.headers,
+            Some(vec![
+                (
+                    Bytes::from_static(b"content-type"),
+                    Bytes::from_static(b"text/html")
+                ),
+                (
+                    Bytes::from_static(b"x-custom"),
+                    Bytes::from_static(b"header-value")
+                )
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_swr_grace() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("TTL"),
+            make_bulk_string("60"),
+            make_bulk_string("SWR"),
+            make_bulk_string("30"),
+            make_bulk_string("GRACE"),
+            make_bulk_string("60"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(cmd.ttl, Some(60));
+        assert_eq!(cmd.swr, Some(30));
+        assert_eq!(cmd.grace, Some(60));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_compression_flag() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("COMPRESSION"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert!(cmd.compression);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_force_disk_flag() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("FORCE-DISK"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert!(cmd.force_disk);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_last_modified() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("LAST-MODIFIED"),
+            make_bulk_string("Wed, 21 Oct 2015 07:28:00 GMT"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(
+            cmd.last_modified,
+            Some(Bytes::from_static(b"Wed, 21 Oct 2015 07:28:00 GMT"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_parses_revalidate_url() -> Result<(), SpinelDBError> {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("REVALIDATE-URL"),
+            make_bulk_string("http://example.com/api"),
+        ];
+        let cmd = CacheSet::parse(&args)?;
+        assert_eq!(
+            cmd.revalidate_url,
+            Some("http://example.com/api".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_set_wrong_arg_count() {
+        let args: [RespFrame; 0] = [];
+        let result = CacheSet::parse(&args);
+        assert!(matches!(result, Err(SpinelDBError::WrongArgumentCount(_))));
+    }
+
+    #[test]
+    fn test_cache_set_syntax_error() {
+        let args = [
+            make_bulk_string("key1"),
+            make_bulk_string("value"),
+            make_bulk_string("UNKNOWN-OPTION"),
+            make_bulk_string("value"),
+        ];
+        let result = CacheSet::parse(&args);
+        assert!(matches!(result, Err(SpinelDBError::SyntaxError)));
+    }
+}

@@ -308,3 +308,139 @@ fn replication_backlog_capacity(config: &Config) -> usize {
     // Fall back to the hard-coded default to preserve prior behavior.
     2 * 1024 * 1024
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ReplicationPrimaryConfig;
+    use crate::test_helpers::init_server_state;
+
+    fn make_default_config() -> Config {
+        Config::default()
+    }
+
+    #[test]
+    fn test_replication_backlog_capacity_default() {
+        let config = make_default_config();
+        let capacity = replication_backlog_capacity(&config);
+        assert_eq!(capacity, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_replication_backlog_capacity_custom() {
+        let mut config = make_default_config();
+        config.replication = ReplicationConfig::Primary(ReplicationPrimaryConfig {
+            backlog_capacity: 4096,
+            ..Default::default()
+        });
+        let capacity = replication_backlog_capacity(&config);
+        assert_eq!(capacity, 4096);
+    }
+
+    #[test]
+    fn test_replication_backlog_capacity_zero_uses_default() {
+        let mut config = make_default_config();
+        config.replication = ReplicationConfig::Primary(ReplicationPrimaryConfig {
+            backlog_capacity: 0,
+            ..Default::default()
+        });
+        let capacity = replication_backlog_capacity(&config);
+        assert_eq!(capacity, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_replication_backlog_capacity_replica_uses_default() {
+        let mut config = make_default_config();
+        config.replication = ReplicationConfig::Replica {
+            primary_host: "127.0.0.1".to_string(),
+            primary_port: 7878,
+            tls_enabled: false,
+        };
+        let capacity = replication_backlog_capacity(&config);
+        assert_eq!(capacity, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_server_state_get_db_valid_index() {
+        let state = init_server_state(make_default_config());
+
+        assert!(state.get_db(0).is_some());
+        assert!(state.get_db(15).is_some());
+    }
+
+    #[test]
+    fn test_server_state_get_db_invalid_index() {
+        let state = init_server_state(make_default_config());
+
+        assert!(state.get_db(16).is_none());
+        assert!(state.get_db(100).is_none());
+    }
+
+    #[test]
+    fn test_server_state_read_only_mode() {
+        let state = init_server_state(make_default_config());
+
+        assert!(!state.is_read_only.load(Ordering::SeqCst));
+
+        state.set_read_only(true, "maintenance");
+        assert!(state.is_read_only.load(Ordering::SeqCst));
+
+        state.set_read_only(false, "maintenance complete");
+        assert!(!state.is_read_only.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_server_state_quorum_loss_read_only() {
+        let state = init_server_state(make_default_config());
+
+        assert!(!state.is_read_only_due_to_quorum_loss.load(Ordering::SeqCst));
+
+        state.set_quorum_loss_read_only(true, "lost quorum");
+        assert!(state.is_read_only_due_to_quorum_loss.load(Ordering::SeqCst));
+
+        state.set_quorum_loss_read_only(false, "quorum restored");
+        assert!(!state.is_read_only_due_to_quorum_loss.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_server_state_emergency_read_only() {
+        let state = init_server_state(make_default_config());
+
+        assert!(!state.is_emergency_read_only.load(Ordering::Relaxed));
+
+        state.set_emergency_read_only(true, "data loss prevention");
+        assert!(state.is_emergency_read_only.load(Ordering::Relaxed));
+
+        state.set_emergency_read_only(false, "recovered");
+        assert!(!state.is_emergency_read_only.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_server_state_databases_count() {
+        let mut config = make_default_config();
+        config.databases = 4;
+        let state = init_server_state(config);
+        assert_eq!(state.dbs.len(), 4);
+    }
+
+    #[test]
+    fn test_server_state_initial_counters() {
+        let state = init_server_state(make_default_config());
+
+        assert_eq!(state.stats.get_total_connections(), 0);
+        assert_eq!(state.stats.get_total_commands(), 0);
+        assert_eq!(state.evalsha_in_flight.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_server_state_cluster_disabled_by_default() {
+        let state = init_server_state(make_default_config());
+        assert!(state.cluster.is_none());
+    }
+
+    #[test]
+    fn test_server_state_replication_backlog_initialized() {
+        let state = init_server_state(make_default_config());
+        assert_eq!(state.replication.get_replication_offset(), 0);
+    }
+}
