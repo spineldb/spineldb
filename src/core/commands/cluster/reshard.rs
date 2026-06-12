@@ -288,13 +288,21 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn test_key_batch_size() {
-        assert_eq!(KEY_BATCH_SIZE, 100);
+    fn test_reshard_slots_must_belong_to_source() {
+        let source_slots: BTreeSet<u16> = [100, 200, 300].into();
+        assert!(source_slots.contains(&200));
+        assert!(!source_slots.contains(&999));
     }
 
     #[test]
-    fn test_concurrent_migrations() {
-        assert_eq!(CONCURRENT_MIGRATIONS, 16);
+    fn test_reshard_slot_not_in_source_skipped() {
+        let source_slots: BTreeSet<u16> = [10, 20, 30].into();
+        let slots_to_migrate: Vec<u16> = vec![20, 999, 30];
+        let valid: Vec<u16> = slots_to_migrate
+            .into_iter()
+            .filter(|s| source_slots.contains(s))
+            .collect();
+        assert_eq!(valid, vec![20, 30]);
     }
 
     #[test]
@@ -311,16 +319,6 @@ mod tests {
         let source_addr: SocketAddr = "10.0.0.1:7000".parse().unwrap();
         assert_eq!(source_addr.ip().to_string(), "10.0.0.1");
         assert_eq!(source_addr.port(), 7000);
-    }
-
-    #[test]
-    fn test_reshard_slots_must_belong_to_source() {
-        let source_slots: BTreeSet<u16> = [100, 200, 300].into();
-        let slot_to_migrate: u16 = 200;
-        assert!(source_slots.contains(&slot_to_migrate));
-
-        let slot_not_owned: u16 = 999;
-        assert!(!source_slots.contains(&slot_not_owned));
     }
 
     #[test]
@@ -352,6 +350,7 @@ mod tests {
         ];
         assert_eq!(args.len(), 4);
         assert_eq!(args[2].as_ref(), b"IMPORTING");
+        assert_eq!(args[3].as_ref(), b"node-src-1");
     }
 
     #[test]
@@ -366,5 +365,6 @@ mod tests {
         ];
         assert_eq!(args.len(), 4);
         assert_eq!(args[2].as_ref(), b"MIGRATING");
+        assert_eq!(args[3].as_ref(), b"node-dst-1");
     }
 }

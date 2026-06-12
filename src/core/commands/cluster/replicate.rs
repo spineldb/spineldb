@@ -115,62 +115,96 @@ pub async fn execute(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    struct FakeReplicationCluster {
+        my_id: String,
+        nodes: HashMap<String, Option<String>>,
+    }
+
+    impl FakeReplicationCluster {
+        fn detect_self_replication(&self, master_id: &str) -> bool {
+            master_id == self.my_id
+        }
+
+        fn detect_circular_replication(&self, master_id: &str) -> bool {
+            let mut current_id = master_id.to_string();
+            while let Some(replica_of) = self.nodes.get(&current_id).and_then(|r| r.as_ref()) {
+                if replica_of == &self.my_id {
+                    return true;
+                }
+                current_id = replica_of.clone();
+            }
+            false
+        }
+    }
+
     #[test]
     fn test_self_replication_is_detected() {
-        let my_id = "node-1";
-        let master_id = "node-1";
-        assert_eq!(my_id, master_id);
+        let cluster = FakeReplicationCluster {
+            my_id: "node-1".to_string(),
+            nodes: [("node-1".to_string(), None)].into(),
+        };
+        assert!(cluster.detect_self_replication("node-1"));
     }
 
     #[test]
-    fn test_circular_replication_detection_simple() {
-        // A -> B, then B tries to replicate A: loop
-        let my_id = "A";
-        let _master_id = "B";
-        // If B's replica_of is A, then A trying to replicate B creates a loop
-        let b_replica_of = Some("A".to_string());
-        assert_eq!(b_replica_of.as_deref(), Some(my_id));
+    fn test_self_replication_not_false_positive() {
+        let cluster = FakeReplicationCluster {
+            my_id: "node-1".to_string(),
+            nodes: [("node-2".to_string(), None)].into(),
+        };
+        assert!(!cluster.detect_self_replication("node-2"));
     }
 
     #[test]
-    fn test_circular_replication_detection_chain() {
-        // A -> B -> C, then A tries to replicate C: loop
-        let chain = vec![
-            ("A".to_string(), Some("B".to_string())),
-            ("B".to_string(), Some("C".to_string())),
-            ("C".to_string(), None), // C is primary
-        ];
-        let my_id = "A";
-        let master_id = "C";
-
-        // Traverse the chain from C
-        let mut current_id = master_id.to_string();
-        let mut found_loop = false;
-        for (id, replica_of) in &chain {
-            if id == &current_id {
-                if let Some(next_master) = replica_of {
-                    if next_master == my_id {
-                        found_loop = true;
-                        break;
-                    }
-                    current_id = next_master.clone();
-                } else {
-                    break;
-                }
-            }
-        }
-        // In this case C has no replica_of, so no loop detected from this simple traversal
-        assert!(!found_loop);
+    fn test_circular_replication_direct_loop() {
+        let cluster = FakeReplicationCluster {
+            my_id: "A".to_string(),
+            nodes: [
+                ("A".to_string(), None),
+                ("B".to_string(), Some("A".to_string())),
+            ]
+            .into(),
+        };
+        assert!(cluster.detect_circular_replication("B"));
     }
 
     #[test]
-    fn test_circular_replication_detection_direct_loop() {
-        let my_id = "A";
-        let _master_id = "B";
-        // B -> A (B replicates A), so A trying to replicate B is a loop
-        let b_replica_of = Some("A".to_string());
-        let next_master = b_replica_of.as_deref().unwrap();
-        assert_eq!(next_master, my_id);
+    fn test_circular_replication_chain_loop() {
+        let cluster = FakeReplicationCluster {
+            my_id: "A".to_string(),
+            nodes: [
+                ("A".to_string(), None),
+                ("B".to_string(), Some("C".to_string())),
+                ("C".to_string(), Some("A".to_string())),
+            ]
+            .into(),
+        };
+        assert!(cluster.detect_circular_replication("B"));
+    }
+
+    #[test]
+    fn test_no_circular_replication_chain_to_primary() {
+        let cluster = FakeReplicationCluster {
+            my_id: "A".to_string(),
+            nodes: [
+                ("A".to_string(), None),
+                ("B".to_string(), Some("C".to_string())),
+                ("C".to_string(), None),
+            ]
+            .into(),
+        };
+        assert!(!cluster.detect_circular_replication("B"));
+    }
+
+    #[test]
+    fn test_no_circular_replication_unknown_node() {
+        let cluster = FakeReplicationCluster {
+            my_id: "A".to_string(),
+            nodes: [("A".to_string(), None)].into(),
+        };
+        assert!(!cluster.detect_circular_replication("nonexistent"));
     }
 
     #[test]

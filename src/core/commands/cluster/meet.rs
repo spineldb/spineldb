@@ -54,32 +54,42 @@ pub async fn execute(
 mod tests {
     use super::*;
 
+    fn calculate_bus_port(port: u16, offset: u16) -> Option<u16> {
+        u32::from(port)
+            .checked_add(u32::from(offset))
+            .and_then(|p| u16::try_from(p).ok())
+    }
+
     #[test]
     fn test_bus_port_calculation() {
-        let port: u16 = 7000;
-        let bus_port_offset: u16 = 10000;
-        let bus_port = u32::from(port)
-            .checked_add(u32::from(bus_port_offset))
-            .and_then(|p| u16::try_from(p).ok());
-        assert_eq!(bus_port, Some(17000));
+        assert_eq!(calculate_bus_port(7000, 10000), Some(17000));
     }
 
     #[test]
     fn test_bus_port_overflow() {
-        let port: u16 = u16::MAX;
-        let bus_port_offset: u16 = 1;
-        let bus_port = u32::from(port)
-            .checked_add(u32::from(bus_port_offset))
-            .and_then(|p| u16::try_from(p).ok());
-        assert_eq!(bus_port, None);
+        assert_eq!(calculate_bus_port(u16::MAX, 1), None);
     }
 
     #[test]
-    fn test_target_addr_format() {
-        let ip = "127.0.0.1";
-        let bus_port: u16 = 17000;
-        let target_addr_str = format!("{ip}:{bus_port}");
-        assert_eq!(target_addr_str, "127.0.0.1:17000");
+    fn test_bus_port_zero_offset() {
+        assert_eq!(calculate_bus_port(7000, 0), Some(7000));
+    }
+
+    #[test]
+    fn test_bus_port_offset_at_max_minus_port() {
+        let port: u16 = 1000;
+        let offset: u16 = u16::MAX - 1000;
+        assert_eq!(calculate_bus_port(port, offset), Some(u16::MAX));
+    }
+
+    #[test]
+    fn test_bus_port_both_zero() {
+        assert_eq!(calculate_bus_port(0, 0), Some(0));
+    }
+
+    #[test]
+    fn test_bus_port_overflow_both_large() {
+        assert_eq!(calculate_bus_port(u16::MAX, u16::MAX), None);
     }
 
     #[test]
@@ -90,16 +100,15 @@ mod tests {
         assert!(result.is_ok());
         let addrs = result.unwrap();
         assert!(!addrs.is_empty());
+        assert!(addrs.iter().any(|a| a.port() == 17000));
     }
 
     #[test]
-    fn test_invalid_addr_resolution() {
-        let target_addr_str = "invalid.host.xyz:99999";
-        let result: Result<Vec<SocketAddr>, _> =
-            target_addr_str.to_socket_addrs().map(|a| a.collect());
-        // This may fail on some systems, which is expected
-        if let Ok(addrs) = result {
-            assert!(!addrs.is_empty());
+    fn test_target_addr_resolution_localhost_variants() {
+        for addr_str in &["127.0.0.1:7000", "localhost:7000", "[::1]:7000"] {
+            let result: Result<Vec<SocketAddr>, _> =
+                addr_str.to_socket_addrs().map(|a| a.collect());
+            assert!(result.is_ok(), "failed to resolve: {addr_str}");
         }
     }
 }

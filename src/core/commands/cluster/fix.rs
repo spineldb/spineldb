@@ -159,26 +159,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fix_returns_error_when_not_in_cluster_mode() {
-        let err = anyhow!("Not in cluster mode");
-        assert_eq!(err.to_string(), "Not in cluster mode");
-    }
-
-    #[test]
-    fn test_fix_error_message_format() {
-        let e = anyhow!("some internal error");
-        let msg = format!("CLUSTER FIX failed: {e}");
-        assert!(msg.contains("CLUSTER FIX failed"));
-        assert!(msg.contains("some internal error"));
-    }
-
-    #[test]
     fn test_stuck_slot_resolution_prefers_source() {
         let source_id = "node_a".to_string();
         let dest_id = "node_b".to_string();
-        let _slot: u16 = 100;
-        let resolved_owner = &source_id;
-        assert_eq!(resolved_owner, &source_id);
-        assert_ne!(resolved_owner, &dest_id);
+        let slot: u16 = 100;
+
+        let mut stuck_slots = BTreeMap::new();
+        stuck_slots.insert(slot, (source_id.clone(), dest_id.clone()));
+
+        let mut resolved_owners = BTreeMap::new();
+        for (s, (src, _)) in &stuck_slots {
+            resolved_owners.insert(*s, src.clone());
+        }
+
+        assert_eq!(resolved_owners.get(&slot), Some(&source_id));
+        assert_ne!(resolved_owners.get(&slot), Some(&dest_id));
+    }
+
+    #[test]
+    fn test_resolution_multiple_stuck_slots() {
+        let mut stuck_slots = BTreeMap::new();
+        stuck_slots.insert(100, ("src1".to_string(), "dst1".to_string()));
+        stuck_slots.insert(200, ("src2".to_string(), "dst2".to_string()));
+        stuck_slots.insert(300, ("src3".to_string(), "dst3".to_string()));
+
+        let mut resolved_owners = BTreeMap::new();
+        for (slot, (src, _)) in &stuck_slots {
+            resolved_owners.insert(*slot, src.clone());
+        }
+
+        assert_eq!(resolved_owners.len(), 3);
+        assert_eq!(resolved_owners[&100], "src1");
+        assert_eq!(resolved_owners[&200], "src2");
+        assert_eq!(resolved_owners[&300], "src3");
+    }
+
+    #[test]
+    fn test_resolution_single_slot_bimap() {
+        let mut stuck_slots = BTreeMap::new();
+        stuck_slots.insert(50, ("owner_a".to_string(), "migrating_to_b".to_string()));
+
+        let resolved: BTreeMap<u16, String> = stuck_slots
+            .iter()
+            .map(|(slot, (src, _))| (*slot, src.clone()))
+            .collect();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[&50], "owner_a");
+    }
+
+    #[test]
+    fn test_stuck_slots_empty_when_no_migrations() {
+        let stuck_slots: BTreeMap<u16, (String, String)> = BTreeMap::new();
+        assert!(stuck_slots.is_empty());
+    }
+
+    #[test]
+    fn test_error_wrapping_format() {
+        let base = anyhow!("connection refused");
+        let wrapped = format!("CLUSTER FIX failed: {base}");
+        assert!(wrapped.starts_with("CLUSTER FIX failed:"));
+        assert!(wrapped.contains("connection refused"));
     }
 }

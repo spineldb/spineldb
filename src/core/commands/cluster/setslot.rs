@@ -81,36 +81,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_invalid_slot_error_message() {
-        let _slot: u16 = NUM_SLOTS as u16;
-        let err_msg = "Invalid slot".to_string();
-        assert!(err_msg.contains("Invalid"));
-    }
-
-    #[test]
     fn test_slot_boundary_valid() {
         let slot: u16 = (NUM_SLOTS as u16) - 1;
-        assert!(slot < NUM_SLOTS as u16);
+        assert!(slot < NUM_SLOTS as u16, "slot 16383 must be valid");
     }
 
     #[test]
     fn test_slot_boundary_invalid() {
         let slot: u16 = NUM_SLOTS as u16;
-        assert!(slot >= NUM_SLOTS as u16);
+        assert!(slot >= NUM_SLOTS as u16, "slot 16384 must be invalid");
     }
 
     #[test]
-    fn test_migrating_requires_own_slot_error() {
-        let err_msg = "Cannot MIGRATE a slot I don't own".to_string();
-        assert!(err_msg.contains("don't own"));
-    }
-
-    #[test]
-    fn test_node_not_found_error_format() {
-        let new_owner_id = "nonexistent";
-        let err_msg = format!("Node {new_owner_id} not found");
-        assert!(err_msg.contains("nonexistent"));
-        assert!(err_msg.contains("not found"));
+    fn test_slot_zero_is_valid() {
+        let slot: u16 = 0;
+        assert!(slot < NUM_SLOTS as u16, "slot 0 must be valid");
     }
 
     #[test]
@@ -130,7 +115,10 @@ mod tests {
     fn test_setslot_subcommand_clone() {
         let original = SetSlotSubcommand::Migrating("node-1".to_string());
         let cloned = original.clone();
-        assert!(matches!(cloned, SetSlotSubcommand::Migrating(id) if id == "node-1"));
+        match cloned {
+            SetSlotSubcommand::Migrating(id) => assert_eq!(id, "node-1"),
+            _ => panic!("expected Migrating variant"),
+        }
     }
 
     #[test]
@@ -139,5 +127,32 @@ mod tests {
         let debug_str = format!("{:?}", subcmd);
         assert!(debug_str.contains("Importing"));
         assert!(debug_str.contains("src-node"));
+    }
+
+    #[test]
+    fn test_migrating_stores_dest_node() {
+        let subcmd = SetSlotSubcommand::Migrating("dest-42".to_string());
+        match subcmd {
+            SetSlotSubcommand::Migrating(id) => assert_eq!(id, "dest-42"),
+            _ => panic!("expected Migrating"),
+        }
+    }
+
+    #[test]
+    fn test_importing_stores_src_node() {
+        let subcmd = SetSlotSubcommand::Importing("src-99".to_string());
+        match subcmd {
+            SetSlotSubcommand::Importing(id) => assert_eq!(id, "src-99"),
+            _ => panic!("expected Importing"),
+        }
+    }
+
+    #[test]
+    fn test_node_stores_owner_id() {
+        let subcmd = SetSlotSubcommand::Node("owner-7".to_string());
+        match subcmd {
+            SetSlotSubcommand::Node(id) => assert_eq!(id, "owner-7"),
+            _ => panic!("expected Node"),
+        }
     }
 }

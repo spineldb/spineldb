@@ -51,25 +51,86 @@ pub async fn execute(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_cannot_forget_self_error_message() {
-        let my_id = "node-1";
-        let node_id_to_forget = "node-1";
-        assert_eq!(my_id, node_id_to_forget);
+    use std::collections::HashMap;
+
+    struct FakeCluster {
+        my_id: String,
+        nodes: HashMap<String, ()>,
+    }
+
+    impl FakeCluster {
+        fn can_forget(&self, node_id: &str) -> Result<(), &'static str> {
+            if node_id == self.my_id {
+                return Err("Cannot forget myself");
+            }
+            if !self.nodes.contains_key(node_id) {
+                return Err("Node not found in the cluster");
+            }
+            Ok(())
+        }
+
+        fn do_forget(&mut self, node_id: &str) -> Result<(), &'static str> {
+            self.can_forget(node_id)?;
+            self.nodes.remove(node_id);
+            Ok(())
+        }
     }
 
     #[test]
-    fn test_forget_different_node_is_allowed() {
-        let my_id = "node-1";
-        let node_id_to_forget = "node-2";
-        assert_ne!(my_id, node_id_to_forget);
+    fn test_self_forget_is_rejected() {
+        let cluster = FakeCluster {
+            my_id: "node-1".to_string(),
+            nodes: [("node-1".to_string(), ()), ("node-2".to_string(), ())].into(),
+        };
+        assert_eq!(cluster.can_forget("node-1"), Err("Cannot forget myself"));
     }
 
     #[test]
-    fn test_node_not_found_error_format() {
-        let node_id = "nonexistent-node";
-        let err_msg = format!("Node {node_id} not found in the cluster");
-        assert!(err_msg.contains("nonexistent-node"));
-        assert!(err_msg.contains("not found"));
+    fn test_forget_different_node_succeeds() {
+        let mut cluster = FakeCluster {
+            my_id: "node-1".to_string(),
+            nodes: [("node-1".to_string(), ()), ("node-2".to_string(), ())].into(),
+        };
+        assert!(cluster.do_forget("node-2").is_ok());
+        assert!(!cluster.nodes.contains_key("node-2"));
+    }
+
+    #[test]
+    fn test_forget_nonexistent_node_fails() {
+        let mut cluster = FakeCluster {
+            my_id: "node-1".to_string(),
+            nodes: [("node-1".to_string(), ())].into(),
+        };
+        assert_eq!(
+            cluster.do_forget("node-999"),
+            Err("Node not found in the cluster")
+        );
+    }
+
+    #[test]
+    fn test_forget_removes_only_target_node() {
+        let mut cluster = FakeCluster {
+            my_id: "node-1".to_string(),
+            nodes: [
+                ("node-1".to_string(), ()),
+                ("node-2".to_string(), ()),
+                ("node-3".to_string(), ()),
+            ]
+            .into(),
+        };
+        cluster.do_forget("node-2").unwrap();
+        assert!(cluster.nodes.contains_key("node-1"));
+        assert!(!cluster.nodes.contains_key("node-2"));
+        assert!(cluster.nodes.contains_key("node-3"));
+    }
+
+    #[test]
+    fn test_self_check_before_forget() {
+        let cluster = FakeCluster {
+            my_id: "node-1".to_string(),
+            nodes: [("node-1".to_string(), ()), ("node-2".to_string(), ())].into(),
+        };
+        assert!(cluster.can_forget("node-2").is_ok());
+        assert!(cluster.can_forget("node-1").is_err());
     }
 }
