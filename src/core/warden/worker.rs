@@ -599,3 +599,158 @@ impl MasterMonitor {
             .retain(|addr, _| discovered_replicas.contains(addr));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hello_channel_constant() {
+        assert_eq!(HELLO_CHANNEL, "__warden__:hello");
+    }
+
+    #[test]
+    fn test_votes_channel_constant() {
+        assert_eq!(VOTES_CHANNEL, "__warden__:votes");
+    }
+
+    #[test]
+    fn test_vote_request_message_format() {
+        let master_name = "mymaster";
+        let candidate_id = "run-123";
+        let epoch: u64 = 5;
+        let msg = format!("VOTE-REQUEST:{master_name}:{candidate_id}:{epoch}");
+        assert_eq!(msg, "VOTE-REQUEST:mymaster:run-123:5");
+    }
+
+    #[test]
+    fn test_vote_ack_message_format() {
+        let master_name = "mymaster";
+        let voter_id = "voter-456";
+        let candidate_id = "candidate-789";
+        let epoch: u64 = 5;
+        let msg = format!("VOTE-ACK:{master_name}:{voter_id}:{candidate_id}:{epoch}");
+        assert_eq!(msg, "VOTE-ACK:mymaster:voter-456:candidate-789:5");
+    }
+
+    #[test]
+    fn test_vote_message_parsing() {
+        let msg = "VOTE-REQUEST:mymaster:run-123:5";
+        let parts: Vec<&str> = msg.split(':').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "VOTE-REQUEST");
+        assert_eq!(parts[1], "mymaster");
+        assert_eq!(parts[2], "run-123");
+        let epoch: u64 = parts[3].parse().unwrap();
+        assert_eq!(epoch, 5);
+    }
+
+    #[test]
+    fn test_vote_ack_message_parsing() {
+        let msg = "VOTE-ACK:mymaster:voter-1:candidate-2:10";
+        let parts: Vec<&str> = msg.split(':').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0], "VOTE-ACK");
+        assert_eq!(parts[1], "mymaster");
+        assert_eq!(parts[2], "voter-1");
+        assert_eq!(parts[3], "candidate-2");
+        let epoch: u64 = parts[4].parse().unwrap();
+        assert_eq!(epoch, 10);
+    }
+
+    #[test]
+    fn test_vote_message_too_few_parts() {
+        let msg = "VOTE-REQUEST:mymaster";
+        let parts: Vec<&str> = msg.split(':').collect();
+        assert!(parts.len() < 4);
+    }
+
+    #[test]
+    fn test_hello_message_serialization() {
+        let msg = HelloMessage {
+            addr: "127.0.0.1:8000".parse().unwrap(),
+            run_id: "run-123".to_string(),
+            epoch: 1,
+            master_name: "mymaster".to_string(),
+            master_addr: "127.0.0.1:6379".parse().unwrap(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("run-123"));
+        assert!(json.contains("mymaster"));
+    }
+
+    #[test]
+    fn test_hello_message_deserialization() {
+        let json = r#"{"addr":"127.0.0.1:8000","run_id":"run-456","epoch":2,"master_name":"master2","master_addr":"10.0.0.1:6380"}"#;
+        let msg: HelloMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.run_id, "run-456");
+        assert_eq!(msg.epoch, 2);
+        assert_eq!(msg.master_name, "master2");
+    }
+
+    #[test]
+    fn test_down_after_interval_calculation() {
+        let down_after = Duration::from_secs(15);
+        let tick_interval = (down_after / 3).max(Duration::from_secs(1));
+        let info_interval = (down_after * 2).max(Duration::from_secs(10));
+        assert_eq!(tick_interval, Duration::from_secs(5));
+        assert_eq!(info_interval, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_peer_hello_timeout() {
+        let hello_interval = Duration::from_secs(1);
+        let hello_timeout = hello_interval * 5;
+        assert_eq!(hello_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_parse_master_replid_from_info() {
+        let info = "master_replid:abc123\nrole:master\n";
+        let mut run_id = String::new();
+        for line in info.lines() {
+            if let Some(val) = line.strip_prefix("master_replid:") {
+                run_id = val.trim().to_string();
+            }
+        }
+        assert_eq!(run_id, "abc123");
+    }
+
+    #[test]
+    fn test_parse_replica_from_info() {
+        let info = "slave0:ip=10.0.0.2,port=6379,state=online,offset=1024\n";
+        let mut replicas: HashMap<SocketAddr, u64> = HashMap::new();
+        for line in info.lines() {
+            if line.starts_with("slave")
+                && let Some((_, val)) = line.split_once(':')
+            {
+                let parts: HashMap<&str, &str> =
+                    val.split(',').filter_map(|p| p.split_once('=')).collect();
+                if let (Some(ip), Some(port)) = (parts.get("ip"), parts.get("port"))
+                    && let Ok(addr) = format!("{ip}:{port}").parse::<SocketAddr>()
+                {
+                    let offset: u64 = parts
+                        .get("offset")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    replicas.insert(addr, offset);
+                }
+            }
+        }
+        let replica_addr: SocketAddr = "10.0.0.2:6379".parse().unwrap();
+        assert!(replicas.contains_key(&replica_addr));
+        assert_eq!(replicas[&replica_addr], 1024);
+    }
+
+    #[test]
+    fn test_failover_state_transitions() {
+        let mut state = FailoverState::None;
+        assert_eq!(state, FailoverState::None);
+        state = FailoverState::Vote;
+        assert_eq!(state, FailoverState::Vote);
+        state = FailoverState::Start;
+        assert_eq!(state, FailoverState::Start);
+        state = FailoverState::PromoteReplica;
+        assert_eq!(state, FailoverState::PromoteReplica);
+    }
+}

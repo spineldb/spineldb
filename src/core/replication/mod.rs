@@ -109,3 +109,69 @@ async fn run_backlog_feeder(state: Arc<ServerState>, mut shutdown_rx: broadcast:
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_replication_config_variants() {
+        let primary =
+            ReplicationConfig::Primary(crate::config::ReplicationPrimaryConfig::default());
+        let replica = ReplicationConfig::Replica {
+            primary_host: "127.0.0.1".to_string(),
+            primary_port: 6379,
+            tls_enabled: false,
+        };
+        assert!(matches!(primary, ReplicationConfig::Primary(_)));
+        assert!(matches!(replica, ReplicationConfig::Replica { .. }));
+    }
+
+    #[test]
+    fn test_replication_config_is_distinct() {
+        let primary =
+            ReplicationConfig::Primary(crate::config::ReplicationPrimaryConfig::default());
+        let replica = ReplicationConfig::Replica {
+            primary_host: "127.0.0.1".to_string(),
+            primary_port: 6379,
+            tls_enabled: false,
+        };
+        assert!(!matches!(primary, ReplicationConfig::Replica { .. }));
+        assert!(!matches!(replica, ReplicationConfig::Primary(_)));
+    }
+
+    #[test]
+    fn test_transaction_write_commands_empty_skips() {
+        let write_commands: Vec<Command> = vec![];
+        assert!(write_commands.is_empty());
+    }
+
+    #[test]
+    fn test_multi_exec_wrapping() {
+        let write_commands = vec![Command::Set(crate::core::commands::string::Set {
+            key: bytes::Bytes::from_static(b"k"),
+            value: bytes::Bytes::from_static(b"v"),
+            ..Default::default()
+        })];
+        let mut full_tx = Vec::with_capacity(write_commands.len() + 2);
+        full_tx.push(Command::Multi);
+        full_tx.extend(write_commands);
+        full_tx.push(Command::Exec);
+        assert_eq!(full_tx.len(), 3);
+        assert!(matches!(full_tx[0], Command::Multi));
+        assert!(matches!(full_tx[2], Command::Exec));
+    }
+
+    #[test]
+    fn test_frame_encoding_for_replication() {
+        let cmd = Command::Set(crate::core::commands::string::Set {
+            key: bytes::Bytes::from_static(b"testkey"),
+            value: bytes::Bytes::from_static(b"testval"),
+            ..Default::default()
+        });
+        let frame: crate::core::protocol::RespFrame = cmd.into();
+        let encoded = frame.encode_to_vec();
+        assert!(encoded.is_ok());
+        assert!(!encoded.unwrap().is_empty());
+    }
+}

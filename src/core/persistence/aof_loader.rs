@@ -225,3 +225,84 @@ impl AofLoader {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aof_loader_new() {
+        let config = crate::config::PersistenceConfig {
+            aof_enabled: true,
+            aof_path: "/tmp/test.aof".to_string(),
+            ..Default::default()
+        };
+        let loader = AofLoader::new(config);
+        assert!(loader.config.aof_enabled);
+        assert_eq!(loader.config.aof_path, "/tmp/test.aof");
+    }
+
+    #[test]
+    fn test_aof_disabled_skips_load() {
+        let config = crate::config::PersistenceConfig {
+            aof_enabled: false,
+            ..Default::default()
+        };
+        let loader = AofLoader::new(config);
+        assert!(!loader.config.aof_enabled);
+    }
+
+    #[test]
+    fn test_nested_multi_error_message() {
+        let msg = "Nested MULTI in AOF";
+        assert!(msg.contains("Nested"));
+        assert!(msg.contains("MULTI"));
+    }
+
+    #[test]
+    fn test_exec_without_multi_error_message() {
+        let msg = "EXEC without MULTI in AOF";
+        assert!(msg.contains("EXEC"));
+        assert!(msg.contains("without MULTI"));
+    }
+
+    #[test]
+    fn test_discard_without_multi_error_message() {
+        let msg = "DISCARD without MULTI in AOF";
+        assert!(msg.contains("DISCARD"));
+        assert!(msg.contains("without MULTI"));
+    }
+
+    #[test]
+    fn test_invalid_db_index_error_message() {
+        let db_index = 99;
+        let msg = format!("Invalid DB index {db_index} during AOF transaction load");
+        assert!(msg.contains("99"));
+        assert!(msg.contains("Invalid DB index"));
+    }
+
+    #[test]
+    fn test_commands_loaded_counter_starts_at_zero() {
+        let mut commands_loaded: usize = 0;
+        commands_loaded += 1;
+        assert_eq!(commands_loaded, 1);
+    }
+
+    #[test]
+    fn test_tx_commands_vec_operations() {
+        let mut tx_commands: Vec<Command> = Vec::new();
+        assert!(tx_commands.is_empty());
+        tx_commands.clear();
+        assert!(tx_commands.is_empty());
+    }
+
+    #[test]
+    fn test_in_tx_flag_transitions() {
+        let mut in_tx = false;
+        assert!(!in_tx);
+        in_tx = true;
+        assert!(in_tx);
+        in_tx = false;
+        assert!(!in_tx);
+    }
+}

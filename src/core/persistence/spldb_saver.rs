@@ -237,3 +237,91 @@ impl SpldbSaverTask {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SaveRule;
+
+    #[test]
+    fn test_check_interval() {
+        assert_eq!(CHECK_INTERVAL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_save_rule_matching() {
+        let rule = SaveRule {
+            seconds: 900,
+            changes: 1,
+        };
+        let dirty_keys: u64 = 10;
+        let elapsed = Duration::from_secs(1000);
+        assert!(elapsed.as_secs() >= rule.seconds && dirty_keys >= rule.changes);
+    }
+
+    #[test]
+    fn test_save_rule_not_enough_time() {
+        let rule = SaveRule {
+            seconds: 900,
+            changes: 1,
+        };
+        let dirty_keys: u64 = 10;
+        let elapsed = Duration::from_secs(100);
+        assert!(!(elapsed.as_secs() >= rule.seconds && dirty_keys >= rule.changes));
+    }
+
+    #[test]
+    fn test_save_rule_not_enough_changes() {
+        let rule = SaveRule {
+            seconds: 900,
+            changes: 100,
+        };
+        let dirty_keys: u64 = 10;
+        let elapsed = Duration::from_secs(1000);
+        assert!(!(elapsed.as_secs() >= rule.seconds && dirty_keys >= rule.changes));
+    }
+
+    #[test]
+    fn test_save_rule_exact_match() {
+        let rule = SaveRule {
+            seconds: 100,
+            changes: 50,
+        };
+        let dirty_keys: u64 = 50;
+        let elapsed = Duration::from_secs(100);
+        assert!(elapsed.as_secs() >= rule.seconds && dirty_keys >= rule.changes);
+    }
+
+    #[test]
+    fn test_dirty_keys_zero_skips_save() {
+        let dirty_keys: u64 = 0;
+        assert_eq!(dirty_keys, 0);
+    }
+
+    #[test]
+    fn test_temp_path_format() {
+        let path_clone = "/data/spldb.rdb".to_string();
+        let temp_path_str = format!("{}.tmp.{}", path_clone, 12345u32);
+        assert!(temp_path_str.starts_with("/data/spldb.rdb.tmp."));
+        assert!(temp_path_str.ends_with("12345"));
+    }
+
+    #[test]
+    fn test_atomic_flag_compare_exchange() {
+        use std::sync::atomic::AtomicBool;
+        let flag = AtomicBool::new(false);
+        assert!(
+            flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        );
+        assert!(
+            flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        );
+        flag.store(false, Ordering::SeqCst);
+        assert!(
+            flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        );
+    }
+}

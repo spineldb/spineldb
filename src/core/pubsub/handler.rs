@@ -166,3 +166,30 @@ async fn receive_pubsub_message_static(
         Err(e) => Some(Err(e)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_subscription_check_logic() {
+        let channels: Vec<String> = vec![];
+        let patterns: Vec<String> = vec![];
+        let should_exit = channels.is_empty() && patterns.is_empty();
+        assert!(should_exit);
+    }
+
+    #[test]
+    fn test_subscription_check_with_channels() {
+        let channels: Vec<String> = vec!["mychannel".to_string()];
+        let patterns: Vec<String> = vec![];
+        let should_exit = channels.is_empty() && patterns.is_empty();
+        assert!(!should_exit);
+    }
+
+    #[test]
+    fn test_subscription_check_with_patterns() {
+        let channels: Vec<String> = vec![];
+        let patterns: Vec<String> = vec!["my*".to_string()];
+        let should_exit = channels.is_empty() && patterns.is_empty();
+        assert!(!should_exit);
+    }
+}

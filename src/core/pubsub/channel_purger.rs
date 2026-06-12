@@ -40,3 +40,19 @@ impl ChannelPurgerTask {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_purge_interval() {
+        assert_eq!(PURGE_INTERVAL, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_purge_interval_is_five_minutes() {
+        let five_minutes = Duration::from_secs(300);
+        assert_eq!(PURGE_INTERVAL, five_minutes);
+    }
+}

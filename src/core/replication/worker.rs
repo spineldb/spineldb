@@ -672,3 +672,109 @@ impl ReplicaWorker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initial_reconnect_delay() {
+        assert_eq!(INITIAL_RECONNECT_DELAY, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_max_reconnect_delay() {
+        assert_eq!(MAX_RECONNECT_DELAY, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_max_reconnect_delay_greater_than_initial() {
+        assert!(MAX_RECONNECT_DELAY > INITIAL_RECONNECT_DELAY);
+    }
+
+    #[test]
+    fn test_handshake_result_variants() {
+        assert_ne!(HandshakeResult::FullResync, HandshakeResult::PartialResync);
+    }
+
+    #[test]
+    fn test_fullresync_response_parsing_valid() {
+        let response = "FULLRESYNC abc123 1024";
+        let parts: Vec<&str> = response.split_whitespace().collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "FULLRESYNC");
+        assert_eq!(parts[1], "abc123");
+        let offset: u64 = parts[2].parse().unwrap();
+        assert_eq!(offset, 1024);
+    }
+
+    #[test]
+    fn test_fullresync_response_parsing_invalid_format() {
+        let response = "FULLRESYNC";
+        let parts: Vec<&str> = response.split_whitespace().collect();
+        assert_eq!(parts.len(), 1);
+        assert!(parts.len() != 3);
+    }
+
+    #[test]
+    fn test_fullresync_response_parsing_invalid_offset() {
+        let response = "FULLRESYNC abc123 notanumber";
+        let parts: Vec<&str> = response.split_whitespace().collect();
+        assert_eq!(parts.len(), 3);
+        let result: Result<u64, _> = parts[2].parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_spldb_length_prefix_parsing() {
+        let line = "$1024\r\n";
+        let len_str = line.trim_start_matches('$').trim_end_matches("\r\n");
+        let len: usize = len_str.parse().unwrap();
+        assert_eq!(len, 1024);
+    }
+
+    #[test]
+    fn test_spldb_length_prefix_invalid() {
+        let line = "1024\r\n";
+        assert!(!line.starts_with('$'));
+    }
+
+    #[test]
+    fn test_replconf_getack_detection() {
+        let args = [RespFrame::BulkString("GETACK".into())];
+        assert!(args.first().is_some_and(
+            |arg| matches!(arg, RespFrame::BulkString(b) if b.eq_ignore_ascii_case(b"GETACK"))
+        ));
+    }
+
+    #[test]
+    fn test_replica_worker_new_defaults() {
+        use crate::config::Config;
+        use crate::test_helpers::init_server_state;
+        let state = init_server_state(Config::default());
+        let worker = ReplicaWorker::new(state);
+        assert_eq!(worker.current_db_index, 0);
+        assert!(!worker.is_in_transaction);
+        assert!(worker.queued_tx_commands.is_empty());
+    }
+
+    #[test]
+    fn test_exponential_backoff_growth() {
+        let mut delay = INITIAL_RECONNECT_DELAY;
+        for _ in 0..5 {
+            delay = (delay * 2).min(MAX_RECONNECT_DELAY);
+        }
+        assert!(delay <= MAX_RECONNECT_DELAY);
+        assert!(delay > INITIAL_RECONNECT_DELAY);
+    }
+
+    #[test]
+    fn test_select_command_sets_db_index() {
+        let select_cmd = Command::Select(Select { db_index: 5 });
+        if let Command::Select(Select { db_index }) = select_cmd {
+            assert_eq!(db_index, 5);
+        } else {
+            panic!("Expected Select command");
+        }
+    }
+}

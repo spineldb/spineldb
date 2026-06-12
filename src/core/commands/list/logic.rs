@@ -155,3 +155,123 @@ pub(crate) async fn list_pop_logic<'a>(
         Err(SpinelDBError::WrongType)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn test_push_left_direction() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"a"));
+        list.push_front(Bytes::from_static(b"b"));
+        let values: Vec<Bytes> = list.into_iter().collect();
+        assert_eq!(values[0].as_ref(), b"b");
+        assert_eq!(values[1].as_ref(), b"a");
+    }
+
+    #[test]
+    fn test_push_right_direction() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"a"));
+        list.push_back(Bytes::from_static(b"b"));
+        let values: Vec<Bytes> = list.into_iter().collect();
+        assert_eq!(values[0].as_ref(), b"a");
+        assert_eq!(values[1].as_ref(), b"b");
+    }
+
+    #[test]
+    fn test_pop_left_from_front() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"a"));
+        list.push_back(Bytes::from_static(b"b"));
+        let popped = list.pop_front();
+        assert_eq!(popped.unwrap().as_ref(), b"a");
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_pop_right_from_back() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"a"));
+        list.push_back(Bytes::from_static(b"b"));
+        let popped = list.pop_back();
+        assert_eq!(popped.unwrap().as_ref(), b"b");
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_pop_empty_list_returns_none() {
+        let mut list: VecDeque<Bytes> = VecDeque::new();
+        assert!(list.pop_front().is_none());
+        assert!(list.pop_back().is_none());
+    }
+
+    #[test]
+    fn test_empty_values_returns_length() {
+        let values: Vec<Bytes> = vec![];
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn test_list_length_after_pushes() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"1"));
+        list.push_back(Bytes::from_static(b"2"));
+        list.push_back(Bytes::from_static(b"3"));
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn test_list_length_after_pops() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"1"));
+        list.push_back(Bytes::from_static(b"2"));
+        list.pop_front();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_list_becomes_empty_after_popping_all() {
+        let mut list = VecDeque::new();
+        list.push_back(Bytes::from_static(b"x"));
+        list.pop_front();
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_version_increment() {
+        let version: u64 = 0;
+        let new_version = version.wrapping_add(1);
+        assert_eq!(new_version, 1);
+    }
+
+    #[test]
+    fn test_version_wrapping() {
+        let version: u64 = u64::MAX;
+        let new_version = version.wrapping_add(1);
+        assert_eq!(new_version, 0);
+    }
+
+    #[test]
+    fn test_size_calculation() {
+        let values = [Bytes::from_static(b"hello"), Bytes::from_static(b"world")];
+        let total_size: usize = values.iter().map(|v| v.len()).sum();
+        assert_eq!(total_size, 10);
+    }
+
+    #[test]
+    fn test_push_direction_variants() {
+        let left = PushDirection::Left;
+        let right = PushDirection::Right;
+        assert_ne!(format!("{:?}", left), format!("{:?}", right));
+    }
+
+    #[test]
+    fn test_pop_direction_variants() {
+        let left = PopDirection::Left;
+        let right = PopDirection::Right;
+        assert_ne!(format!("{:?}", left), format!("{:?}", right));
+    }
+}

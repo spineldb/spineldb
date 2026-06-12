@@ -127,3 +127,96 @@ fn process_warden_command(args: &[RespFrame], state: &Arc<GlobalWardenState>) ->
         String::from_utf8_lossy(cmd_bytes)
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::warden::state::GlobalWardenState;
+    use dashmap::DashMap;
+
+    fn make_global_state() -> Arc<GlobalWardenState> {
+        Arc::new(GlobalWardenState {
+            my_run_id: "test-run-id".to_string(),
+            masters: DashMap::new(),
+        })
+    }
+
+    #[test]
+    fn test_ping_command_response() {
+        let args = vec![RespFrame::BulkString("PING".into())];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        if let RespFrame::SimpleString(s) = response {
+            assert_eq!(s, "PONG");
+        } else {
+            panic!("Expected SimpleString PONG");
+        }
+    }
+
+    #[test]
+    fn test_invalid_command_format() {
+        let args = vec![RespFrame::Integer(123)];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        assert!(matches!(response, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn test_unknown_command() {
+        let args = vec![RespFrame::BulkString("UNKNOWN".into())];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        assert!(matches!(response, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn test_sentinel_without_subcommand() {
+        let args = vec![RespFrame::BulkString("SENTINEL".into())];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        assert!(matches!(response, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn test_get_master_addr_unknown_master() {
+        let args = vec![
+            RespFrame::BulkString("SENTINEL".into()),
+            RespFrame::BulkString("get-master-addr-by-name".into()),
+            RespFrame::BulkString("unknown".into()),
+        ];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        assert!(matches!(response, RespFrame::Null));
+    }
+
+    #[test]
+    fn test_get_master_addr_missing_name() {
+        let args = vec![
+            RespFrame::BulkString("SENTINEL".into()),
+            RespFrame::BulkString("get-master-addr-by-name".into()),
+        ];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        assert!(matches!(response, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn test_empty_args() {
+        let args: Vec<RespFrame> = vec![];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        assert!(matches!(response, RespFrame::Error(_)));
+    }
+
+    #[test]
+    fn test_case_insensitive_ping() {
+        let args = vec![RespFrame::BulkString("ping".into())];
+        let state = make_global_state();
+        let response = process_warden_command(&args, &state);
+        if let RespFrame::SimpleString(s) = response {
+            assert_eq!(s, "PONG");
+        } else {
+            panic!("Expected SimpleString PONG");
+        }
+    }
+}

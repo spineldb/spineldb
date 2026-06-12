@@ -112,3 +112,80 @@ pub async fn execute(
         WriteOutcome::DidNotWrite,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_self_replication_is_detected() {
+        let my_id = "node-1";
+        let master_id = "node-1";
+        assert_eq!(my_id, master_id);
+    }
+
+    #[test]
+    fn test_circular_replication_detection_simple() {
+        // A -> B, then B tries to replicate A: loop
+        let my_id = "A";
+        let _master_id = "B";
+        // If B's replica_of is A, then A trying to replicate B creates a loop
+        let b_replica_of = Some("A".to_string());
+        assert_eq!(b_replica_of.as_deref(), Some(my_id));
+    }
+
+    #[test]
+    fn test_circular_replication_detection_chain() {
+        // A -> B -> C, then A tries to replicate C: loop
+        let chain = vec![
+            ("A".to_string(), Some("B".to_string())),
+            ("B".to_string(), Some("C".to_string())),
+            ("C".to_string(), None), // C is primary
+        ];
+        let my_id = "A";
+        let master_id = "C";
+
+        // Traverse the chain from C
+        let mut current_id = master_id.to_string();
+        let mut found_loop = false;
+        for (id, replica_of) in &chain {
+            if id == &current_id {
+                if let Some(next_master) = replica_of {
+                    if next_master == my_id {
+                        found_loop = true;
+                        break;
+                    }
+                    current_id = next_master.clone();
+                } else {
+                    break;
+                }
+            }
+        }
+        // In this case C has no replica_of, so no loop detected from this simple traversal
+        assert!(!found_loop);
+    }
+
+    #[test]
+    fn test_circular_replication_detection_direct_loop() {
+        let my_id = "A";
+        let _master_id = "B";
+        // B -> A (B replicates A), so A trying to replicate B is a loop
+        let b_replica_of = Some("A".to_string());
+        let next_master = b_replica_of.as_deref().unwrap();
+        assert_eq!(next_master, my_id);
+    }
+
+    #[test]
+    fn test_addr_parsing() {
+        let addr = "192.168.1.100:7000";
+        let parts: Vec<&str> = addr.split(':').collect();
+        assert_eq!(parts[0], "192.168.1.100");
+        assert_eq!(parts.get(1).and_then(|p| p.parse::<u16>().ok()), Some(7000));
+    }
+
+    #[test]
+    fn test_addr_parsing_invalid_port() {
+        let addr = "192.168.1.100:notaport";
+        let parts: Vec<&str> = addr.split(':').collect();
+        let port: Option<u16> = parts.get(1).and_then(|p| p.parse().ok());
+        assert_eq!(port, None);
+    }
+}

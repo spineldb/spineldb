@@ -336,3 +336,154 @@ async fn reconfigure_and_verify_one_replica(
 
     Ok(false) // Not yet verified
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::config::MonitoredMaster;
+    use super::super::state::InstanceState;
+    use super::*;
+
+    fn make_monitored_master() -> MonitoredMaster {
+        MonitoredMaster {
+            name: "test-master".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 6379,
+            quorum: 2,
+            down_after: Duration::from_secs(15),
+            failover_timeout: Duration::from_secs(60),
+            hello_interval: Duration::from_secs(2),
+        }
+    }
+
+    fn make_master_state_with_replicas(replicas: Vec<(SocketAddr, u64, String)>) -> MasterState {
+        let state = MasterState::from(make_monitored_master());
+        for (addr, offset, run_id) in replicas {
+            let mut instance = InstanceState::new(addr);
+            instance.replication_offset = offset;
+            instance.run_id = run_id;
+            state.replicas.insert(addr, instance);
+        }
+        state
+    }
+
+    #[test]
+    fn test_select_best_replica_by_offset() {
+        let addr1: SocketAddr = "10.0.0.1:6379".parse().unwrap();
+        let addr2: SocketAddr = "10.0.0.2:6379".parse().unwrap();
+        let state = make_master_state_with_replicas(vec![
+            (addr1, 100, "run_a".to_string()),
+            (addr2, 200, "run_b".to_string()),
+        ]);
+        let best = select_best_replica(&state);
+        assert_eq!(best, Some(addr2));
+    }
+
+    #[test]
+    fn test_select_best_replica_filters_down() {
+        let addr1: SocketAddr = "10.0.0.1:6379".parse().unwrap();
+        let addr2: SocketAddr = "10.0.0.2:6379".parse().unwrap();
+        let state = make_master_state_with_replicas(vec![
+            (addr1, 200, "run_a".to_string()),
+            (addr2, 100, "run_b".to_string()),
+        ]);
+        if let Some(mut entry) = state.replicas.get_mut(&addr1) {
+            entry.value_mut().down_since = Some(std::time::Instant::now());
+        }
+        let best = select_best_replica(&state);
+        assert_eq!(best, Some(addr2));
+    }
+
+    #[test]
+    fn test_select_best_replica_all_down() {
+        let addr1: SocketAddr = "10.0.0.1:6379".parse().unwrap();
+        let state = make_master_state_with_replicas(vec![]);
+        state.replicas.insert(addr1, InstanceState::new(addr1));
+        if let Some(mut entry) = state.replicas.get_mut(&addr1) {
+            entry.value_mut().down_since = Some(std::time::Instant::now());
+        }
+        let best = select_best_replica(&state);
+        assert!(best.is_none());
+    }
+
+    #[test]
+    fn test_select_best_replica_no_replicas() {
+        let state = make_master_state_with_replicas(vec![]);
+        let best = select_best_replica(&state);
+        assert!(best.is_none());
+    }
+
+    #[test]
+    fn test_select_best_replica_tie_breaks_by_run_id() {
+        let addr1: SocketAddr = "10.0.0.1:6379".parse().unwrap();
+        let addr2: SocketAddr = "10.0.0.2:6379".parse().unwrap();
+        let state = make_master_state_with_replicas(vec![
+            (addr1, 100, "run_b".to_string()),
+            (addr2, 100, "run_a".to_string()),
+        ]);
+        let best = select_best_replica(&state);
+        assert_eq!(best, Some(addr2));
+    }
+
+    #[test]
+    fn test_failover_state_transitions() {
+        let mut state = FailoverState::None;
+        assert_eq!(state, FailoverState::None);
+        state = FailoverState::Vote;
+        assert_eq!(state, FailoverState::Vote);
+        state = FailoverState::Start;
+        assert_eq!(state, FailoverState::Start);
+        state = FailoverState::PromoteReplica;
+        assert_eq!(state, FailoverState::PromoteReplica);
+    }
+
+    #[test]
+    fn test_repllicaof_no_one_command_format() {
+        let cmd = RespFrame::Array(vec![
+            RespFrame::BulkString("REPLICAOF".into()),
+            RespFrame::BulkString("NO".into()),
+            RespFrame::BulkString("ONE".into()),
+        ]);
+        if let RespFrame::Array(parts) = cmd {
+            assert_eq!(parts.len(), 3);
+        } else {
+            panic!("Expected array");
+        }
+    }
+
+    #[test]
+    fn test_repllicaof_command_format() {
+        let new_master_ip = "10.0.0.2";
+        let new_master_port = "6379";
+        let cmd = RespFrame::Array(vec![
+            RespFrame::BulkString("REPLICAOF".into()),
+            RespFrame::BulkString(new_master_ip.into()),
+            RespFrame::BulkString(new_master_port.into()),
+        ]);
+        if let RespFrame::Array(parts) = cmd {
+            assert_eq!(parts.len(), 3);
+        } else {
+            panic!("Expected array");
+        }
+    }
+
+    #[test]
+    fn test_poison_command_format() {
+        let old_master_runid = "abc123";
+        let cmd = RespFrame::Array(vec![
+            RespFrame::BulkString("FAILOVER".into()),
+            RespFrame::BulkString("POISON".into()),
+            RespFrame::BulkString(old_master_runid.into()),
+            RespFrame::BulkString("60".into()),
+        ]);
+        if let RespFrame::Array(parts) = cmd {
+            assert_eq!(parts.len(), 4);
+        } else {
+            panic!("Expected array");
+        }
+    }
+
+    #[test]
+    fn test_master_status_variants() {
+        assert_ne!(MasterStatus::Ok, MasterStatus::Sdown);
+    }
+}

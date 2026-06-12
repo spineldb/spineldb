@@ -132,3 +132,56 @@ impl ClusterClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connect_timeout() {
+        assert_eq!(CLIENT_CONNECT_TIMEOUT, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_write_timeout() {
+        assert_eq!(CLIENT_WRITE_TIMEOUT, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_read_timeout() {
+        assert_eq!(CLIENT_READ_TIMEOUT, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn test_read_timeout_greater_than_write() {
+        assert!(CLIENT_READ_TIMEOUT >= CLIENT_WRITE_TIMEOUT);
+    }
+
+    #[test]
+    fn test_cluster_setslot_args_format() {
+        let slot: u16 = 100;
+        let args = [
+            "SETSLOT".to_string(),
+            slot.to_string(),
+            "MIGRATING".to_string(),
+            "node-1".to_string(),
+        ];
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "SETSLOT");
+        assert_eq!(args[1], "100");
+    }
+
+    #[test]
+    fn test_get_keys_in_slot_args_format() {
+        let slot: u16 = 500;
+        let count: usize = 10;
+        let args = [
+            "GETKEYSINSLOT".to_string(),
+            slot.to_string(),
+            count.to_string(),
+        ];
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[1], "500");
+        assert_eq!(args[2], "10");
+    }
+}

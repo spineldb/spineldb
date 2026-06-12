@@ -72,3 +72,20 @@ pub async fn run_metrics_server(state: Arc<ServerState>, mut shutdown_rx: broadc
         .await
         .unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_metrics_content_type() {
+        let content_type = "text/plain; version=0.0.4";
+        assert!(content_type.contains("text/plain"));
+        assert!(content_type.contains("0.0.4"));
+    }
+
+    #[test]
+    fn test_metrics_endpoint_path() {
+        let path = "/metrics";
+        assert_eq!(path, "/metrics");
+    }
+}

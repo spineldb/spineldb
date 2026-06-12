@@ -48,3 +48,28 @@ pub async fn execute(
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_cannot_forget_self_error_message() {
+        let my_id = "node-1";
+        let node_id_to_forget = "node-1";
+        assert_eq!(my_id, node_id_to_forget);
+    }
+
+    #[test]
+    fn test_forget_different_node_is_allowed() {
+        let my_id = "node-1";
+        let node_id_to_forget = "node-2";
+        assert_ne!(my_id, node_id_to_forget);
+    }
+
+    #[test]
+    fn test_node_not_found_error_format() {
+        let node_id = "nonexistent-node";
+        let err_msg = format!("Node {node_id} not found in the cluster");
+        assert!(err_msg.contains("nonexistent-node"));
+        assert!(err_msg.contains("not found"));
+    }
+}

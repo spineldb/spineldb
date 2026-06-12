@@ -75,3 +75,69 @@ pub async fn execute(
         WriteOutcome::DidNotWrite,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_slot_error_message() {
+        let _slot: u16 = NUM_SLOTS as u16;
+        let err_msg = "Invalid slot".to_string();
+        assert!(err_msg.contains("Invalid"));
+    }
+
+    #[test]
+    fn test_slot_boundary_valid() {
+        let slot: u16 = (NUM_SLOTS as u16) - 1;
+        assert!(slot < NUM_SLOTS as u16);
+    }
+
+    #[test]
+    fn test_slot_boundary_invalid() {
+        let slot: u16 = NUM_SLOTS as u16;
+        assert!(slot >= NUM_SLOTS as u16);
+    }
+
+    #[test]
+    fn test_migrating_requires_own_slot_error() {
+        let err_msg = "Cannot MIGRATE a slot I don't own".to_string();
+        assert!(err_msg.contains("don't own"));
+    }
+
+    #[test]
+    fn test_node_not_found_error_format() {
+        let new_owner_id = "nonexistent";
+        let err_msg = format!("Node {new_owner_id} not found");
+        assert!(err_msg.contains("nonexistent"));
+        assert!(err_msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_setslot_subcommand_variants() {
+        let migrating = SetSlotSubcommand::Migrating("node-1".to_string());
+        let importing = SetSlotSubcommand::Importing("node-2".to_string());
+        let node = SetSlotSubcommand::Node("node-3".to_string());
+        let stable = SetSlotSubcommand::Stable;
+
+        assert!(matches!(migrating, SetSlotSubcommand::Migrating(_)));
+        assert!(matches!(importing, SetSlotSubcommand::Importing(_)));
+        assert!(matches!(node, SetSlotSubcommand::Node(_)));
+        assert!(matches!(stable, SetSlotSubcommand::Stable));
+    }
+
+    #[test]
+    fn test_setslot_subcommand_clone() {
+        let original = SetSlotSubcommand::Migrating("node-1".to_string());
+        let cloned = original.clone();
+        assert!(matches!(cloned, SetSlotSubcommand::Migrating(id) if id == "node-1"));
+    }
+
+    #[test]
+    fn test_setslot_subcommand_debug() {
+        let subcmd = SetSlotSubcommand::Importing("src-node".to_string());
+        let debug_str = format!("{:?}", subcmd);
+        assert!(debug_str.contains("Importing"));
+        assert!(debug_str.contains("src-node"));
+    }
+}

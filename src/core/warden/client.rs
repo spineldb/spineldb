@@ -84,3 +84,46 @@ impl WardenClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connect_timeout() {
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_read_timeout() {
+        assert_eq!(READ_TIMEOUT, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_ping_command_frame() {
+        let frame = RespFrame::Array(vec![RespFrame::BulkString("PING".into())]);
+        if let RespFrame::Array(parts) = frame {
+            assert_eq!(parts.len(), 1);
+            if let RespFrame::BulkString(cmd) = &parts[0] {
+                assert_eq!(cmd.as_ref(), b"PING");
+            } else {
+                panic!("Expected BulkString");
+            }
+        } else {
+            panic!("Expected Array");
+        }
+    }
+
+    #[test]
+    fn test_info_replication_command_frame() {
+        let frame = RespFrame::Array(vec![
+            RespFrame::BulkString("INFO".into()),
+            RespFrame::BulkString("replication".into()),
+        ]);
+        if let RespFrame::Array(parts) = frame {
+            assert_eq!(parts.len(), 2);
+        } else {
+            panic!("Expected Array");
+        }
+    }
+}

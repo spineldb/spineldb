@@ -280,3 +280,91 @@ async fn run_reshard_orchestrator(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn test_key_batch_size() {
+        assert_eq!(KEY_BATCH_SIZE, 100);
+    }
+
+    #[test]
+    fn test_concurrent_migrations() {
+        assert_eq!(CONCURRENT_MIGRATIONS, 16);
+    }
+
+    #[test]
+    fn test_dest_addr_parsing() {
+        let dest_addr = "10.0.0.2:7001";
+        let dest_host = dest_addr.split(':').next().unwrap().to_string();
+        let dest_port: u16 = dest_addr.split(':').next_back().unwrap().parse().unwrap();
+        assert_eq!(dest_host, "10.0.0.2");
+        assert_eq!(dest_port, 7001);
+    }
+
+    #[test]
+    fn test_source_addr_parsing() {
+        let source_addr: SocketAddr = "10.0.0.1:7000".parse().unwrap();
+        assert_eq!(source_addr.ip().to_string(), "10.0.0.1");
+        assert_eq!(source_addr.port(), 7000);
+    }
+
+    #[test]
+    fn test_reshard_slots_must_belong_to_source() {
+        let source_slots: BTreeSet<u16> = [100, 200, 300].into();
+        let slot_to_migrate: u16 = 200;
+        assert!(source_slots.contains(&slot_to_migrate));
+
+        let slot_not_owned: u16 = 999;
+        assert!(!source_slots.contains(&slot_not_owned));
+    }
+
+    #[test]
+    fn test_setslot_args_format() {
+        let slot: u16 = 1500;
+        let dest_id = "node-dest-1";
+        let setslot_args: Vec<Bytes> = vec![
+            "SETSLOT".into(),
+            slot.to_string().into(),
+            "NODE".into(),
+            dest_id.into(),
+        ];
+        assert_eq!(setslot_args.len(), 4);
+        assert_eq!(setslot_args[0].as_ref(), b"SETSLOT");
+        assert_eq!(setslot_args[1].as_ref(), b"1500");
+        assert_eq!(setslot_args[2].as_ref(), b"NODE");
+        assert_eq!(setslot_args[3].as_ref(), b"node-dest-1");
+    }
+
+    #[test]
+    fn test_importing_args_format() {
+        let slot: u16 = 2000;
+        let source_id = "node-src-1";
+        let args: Vec<Bytes> = vec![
+            "SETSLOT".into(),
+            slot.to_string().into(),
+            "IMPORTING".into(),
+            source_id.into(),
+        ];
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[2].as_ref(), b"IMPORTING");
+    }
+
+    #[test]
+    fn test_migrating_args_format() {
+        let slot: u16 = 3000;
+        let dest_id = "node-dst-1";
+        let args: Vec<Bytes> = vec![
+            "SETSLOT".into(),
+            slot.to_string().into(),
+            "MIGRATING".into(),
+            dest_id.into(),
+        ];
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[2].as_ref(), b"MIGRATING");
+    }
+}

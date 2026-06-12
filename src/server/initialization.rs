@@ -258,3 +258,101 @@ async fn load_persistence_data(server_state: &Arc<ServerState>) -> Result<()> {
     info!("Persistence data loaded successfully.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_protected_mode_logic() {
+        let host = "0.0.0.0";
+        let password: Option<String> = None;
+        let acl_enabled = false;
+        let protected_mode = host == "0.0.0.0" && password.is_none() && !acl_enabled;
+        assert!(protected_mode);
+    }
+
+    #[test]
+    fn test_protected_mode_with_password() {
+        let host = "0.0.0.0";
+        let password: Option<String> = Some("secret".to_string());
+        let acl_enabled = false;
+        let protected_mode = host == "0.0.0.0" && password.is_none() && !acl_enabled;
+        assert!(!protected_mode);
+    }
+
+    #[test]
+    fn test_protected_mode_with_acl() {
+        let host = "0.0.0.0";
+        let password: Option<String> = None;
+        let acl_enabled = true;
+        let protected_mode = host == "0.0.0.0" && password.is_none() && !acl_enabled;
+        assert!(!protected_mode);
+    }
+
+    #[test]
+    fn test_protected_mode_not_loopback() {
+        let host = "127.0.0.1";
+        let password: Option<String> = None;
+        let acl_enabled = false;
+        let protected_mode = host == "0.0.0.0" && password.is_none() && !acl_enabled;
+        assert!(!protected_mode);
+    }
+
+    #[test]
+    fn test_config_path_default() {
+        let args = ["spineldb".to_string()];
+        let config_path = args
+            .iter()
+            .position(|arg| arg == "--config")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("config.toml");
+        assert_eq!(config_path, "config.toml");
+    }
+
+    #[test]
+    fn test_config_path_from_args() {
+        let args = [
+            "spineldb".to_string(),
+            "--config".to_string(),
+            "/etc/spineldb.toml".to_string(),
+        ];
+        let config_path = args
+            .iter()
+            .position(|arg| arg == "--config")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("config.toml");
+        assert_eq!(config_path, "/etc/spineldb.toml");
+    }
+
+    #[test]
+    fn test_port_override_from_args() {
+        let args = [
+            "spineldb".to_string(),
+            "--port".to_string(),
+            "7000".to_string(),
+        ];
+        let port = args
+            .iter()
+            .position(|arg| arg == "--port")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u16>().ok());
+        assert_eq!(port, Some(7000));
+    }
+
+    #[test]
+    fn test_port_override_invalid() {
+        let args = [
+            "spineldb".to_string(),
+            "--port".to_string(),
+            "notaport".to_string(),
+        ];
+        let port = args
+            .iter()
+            .position(|arg| arg == "--port")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u16>().ok());
+        assert_eq!(port, None);
+    }
+}

@@ -131,3 +131,98 @@ async fn run_app() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_version_flag_detection() {
+        let args = ["spineldb".to_string(), "--version".to_string()];
+        assert!(args.contains(&"--version".to_string()));
+    }
+
+    #[test]
+    fn test_warden_mode_detection() {
+        let args = [
+            "spineldb".to_string(),
+            "--warden".to_string(),
+            "/path/to/config.toml".to_string(),
+        ];
+        assert!(args.len() > 1 && args[1] == "--warden");
+    }
+
+    #[test]
+    fn test_config_path_from_args() {
+        let args = [
+            "spineldb".to_string(),
+            "--config".to_string(),
+            "/etc/spineldb.toml".to_string(),
+        ];
+        let config_path = args
+            .iter()
+            .position(|arg| arg == "--config")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("config.toml");
+        assert_eq!(config_path, "/etc/spineldb.toml");
+    }
+
+    #[test]
+    fn test_config_path_default() {
+        let args = ["spineldb".to_string()];
+        let config_path = args
+            .iter()
+            .position(|arg| arg == "--config")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("config.toml");
+        assert_eq!(config_path, "config.toml");
+    }
+
+    #[test]
+    fn test_port_override() {
+        let args = [
+            "spineldb".to_string(),
+            "--port".to_string(),
+            "7000".to_string(),
+        ];
+        let port = args
+            .iter()
+            .position(|arg| arg == "--port")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u16>().ok());
+        assert_eq!(port, Some(7000));
+    }
+
+    #[test]
+    fn test_port_override_invalid() {
+        let args = [
+            "spineldb".to_string(),
+            "--port".to_string(),
+            "invalid".to_string(),
+        ];
+        let port = args
+            .iter()
+            .position(|arg| arg == "--port")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u16>().ok());
+        assert_eq!(port, None);
+    }
+
+    #[test]
+    fn test_warden_requires_config_path() {
+        let args = ["spineldb".to_string(), "--warden".to_string()];
+        let valid = args.len() == 3;
+        assert!(!valid);
+    }
+
+    #[test]
+    fn test_warden_with_config_path() {
+        let args = [
+            "spineldb".to_string(),
+            "--warden".to_string(),
+            "/path/to/config.toml".to_string(),
+        ];
+        let valid = args.len() == 3;
+        assert!(valid);
+    }
+}

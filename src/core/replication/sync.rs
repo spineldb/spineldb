@@ -35,3 +35,30 @@ impl<'a, S: AsyncWrite + Unpin> InitialSyncer<'a, S> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initial_syncer_creation() {
+        let data = b"test data";
+        let _header = format!("${}\r\n", data.len());
+        assert!(_header.starts_with('$'));
+        assert!(_header.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn test_snapshot_header_format() {
+        let spldb_bytes = Bytes::from_static(b"test snapshot data");
+        let header = format!("${}\r\n", spldb_bytes.len());
+        assert_eq!(header, "$18\r\n");
+    }
+
+    #[test]
+    fn test_snapshot_header_empty() {
+        let spldb_bytes = Bytes::new();
+        let header = format!("${}\r\n", spldb_bytes.len());
+        assert_eq!(header, "$0\r\n");
+    }
+}

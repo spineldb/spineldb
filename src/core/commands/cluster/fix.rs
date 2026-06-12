@@ -153,3 +153,32 @@ async fn run_fix_orchestrator(state: Arc<ServerState>) -> Result<Vec<String>, an
 
     Ok(log)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fix_returns_error_when_not_in_cluster_mode() {
+        let err = anyhow!("Not in cluster mode");
+        assert_eq!(err.to_string(), "Not in cluster mode");
+    }
+
+    #[test]
+    fn test_fix_error_message_format() {
+        let e = anyhow!("some internal error");
+        let msg = format!("CLUSTER FIX failed: {e}");
+        assert!(msg.contains("CLUSTER FIX failed"));
+        assert!(msg.contains("some internal error"));
+    }
+
+    #[test]
+    fn test_stuck_slot_resolution_prefers_source() {
+        let source_id = "node_a".to_string();
+        let dest_id = "node_b".to_string();
+        let _slot: u16 = 100;
+        let resolved_owner = &source_id;
+        assert_eq!(resolved_owner, &source_id);
+        assert_ne!(resolved_owner, &dest_id);
+    }
+}

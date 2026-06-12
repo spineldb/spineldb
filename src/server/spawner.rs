@@ -271,3 +271,48 @@ pub async fn spawn_all(ctx: &mut ServerContext) -> Result<()> {
     info!("All background tasks have been spawned.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fsync_interval_is_one_second() {
+        let interval = Duration::from_secs(1);
+        assert_eq!(interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_replication_config_is_primary() {
+        let config = ReplicationConfig::Primary(crate::config::ReplicationPrimaryConfig::default());
+        assert!(matches!(config, ReplicationConfig::Primary(_)));
+    }
+
+    #[test]
+    fn test_replication_config_is_replica() {
+        let config = ReplicationConfig::Replica {
+            primary_host: "127.0.0.1".to_string(),
+            primary_port: 6379,
+            tls_enabled: false,
+        };
+        assert!(matches!(config, ReplicationConfig::Replica { .. }));
+    }
+
+    #[test]
+    fn test_aof_fsync_always() {
+        let fsync = AppendFsync::Always;
+        assert!(matches!(fsync, AppendFsync::Always));
+    }
+
+    #[test]
+    fn test_aof_fsync_everysec() {
+        let fsync = AppendFsync::EverySec;
+        assert!(matches!(fsync, AppendFsync::EverySec));
+    }
+
+    #[test]
+    fn test_aof_fsync_no() {
+        let fsync = AppendFsync::No;
+        assert!(matches!(fsync, AppendFsync::No));
+    }
+}

@@ -293,3 +293,72 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_replica_sync_state_variants() {
+        assert_ne!(ReplicaSyncState::Online, ReplicaSyncState::AwaitingFullSync);
+    }
+
+    #[test]
+    fn test_fullresync_response_format() {
+        let master_replid = "abc123";
+        let master_repl_offset: u64 = 1024;
+        let response = format!("+FULLRESYNC {master_replid} {master_repl_offset}\r\n");
+        assert!(response.starts_with("+FULLRESYNC"));
+        assert!(response.contains("abc123"));
+        assert!(response.contains("1024"));
+        assert!(response.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn test_partial_resync_continue_response() {
+        let response = "+CONTINUE\r\n";
+        assert_eq!(response, "+CONTINUE\r\n");
+    }
+
+    #[test]
+    fn test_sync_lock_key_is_socket_addr() {
+        let addr: SocketAddr = "127.0.0.1:7000".parse().unwrap();
+        assert_eq!(addr.port(), 7000);
+    }
+
+    #[test]
+    fn test_replica_state_info_construction() {
+        let info = ReplicaStateInfo {
+            sync_state: ReplicaSyncState::Online,
+            ack_offset: 100,
+            last_ack_time: Instant::now(),
+        };
+        assert_eq!(info.sync_state, ReplicaSyncState::Online);
+        assert_eq!(info.ack_offset, 100);
+    }
+
+    #[test]
+    fn test_replica_state_info_awaiting_full_sync() {
+        let info = ReplicaStateInfo {
+            sync_state: ReplicaSyncState::AwaitingFullSync,
+            ack_offset: 0,
+            last_ack_time: Instant::now(),
+        };
+        assert_eq!(info.sync_state, ReplicaSyncState::AwaitingFullSync);
+        assert_eq!(info.ack_offset, 0);
+    }
+
+    #[test]
+    fn test_temp_repl_path_format() {
+        let port: u16 = 7000;
+        let temp_path = format!("temp-repl-{}.spldb", port);
+        assert_eq!(temp_path, "temp-repl-7000.spldb");
+    }
+
+    #[test]
+    fn test_bulk_header_format() {
+        let file_len: u64 = 1024;
+        let bulk_header = format!("${}\r\n", file_len);
+        assert_eq!(bulk_header, "$1024\r\n");
+    }
+}

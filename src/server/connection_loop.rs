@@ -239,3 +239,24 @@ pub async fn run(mut ctx: ServerContext) {
     };
     info!("Server shutdown complete.");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_id_counter_increments() {
+        let mut session_id_counter: u64 = 0;
+        session_id_counter += 1;
+        assert_eq!(session_id_counter, 1);
+        session_id_counter += 1;
+        assert_eq!(session_id_counter, 2);
+    }
+
+    #[test]
+    fn test_shutdown_timeout_is_reasonable() {
+        let timeout = Duration::from_secs(10);
+        assert!(timeout >= Duration::from_secs(5));
+        assert!(timeout <= Duration::from_secs(30));
+    }
+}

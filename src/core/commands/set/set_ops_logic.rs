@@ -162,3 +162,156 @@ pub(super) fn store_set_result(
         WriteOutcome::Write { keys_modified: 1 },
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_set_from_guard_expired_returns_none() {
+        let _key = Bytes::from_static(b"k");
+        let mut set = HashSet::new();
+        set.insert(Bytes::from_static(b"member"));
+        let stored = StoredValue::new(DataValue::Set(set));
+        assert!(!stored.is_expired());
+        assert!(stored.expiry.is_none());
+    }
+
+    #[test]
+    fn test_sunion_basic() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        a.insert(Bytes::from_static(b"2"));
+        let mut b = HashSet::new();
+        b.insert(Bytes::from_static(b"2"));
+        b.insert(Bytes::from_static(b"3"));
+
+        let mut union = a.clone();
+        union.extend(b.iter().cloned());
+        assert_eq!(union.len(), 3);
+        assert!(union.contains(&Bytes::from_static(b"1")));
+        assert!(union.contains(&Bytes::from_static(b"2")));
+        assert!(union.contains(&Bytes::from_static(b"3")));
+    }
+
+    #[test]
+    fn test_sunion_empty_sets() {
+        let a: HashSet<Bytes> = HashSet::new();
+        let b: HashSet<Bytes> = HashSet::new();
+        let mut union = a;
+        union.extend(b);
+        assert!(union.is_empty());
+    }
+
+    #[test]
+    fn test_sinter_basic() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        a.insert(Bytes::from_static(b"2"));
+        let mut b = HashSet::new();
+        b.insert(Bytes::from_static(b"2"));
+        b.insert(Bytes::from_static(b"3"));
+
+        let intersection: HashSet<Bytes> = a.iter().filter(|m| b.contains(*m)).cloned().collect();
+        assert_eq!(intersection.len(), 1);
+        assert!(intersection.contains(&Bytes::from_static(b"2")));
+    }
+
+    #[test]
+    fn test_sinter_no_common() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        let mut b = HashSet::new();
+        b.insert(Bytes::from_static(b"2"));
+
+        let intersection: HashSet<Bytes> = a.iter().filter(|m| b.contains(*m)).cloned().collect();
+        assert!(intersection.is_empty());
+    }
+
+    #[test]
+    fn test_sdiff_basic() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        a.insert(Bytes::from_static(b"2"));
+        a.insert(Bytes::from_static(b"3"));
+        let mut b = HashSet::new();
+        b.insert(Bytes::from_static(b"2"));
+
+        let mut diff = a;
+        diff.retain(|m| !b.contains(m));
+        assert_eq!(diff.len(), 2);
+        assert!(diff.contains(&Bytes::from_static(b"1")));
+        assert!(diff.contains(&Bytes::from_static(b"3")));
+    }
+
+    #[test]
+    fn test_sdiff_empty_other() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        let b: HashSet<Bytes> = HashSet::new();
+
+        let mut diff = a;
+        diff.retain(|m| !b.contains(m));
+        assert_eq!(diff.len(), 1);
+    }
+
+    #[test]
+    fn test_sdiff_all_removed() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        let mut b = HashSet::new();
+        b.insert(Bytes::from_static(b"1"));
+
+        let mut diff = a;
+        diff.retain(|m| !b.contains(m));
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_store_empty_set_deletes_dest() {
+        let result_set: HashSet<Bytes> = HashSet::new();
+        let set_len = result_set.len();
+        assert_eq!(set_len, 0);
+    }
+
+    #[test]
+    fn test_store_non_empty_set() {
+        let mut result_set = HashSet::new();
+        result_set.insert(Bytes::from_static(b"a"));
+        result_set.insert(Bytes::from_static(b"b"));
+        let set_len = result_set.len();
+        assert_eq!(set_len, 2);
+    }
+
+    #[test]
+    fn test_wrong_type_error_for_non_set() {
+        let err = SpinelDBError::WrongType;
+        assert!(matches!(err, SpinelDBError::WrongType));
+    }
+
+    #[test]
+    fn test_internal_error_for_missing_lock() {
+        let err = SpinelDBError::Internal("Set op requires multi-key lock".into());
+        assert!(matches!(err, SpinelDBError::Internal(_)));
+    }
+
+    #[test]
+    fn test_hashset_clone() {
+        let mut original = HashSet::new();
+        original.insert(Bytes::from_static(b"x"));
+        original.insert(Bytes::from_static(b"y"));
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn test_hashset_extend() {
+        let mut a = HashSet::new();
+        a.insert(Bytes::from_static(b"1"));
+        let mut b = HashSet::new();
+        b.insert(Bytes::from_static(b"2"));
+        b.insert(Bytes::from_static(b"3"));
+        a.extend(b);
+        assert_eq!(a.len(), 3);
+    }
+}

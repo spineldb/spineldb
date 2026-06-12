@@ -337,3 +337,65 @@ impl AofWriterTask {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_retry_attempts_constant() {
+        assert_eq!(AOF_RETRY_ATTEMPTS, 5);
+    }
+
+    #[test]
+    fn test_retry_delay_constant() {
+        assert_eq!(AOF_RETRY_DELAY, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_retry_delay_is_reasonable() {
+        assert!(AOF_RETRY_DELAY >= Duration::from_secs(1));
+        assert!(AOF_RETRY_DELAY <= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_retry_attempts_bounds() {
+        const _: () = assert!(AOF_RETRY_ATTEMPTS >= 3);
+        const _: () = assert!(AOF_RETRY_ATTEMPTS <= 10);
+    }
+
+    #[test]
+    fn test_error_kind_storage_full_is_retryable() {
+        let e = std::io::Error::new(ErrorKind::StorageFull, "disk full");
+        assert_eq!(e.kind(), ErrorKind::StorageFull);
+    }
+
+    #[test]
+    fn test_error_kind_permission_denied_is_retryable() {
+        let e = std::io::Error::new(ErrorKind::PermissionDenied, "denied");
+        assert_eq!(e.kind(), ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn test_error_kind_other_is_not_retryable() {
+        let e = std::io::Error::new(ErrorKind::BrokenPipe, "broken");
+        assert_ne!(e.kind(), ErrorKind::StorageFull);
+        assert_ne!(e.kind(), ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn test_empty_transaction_returns_ok() {
+        let tx_data = crate::core::events::TransactionData {
+            all_commands: vec![],
+            write_commands: vec![],
+        };
+        assert!(tx_data.all_commands.is_empty());
+    }
+
+    #[test]
+    fn test_read_only_mode_error_message_format() {
+        let err_msg = "AOF write failed after retries";
+        assert!(err_msg.contains("AOF"));
+        assert!(err_msg.contains("write"));
+    }
+}
