@@ -40,9 +40,13 @@ pub fn handle_discard(
     state: Arc<ServerState>,
     session_id: u64,
 ) -> Result<RouteResponse, SpinelDBError> {
-    TransactionHandler::new(state, db, session_id, session.authenticated_user.clone())
+    let result = TransactionHandler::new(state, db, session_id, session.authenticated_user.clone())
         .handle_discard()
-        .map(RouteResponse::Single)
+        .map(RouteResponse::Single);
+    if result.is_ok() {
+        session.is_in_transaction = false;
+    }
+    result
 }
 
 pub async fn handle_watch(
@@ -144,7 +148,6 @@ mod tests {
 
         let result = handle_discard(&db, &mut session, state, session_id);
         assert!(result.is_ok());
-        // Note: handle_discard only cleans up DB state, not session state.
-        // The router is responsible for updating session.is_in_transaction.
+        assert!(!session.is_in_transaction);
     }
 }

@@ -138,6 +138,9 @@ pub async fn run(mut ctx: ServerContext) {
                                     },
                                     Err(e) => {
                                         warn!("TLS handshake error for {addr}: {e}");
+                                        // Clean up the client entry that was registered before the TLS handshake.
+                                        state_clone.clients.remove(&session_id);
+                                        metrics::CONNECTED_CLIENTS.dec();
                                     }
                                 }
                             });

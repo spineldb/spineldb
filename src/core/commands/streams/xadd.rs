@@ -223,23 +223,23 @@ impl ExecutableCommand for XAdd {
             }
         }
 
+        // Compute memory info before acquiring the lock to avoid borrow conflicts.
+        let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
+        let new_entry_size: usize = self
+            .options
+            .fields
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum();
+
         // Phase 2: Acquire lock and perform final, atomic checks.
-        let shard_index = ctx.db.get_shard_index(&self.key);
-        let shard = ctx.db.get_shard(shard_index);
-        let mut guard = shard.entries.lock().await;
+        let (shard, guard) = ctx.get_single_shard_context_mut()?;
 
         // Final OOM Check (inside lock): This is the authoritative check.
-        if let Some(maxmem) = maxmemory {
-            let total_memory: usize = ctx.state.dbs.iter().map(|db| db.get_current_memory()).sum();
-            let new_entry_size: usize = self
-                .options
-                .fields
-                .iter()
-                .map(|(k, v)| k.len() + v.len())
-                .sum();
-            if total_memory.saturating_add(new_entry_size) > maxmem {
-                return Err(SpinelDBError::MaxMemoryReached);
-            }
+        if let Some(maxmem) = maxmemory
+            && total_memory.saturating_add(new_entry_size) > maxmem
+        {
+            return Err(SpinelDBError::MaxMemoryReached);
         }
 
         // NOMKSTREAM Check (inside lock): Atomically check existence.
@@ -248,7 +248,7 @@ impl ExecutableCommand for XAdd {
         }
 
         // Phase 3: Execute the command's core logic.
-        let (resp, outcome, _) = self.execute_with_guard(shard, &mut guard).await?;
+        let (resp, outcome, _) = self.execute_with_guard(shard, guard).await?;
 
         // Phase 4: Post-execution actions.
         ctx.state.stream_blocker_manager.notify(&self.key);

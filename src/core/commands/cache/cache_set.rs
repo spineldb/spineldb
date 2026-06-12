@@ -123,6 +123,8 @@ impl ParseCommand for CacheSet {
 }
 
 /// Sets the expiry, SWR, and Grace timestamps on a StoredValue based on command options.
+/// If TTL is not set but SWR or GRACE are provided, they are ignored (TTL must be set for
+/// SWR/GRACE to have effect).
 pub(super) fn apply_ttl_options(
     value: &mut StoredValue,
     ttl: Option<u64>,
@@ -135,6 +137,7 @@ pub(super) fn apply_ttl_options(
             let fresh_duration = Duration::from_secs(ttl_seconds);
             value.expiry = Some(now + fresh_duration);
 
+            // SWR and GRACE are only meaningful when TTL is set
             let swr_duration = Duration::from_secs(swr.unwrap_or(0));
             value.stale_revalidate_expiry = Some(now + fresh_duration + swr_duration);
 

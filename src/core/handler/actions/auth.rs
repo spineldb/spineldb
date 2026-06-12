@@ -14,12 +14,6 @@ pub async fn handle_auth(
     session: &mut SessionState,
     state: &Arc<ServerState>,
 ) -> Result<RouteResponse, SpinelDBError> {
-    if session.is_authenticated {
-        return Ok(RouteResponse::Single(RespValue::Error(
-            "ERR user is already authenticated".to_string(),
-        )));
-    }
-
     let config = state.config.lock().await;
     let acl_config = state.acl_config.read().await;
 
@@ -43,8 +37,15 @@ pub async fn handle_auth(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         Err(SpinelDBError::InvalidPassword)
     } else if let Some(pass) = &config.password {
-        // Legacy password authentication
-        if *pass == auth_cmd.password {
+        // Legacy password authentication using constant-time comparison
+        if pass.len() == auth_cmd.password.len()
+            && pass
+                .as_bytes()
+                .iter()
+                .zip(auth_cmd.password.as_bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+        {
             session.is_authenticated = true;
             Ok(RouteResponse::Single(RespValue::SimpleString("OK".into())))
         } else {
@@ -77,23 +78,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auth_already_authenticated() {
-        let state = make_test_state_no_auth();
-        let mut session = SessionState::new(false, false);
-        session.is_authenticated = true;
+    async fn test_auth_reauthentication() {
+        let state = make_test_state_with_password("secret123");
+        let mut session = SessionState::new(true, false);
 
-        let auth_cmd = Auth {
-            password: "test".to_string(),
-        };
+        // First auth
+        handle_auth(
+            Auth {
+                password: "secret123".to_string(),
+            },
+            &mut session,
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(session.is_authenticated);
 
-        let result = handle_auth(auth_cmd, &mut session, &state).await;
+        // Second auth (re-auth)
+        let result = handle_auth(
+            Auth {
+                password: "secret123".to_string(),
+            },
+            &mut session,
+            &state,
+        )
+        .await;
         assert!(result.is_ok());
 
         match result.unwrap() {
-            RouteResponse::Single(RespValue::Error(s)) => {
-                assert!(s.contains("already authenticated"))
-            }
-            _ => panic!("Expected Error for already authenticated"),
+            RouteResponse::Single(RespValue::SimpleString(s)) => assert_eq!(s, "OK"),
+            _ => panic!("Expected SimpleString OK for re-authentication"),
         }
     }
 

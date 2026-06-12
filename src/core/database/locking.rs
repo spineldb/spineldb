@@ -58,15 +58,10 @@ impl Db {
                 ExecutionLocks::None
             }
 
-            // `SORT` needs special handling. A lock on the primary key is acquired initially
-            // and can be upgraded later by the command handler.
-            Command::Sort(_) => {
-                let shard_index = self.get_shard_index(&keys[0]);
-                ExecutionLocks::Single {
-                    shard_index,
-                    guard: self.get_shard(shard_index).entries.lock().await,
-                }
-            }
+            // `SORT` manages its own multi-key locking inside the command handler
+            // (it needs to release and re-acquire locks across phases), so the
+            // router must not pre-lock any shard.
+            Command::Sort(_) => ExecutionLocks::None,
 
             // Commands that handle their own granular locking do not require pre-locking.
             Command::Cache(c)
@@ -88,6 +83,13 @@ impl Db {
 
             // `FlushAll` handles its own cross-DB locking, so the router should not acquire any locks.
             Command::FlushAll(_) => ExecutionLocks::None,
+
+            // `XREAD` and `XREADGROUP` always require multi-key locks because their
+            // `read_from_streams` implementation accesses the `guards` map directly.
+            // Even with a single key, they need `ExecutionLocks::Multi`.
+            Command::XRead(_) | Command::XReadGroup(_) => ExecutionLocks::Multi {
+                guards: self.lock_shards_for_keys(&keys).await,
+            },
 
             // Commands operating on multiple keys require locks on all relevant shards.
             _ if keys.len() > 1 => ExecutionLocks::Multi {

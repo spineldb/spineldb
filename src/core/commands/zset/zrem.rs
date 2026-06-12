@@ -35,6 +35,8 @@ impl ExecutableCommand for ZRem {
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         };
         if entry.is_expired() {
+            // Passive expiration: remove the expired entry.
+            shard_cache_guard.pop(&self.key);
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         }
         if let DataValue::SortedSet(zset) = &mut entry.data {

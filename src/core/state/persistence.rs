@@ -15,6 +15,9 @@ use tokio::task::JoinHandle;
 pub struct AofRewriteState {
     /// True if an AOF rewrite is currently active.
     pub is_in_progress: bool,
+    /// Indicates whether the rewrite succeeded. Set by the rewrite task before signaling completion.
+    /// `None` while in progress, `Some(true)` on success, `Some(false)` on failure.
+    pub succeeded: Option<bool>,
     /// Buffers write commands that arrive while the rewrite is in progress.
     pub buffer: Vec<PropagatedWork>,
     /// The estimated total size of the buffered commands in bytes.
@@ -150,6 +153,7 @@ mod tests {
     async fn test_aof_rewrite_state_default() {
         let state = AofRewriteState::default();
         assert!(!state.is_in_progress);
+        assert!(state.succeeded.is_none());
         assert!(state.buffer.is_empty());
         assert_eq!(state.buffer_size, 0);
     }
@@ -158,6 +162,7 @@ mod tests {
     async fn test_aof_rewrite_state_buffer_tracks_size() {
         let state = AofRewriteState {
             is_in_progress: true,
+            succeeded: None,
             buffer_size: 1024,
             ..Default::default()
         };

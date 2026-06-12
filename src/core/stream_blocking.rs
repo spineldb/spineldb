@@ -242,6 +242,21 @@ impl StreamBlockerManager {
         }
     }
 
+    /// Wakes up all blocked stream waiters across all keys.
+    /// Used by FLUSHALL/FLUSHDB to unblock clients waiting on streams that are about to be cleared.
+    pub fn wake_all_waiters(&self) {
+        for mut entry in self.waiters.iter_mut() {
+            while let Some(info) = entry.value_mut().pop_front() {
+                if let Ok(mut guard) = info.waker.lock()
+                    && let Some(waker) = guard.take()
+                {
+                    let _ = waker.send(());
+                }
+            }
+        }
+        self.waiters.clear();
+    }
+
     /// Cleans up a specific waker from all associated key queues after it's been
     /// used or has timed out.
     fn remove_waiter(&self, keys: &[Bytes], waker_to_remove: &SharedWaker) {

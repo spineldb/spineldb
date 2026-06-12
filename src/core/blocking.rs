@@ -330,15 +330,22 @@ impl BlockerManager {
             let waiter_info = queue.front()?;
 
             // Clean up stale waiters whose receivers have been dropped (e.g., timeout).
-            if waiter_info.waker.lock().unwrap().is_none() {
+            // Also treat poisoned mutex as stale — the waiter's task has panicked.
+            let is_stale = waiter_info
+                .waker
+                .lock()
+                .map(|g| g.is_none())
+                .unwrap_or(true);
+            if is_stale {
                 queue.pop_front();
                 continue;
             }
 
             // Attempt to take the waker and send the value.
-            if let Some(waker) = queue
-                .pop_front()
-                .and_then(|info| info.waker.lock().unwrap().take())
+            let popped = queue.pop_front();
+            if let Some(info) = popped
+                && let Ok(mut guard) = info.waker.lock()
+                && let Some(waker) = guard.take()
             {
                 let popped_value = PoppedValue {
                     key: key.clone(),
@@ -403,7 +410,8 @@ impl BlockerManager {
                 }
 
                 if let Some(info) = queue.pop_front()
-                    && let Some(waker) = info.waker.lock().unwrap().take()
+                    && let Ok(mut guard) = info.waker.lock()
+                    && let Some(waker) = guard.take()
                 {
                     let woken_value = ZSetPoppedValue {
                         key: key.clone(),
@@ -419,7 +427,8 @@ impl BlockerManager {
                         return Some(side);
                     }
                 } else {
-                    break;
+                    // Skip stale waiters (poisoned mutex or no waker) and try the next one.
+                    continue;
                 }
             }
             // If no waiter was found or notified, put the popped element back.
@@ -452,6 +461,26 @@ impl BlockerManager {
             "Removed any pending blockers for session_id {}.",
             session_id
         );
+    }
+
+    /// Wakes up all blocked waiters across all keys.
+    /// Used by FLUSHALL/FLUSHDB to unblock clients waiting on keys that are about to be cleared.
+    pub fn wake_all_waiters(&self) {
+        for mut entry in self.waiters.iter_mut() {
+            let key = entry.key().clone();
+            while let Some(info) = entry.value_mut().pop_front() {
+                if let Ok(mut guard) = info.waker.lock()
+                    && let Some(waker) = guard.take()
+                {
+                    let dummy_value = PoppedValue {
+                        key: key.clone(),
+                        value: Bytes::new(),
+                    };
+                    let _ = waker.send(WokenValue::List(dummy_value));
+                }
+            }
+        }
+        self.waiters.clear();
     }
 
     /// Handles the push operation for a woken `BLMOVE` client.
@@ -508,9 +537,20 @@ impl BlockerManager {
         popped: &PoppedValue,
         original_error: &SpinelDBError,
     ) {
+        // Get destination key safely - fall back to "unknown" if unavailable
+        let dest_key = ctx
+            .command
+            .as_ref()
+            .map(|cmd| {
+                cmd.get_keys()
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| Bytes::from_static(b"unknown"))
+            })
+            .unwrap_or_else(|| Bytes::from_static(b"unknown"));
         warn!(
             "Failed to push element to destination in BLMOVE (key: '{}', error: {}). Attempting to return element to source key '{}'.",
-            String::from_utf8_lossy(&ctx.command.as_ref().unwrap().get_keys()[1]),
+            String::from_utf8_lossy(&dest_key),
             original_error,
             String::from_utf8_lossy(source_key)
         );

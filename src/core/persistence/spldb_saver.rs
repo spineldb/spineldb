@@ -192,11 +192,19 @@ impl SpldbSaverTask {
         // Step 3: Success.
         info!("SPLDB file successfully saved to {}", path_clone);
         // Atomically subtract the number of keys that were dirty when we started.
-        // This is safe because `fetch_sub` handles concurrent additions correctly.
+        // Use fetch_update to handle the case where FLUSHALL reset the counter to 0
+        // between reading dirty_at_start and this subtraction.
         state
             .persistence
             .dirty_keys_counter
-            .fetch_sub(dirty_at_start, Ordering::Relaxed);
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                if current >= dirty_at_start {
+                    Some(current - dirty_at_start)
+                } else {
+                    Some(0)
+                }
+            })
+            .ok();
         *state.persistence.last_save_success_time.lock().await = Some(std::time::Instant::now());
         add_latency_sample(state);
         Ok(())

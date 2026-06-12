@@ -17,7 +17,7 @@ use std::time::Duration;
 
 /// Merges the write outcome from a `spinel.call` into the transaction's aggregated outcome.
 fn update_aggregated_outcome(current_outcome: &RwLock<WriteOutcome>, new_outcome: WriteOutcome) {
-    let mut current = current_outcome.write().unwrap();
+    let mut current = current_outcome.write().unwrap_or_else(|e| e.into_inner());
     *current = current.merge(new_outcome);
 }
 
@@ -101,6 +101,12 @@ impl ExecutableCommand for Eval {
                 config.safety.script_memory_limit_mb,
             )
         };
+
+        // Drop the shard locks acquired by the EVAL command itself before entering
+        // the blocking Lua execution. The Lua script will re-acquire the necessary
+        // locks via `spinel.call()` / `spinel.pcall()`. Holding the outer locks
+        // would deadlock because `tokio::sync::Mutex` is not re-entrant.
+        ctx.locks = crate::core::database::locking::ExecutionLocks::None;
 
         let script_has_timeout = timeout_duration.as_millis() > 0;
         let script_has_mem_limit = memory_limit_mb > 0;
@@ -223,15 +229,17 @@ impl ExecutableCommand for Eval {
                     globals.set("spinel", spinel_table)?;
 
                     // Expose the KEYS table to the script.
-                    let keys_table = lua.create_table_from(
-                        keys.iter().enumerate().map(|(i, k)| (i + 1, k.as_ref())),
-                    )?;
+                    let keys_table = lua.create_table()?;
+                    for (i, k) in keys.iter().enumerate() {
+                        keys_table.set(i + 1, lua.create_string(k)?)?;
+                    }
                     globals.set("KEYS", keys_table)?;
 
                     // Expose the ARGV table to the script.
-                    let argv_table = lua.create_table_from(
-                        args.iter().enumerate().map(|(i, a)| (i + 1, a.as_ref())),
-                    )?;
+                    let argv_table = lua.create_table()?;
+                    for (i, a) in args.iter().enumerate() {
+                        argv_table.set(i + 1, lua.create_string(a)?)?;
+                    }
                     globals.set("ARGV", argv_table)?;
 
                     drop(globals);
@@ -357,8 +365,8 @@ fn lua_value_to_resp_value(lua_val: LuaValue) -> mlua::Result<RespValue> {
 /// Converts a `RespValue` from a command result back into a `LuaValue`.
 fn resp_value_to_lua_value(lua: &Lua, resp_val: RespValue) -> mlua::Result<LuaValue> {
     match resp_val {
-        RespValue::SimpleString(s) => s.into_lua(lua),
-        RespValue::BulkString(b) => b.into_lua(lua),
+        RespValue::SimpleString(s) => Ok(LuaValue::String(lua.create_string(s.as_bytes())?)),
+        RespValue::BulkString(b) => Ok(LuaValue::String(lua.create_string(&b)?)),
         RespValue::Integer(i) => i.into_lua(lua),
         RespValue::Null => Ok(mlua::Value::Nil),
         RespValue::NullArray => Ok(LuaValue::Boolean(false)),

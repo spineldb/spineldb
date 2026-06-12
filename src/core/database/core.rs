@@ -129,6 +129,7 @@ impl Db {
     /// Gets a random sample of keys that might be expired for active deletion.
     pub async fn get_expired_sample_keys(&self, sample_size: usize) -> Vec<Bytes> {
         let mut rng = rand::rngs::SmallRng::from_entropy();
+        let mut seen = std::collections::HashSet::new();
         let mut expired_keys = Vec::with_capacity(sample_size);
         for _ in 0..sample_size {
             let shard_index = rng.gen_range(0..NUM_SHARDS);
@@ -137,6 +138,7 @@ impl Db {
                 .iter()
                 .filter(|(_, v)| v.is_expired())
                 .choose(&mut rng)
+                && seen.insert(key.clone())
             {
                 expired_keys.push(key.clone());
             }

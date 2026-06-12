@@ -45,6 +45,9 @@ impl Drop for ConnectionGuard {
     /// This includes removing the client from global maps and cleaning up any
     /// pending blockers.
     fn drop(&mut self) {
+        // Always decrement the connected clients metric, even for handed-off connections.
+        metrics::CONNECTED_CLIENTS.dec();
+
         if self.is_handed_off {
             debug!(
                 "ConnectionGuard for {} is being dropped, but cleanup is skipped due to handoff.",
@@ -53,7 +56,6 @@ impl Drop for ConnectionGuard {
             return;
         }
 
-        metrics::CONNECTED_CLIENTS.dec();
         debug!(
             "ConnectionGuard dropping, cleaning up resources for connection {}",
             self.addr

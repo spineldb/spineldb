@@ -27,12 +27,14 @@ pub async fn check_safety_limits(
             | Command::HGetAll(_)
             | Command::HKeys(_)
             | Command::HVals(_) => {
-                let key = &command.get_keys()[0];
+                let Some(key) = command.get_keys().first().cloned() else {
+                    return Ok(());
+                };
                 let db = state.get_db(current_db_index).unwrap();
-                let shard_index = db.get_shard_index(key);
+                let shard_index = db.get_shard_index(&key);
                 let guard = db.get_shard(shard_index).entries.lock().await;
 
-                if let Some(entry) = guard.peek(key)
+                if let Some(entry) = guard.peek(&key)
                     && !entry.is_expired()
                 {
                     let len = match &entry.data {
@@ -48,7 +50,7 @@ pub async fn check_safety_limits(
                         return Err(SpinelDBError::InvalidState(format!(
                             "Command '{}' on key '{}' aborted: collection size ({}) exceeds 'max_collection_scan_keys' limit ({}). Use SCAN-family commands instead.",
                             command.name(),
-                            String::from_utf8_lossy(key),
+                            String::from_utf8_lossy(&key),
                             len,
                             safety_config.max_collection_scan_keys
                         )));

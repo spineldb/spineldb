@@ -157,10 +157,23 @@ impl CacheGet {
         }
 
         // Determine the cache state (fresh, SWR, grace) based on TTLs.
+        // Use a single peek and extract all TTL values to avoid multiple lookups.
         let now = Instant::now();
-        let entry_expiry = guard.peek(&self.key).unwrap().expiry;
-        let entry_swr_expiry = guard.peek(&self.key).unwrap().stale_revalidate_expiry;
-        let entry_grace_expiry = guard.peek(&self.key).unwrap().grace_expiry;
+        let (entry_expiry, entry_swr_expiry, entry_grace_expiry) = match guard.peek(&self.key) {
+            Some(entry) => (
+                entry.expiry,
+                entry.stale_revalidate_expiry,
+                entry.grace_expiry,
+            ),
+            None => {
+                // Entry was removed concurrently between validity check and this point.
+                state.cache.increment_misses();
+                crate::core::metrics::CACHE_MISSES_TOTAL
+                    .with_label_values(&["none"])
+                    .inc();
+                return Ok(RouteResponse::NoOp);
+            }
+        };
 
         // State 1: Fresh content.
         if entry_expiry.is_some_and(|exp| exp > now) {
@@ -192,7 +205,17 @@ impl CacheGet {
         state: Arc<ServerState>,
         guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
-        let entry = guard.get_mut(&self.key).unwrap();
+        let entry = match guard.get_mut(&self.key) {
+            Some(e) => e,
+            None => {
+                // Entry was removed concurrently. Treat as miss.
+                state.cache.increment_misses();
+                crate::core::metrics::CACHE_MISSES_TOTAL
+                    .with_label_values(&["none"])
+                    .inc();
+                return Ok(RouteResponse::NoOp);
+            }
+        };
         let DataValue::HttpCache {
             variants, vary_on, ..
         } = &mut entry.data
@@ -262,7 +285,17 @@ impl CacheGet {
         guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
         state.cache.increment_stale_hits();
-        let entry = guard.get_mut(&self.key).unwrap();
+        let entry = match guard.get_mut(&self.key) {
+            Some(e) => e,
+            None => {
+                // Entry was removed concurrently. Treat as miss.
+                state.cache.increment_misses();
+                crate::core::metrics::CACHE_MISSES_TOTAL
+                    .with_label_values(&["none"])
+                    .inc();
+                return Ok(RouteResponse::NoOp);
+            }
+        };
         let DataValue::HttpCache {
             variants, vary_on, ..
         } = &mut entry.data
@@ -338,20 +371,29 @@ impl CacheGet {
         state: Arc<ServerState>,
         guard: &mut MutexGuard<'b, crate::core::database::ShardCache>,
     ) -> Result<RouteResponse, SpinelDBError> {
-        let (revalidate_url_from_cache, variant_hash) = {
-            let entry = guard.peek(&self.key).unwrap();
-            let DataValue::HttpCache {
-                variants, vary_on, ..
-            } = &entry.data
-            else {
-                return Err(SpinelDBError::WrongType);
-            };
-            let variant_hash = calculate_variant_hash(vary_on, &self.headers);
-            let variant = variants.get(&variant_hash);
-            (
-                variant.and_then(|v| v.metadata.revalidate_url.clone()),
-                variant_hash,
-            )
+        let (revalidate_url_from_cache, variant_hash) = match guard.peek(&self.key) {
+            Some(entry) => {
+                let DataValue::HttpCache {
+                    variants, vary_on, ..
+                } = &entry.data
+                else {
+                    return Err(SpinelDBError::WrongType);
+                };
+                let variant_hash = calculate_variant_hash(vary_on, &self.headers);
+                let variant = variants.get(&variant_hash);
+                (
+                    variant.and_then(|v| v.metadata.revalidate_url.clone()),
+                    variant_hash,
+                )
+            }
+            None => {
+                // Entry was removed concurrently. Treat as miss.
+                state.cache.increment_misses();
+                crate::core::metrics::CACHE_MISSES_TOTAL
+                    .with_label_values(&["none"])
+                    .inc();
+                return Ok(RouteResponse::NoOp);
+            }
         };
 
         let url = self

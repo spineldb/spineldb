@@ -282,7 +282,32 @@ impl CommandSpec for XPending {
         vec![self.get_key().clone()]
     }
     fn to_resp_args(&self) -> Vec<Bytes> {
-        vec![]
+        match &self.subcommand {
+            XPendingSubcommand::Summary { key, group_name } => {
+                vec![key.clone(), group_name.clone()]
+            }
+            XPendingSubcommand::Detailed {
+                key,
+                group_name,
+                start,
+                end,
+                count,
+                consumer,
+                ..
+            } => {
+                let mut args = vec![
+                    key.clone(),
+                    group_name.clone(),
+                    start.to_string().into(),
+                    end.to_string().into(),
+                    count.to_string().into(),
+                ];
+                if let Some(c) = consumer {
+                    args.push(c.clone());
+                }
+                args
+            }
+        }
     }
 }
 

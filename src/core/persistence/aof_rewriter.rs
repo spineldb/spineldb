@@ -77,10 +77,24 @@ pub async fn rewrite_aof(state: Arc<ServerState>) {
 
     if let Err(e) = rewrite_result {
         error!(
-            "AOF rewrite failed: {}. Server will enter read-only mode. Buffered commands will be drained to the old AOF file by the writer task.",
+            "AOF rewrite failed: {}. Server will enter read-only mode. Attempting to drain buffered commands to old AOF.",
             e
         );
         state.set_read_only(true, "AOF rewrite process failed");
+        // Write the buffered commands back to the old AOF to prevent data loss.
+        if !buffered_work.is_empty()
+            && let Err(drain_err) = drain_buffered_work_to_old_aof(&state, buffered_work).await
+        {
+            error!(
+                "CRITICAL: Failed to drain buffered commands to old AOF after rewrite failure: {}. Some commands may be lost.",
+                drain_err
+            );
+        }
+        // Mark the rewrite as failed before signaling completion.
+        {
+            let mut rewrite_state_guard = state.persistence.aof_rewrite_state.lock().await;
+            rewrite_state_guard.succeeded = Some(false);
+        }
     } else {
         info!("AOF rewrite temporary file created successfully.");
         // Append the buffered commands to the newly created file.
@@ -91,8 +105,18 @@ pub async fn rewrite_aof(state: Arc<ServerState>) {
                 e
             );
             state.set_read_only(true, "AOF rewrite process failed during buffer append");
+            // Mark the rewrite as failed before signaling completion.
+            {
+                let mut rewrite_state_guard = state.persistence.aof_rewrite_state.lock().await;
+                rewrite_state_guard.succeeded = Some(false);
+            }
         } else {
             info!("AOF rewrite process completed successfully.");
+            // Mark the rewrite as succeeded before signaling completion.
+            {
+                let mut rewrite_state_guard = state.persistence.aof_rewrite_state.lock().await;
+                rewrite_state_guard.succeeded = Some(true);
+            }
         }
     }
 
@@ -253,6 +277,27 @@ fn get_temp_aof_path(original_path: &str) -> Result<PathBuf, SpinelDBError> {
         file_name.to_str().unwrap_or("spineldb.aof")
     );
     Ok(parent.join(temp_file_name))
+}
+
+/// Drains buffered commands that arrived during a failed rewrite to the old AOF file.
+/// This prevents data loss when the rewrite fails after buffering has started.
+async fn drain_buffered_work_to_old_aof(
+    state: &Arc<ServerState>,
+    buffered_work: Vec<PropagatedWork>,
+) -> Result<(), SpinelDBError> {
+    let aof_path = &state.config.lock().await.persistence.aof_path;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(aof_path)
+        .map_err(|e| SpinelDBError::AofError(format!("Failed to open old AOF for drain: {}", e)))?;
+
+    for work_item in buffered_work {
+        write_uow_to_file(&mut file, work_item.uow)?;
+    }
+    file.sync_all().map_err(|e| {
+        SpinelDBError::AofError(format!("Failed to sync old AOF after drain: {}", e))
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]

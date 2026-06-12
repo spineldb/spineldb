@@ -167,8 +167,13 @@ impl AofWriterTask {
     /// Manages the transition after an AOF rewrite is finished.
     async fn handle_rewrite_completion(&mut self) -> Result<(), SpinelDBError> {
         info!("AOF rewrite completed signal received. Handling transition.");
-        let rewrite_succeeded = !self.state.is_read_only.load(Ordering::SeqCst);
-        let aof_path = self.state.config.lock().await.persistence.aof_path.clone();
+        let (rewrite_succeeded, aof_path) = {
+            let mut rewrite_state = self.state.persistence.aof_rewrite_state.lock().await;
+            let succeeded = rewrite_state.succeeded.unwrap_or(false);
+            rewrite_state.succeeded = None;
+            let aof_path = self.state.config.lock().await.persistence.aof_path.clone();
+            (succeeded, aof_path)
+        };
 
         self.drain_rewrite_buffer(rewrite_succeeded).await?;
 
@@ -195,7 +200,12 @@ impl AofWriterTask {
         if switch_to_new_file {
             info!("AOF rewrite succeeded. Switching to new AOF file and draining buffer.");
             self.writer.flush().await?;
-            self.writer.get_ref().sync_all().await.ok();
+            if let Err(e) = self.writer.get_ref().sync_all().await {
+                warn!(
+                    "AOF fsync failed during rewrite switch: {}. Data may not be durable.",
+                    e
+                );
+            }
 
             let path = &self.state.config.lock().await.persistence.aof_path;
             let file = OpenOptions::new()

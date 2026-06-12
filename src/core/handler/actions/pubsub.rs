@@ -94,9 +94,16 @@ pub fn handle_unsubscribe(
         ]));
     } else {
         for name in &to_process {
-            if session.subscribed_channels.remove(name) {
-                let total_subs =
-                    session.subscribed_channels.len() + session.subscribed_patterns.len();
+            let was_removed = session.subscribed_channels.remove(name);
+            let total_subs = session.subscribed_channels.len() + session.subscribed_patterns.len();
+            if was_removed {
+                responses.push(RespValue::Array(vec![
+                    RespValue::BulkString("unsubscribe".into()),
+                    RespValue::BulkString(name.clone()),
+                    RespValue::Integer(total_subs as i64),
+                ]));
+            } else {
+                // Per Redis protocol, unsubscribing from a non-existent channel still returns a response.
                 responses.push(RespValue::Array(vec![
                     RespValue::BulkString("unsubscribe".into()),
                     RespValue::BulkString(name.clone()),
@@ -135,9 +142,16 @@ pub fn handle_punsubscribe(
         ]));
     } else {
         for pattern in &to_process {
-            if session.subscribed_patterns.remove(pattern) {
-                let total_subs =
-                    session.subscribed_channels.len() + session.subscribed_patterns.len();
+            let was_removed = session.subscribed_patterns.remove(pattern);
+            let total_subs = session.subscribed_channels.len() + session.subscribed_patterns.len();
+            if was_removed {
+                responses.push(RespValue::Array(vec![
+                    RespValue::BulkString("punsubscribe".into()),
+                    RespValue::BulkString(pattern.clone()),
+                    RespValue::Integer(total_subs as i64),
+                ]));
+            } else {
+                // Per Redis protocol, punsubscribing from a non-existent pattern still returns a response.
                 responses.push(RespValue::Array(vec![
                     RespValue::BulkString("punsubscribe".into()),
                     RespValue::BulkString(pattern.clone()),
@@ -231,7 +245,16 @@ mod tests {
         let resp = handle_unsubscribe(vec![Bytes::from_static(b"nope")], &mut session).unwrap();
         match resp {
             RouteResponse::Multiple(arr) => {
-                assert!(arr.is_empty());
+                // Per Redis protocol, unsubscribing from a non-existent channel still returns a response.
+                assert_eq!(arr.len(), 1);
+                if let RespValue::Array(inner) = &arr[0] {
+                    assert_eq!(inner.len(), 3);
+                    assert_eq!(inner[0], RespValue::BulkString("unsubscribe".into()));
+                    assert_eq!(inner[1], RespValue::BulkString(Bytes::from_static(b"nope")));
+                    assert_eq!(inner[2], RespValue::Integer(0));
+                } else {
+                    panic!("expected array");
+                }
             }
             _ => panic!("expected Multiple"),
         }

@@ -147,6 +147,40 @@ impl ServerHandle {
     }
 }
 
+/// Spin up a fresh SpinelDB server with a password set.
+pub async fn start_server_with_password(password: &str) -> ServerHandle {
+    init_tracing();
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let port = pick_free_port().await;
+    let mut config = make_config(&temp_dir, port);
+    config.password = Some(password.to_string());
+
+    let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(EnvFilter::new("warn"));
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_test_writer())
+        .try_init();
+    let reload_handle = Arc::new(reload_handle);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let join = tokio::spawn(async move {
+        tokio::select! {
+            res = server::run(config, reload_handle) => res,
+            _ = shutdown_rx => Ok(()),
+        }
+    });
+
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    wait_for_server(addr).await;
+
+    ServerHandle {
+        port,
+        temp_dir,
+        join,
+        shutdown_tx: Some(shutdown_tx),
+    }
+}
+
 /// Spin up a fresh SpinelDB server on a random local port.
 pub async fn start_server() -> ServerHandle {
     init_tracing();

@@ -40,6 +40,8 @@ impl ExecutableCommand for GetRange {
 
         if let Some(entry) = guard.get(&self.key) {
             if entry.is_expired() {
+                // Passive expiration: remove the expired entry.
+                guard.pop(&self.key);
                 return Ok((
                     RespValue::BulkString(Bytes::new()),
                     WriteOutcome::DidNotWrite,

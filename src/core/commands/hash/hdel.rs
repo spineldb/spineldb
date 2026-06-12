@@ -36,7 +36,8 @@ impl ExecutableCommand for HDel {
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         };
         if entry.is_expired() {
-            // Expired key is treated as non-existent for this operation.
+            // Passive expiration: remove the expired entry.
+            shard_cache_guard.pop(&self.key);
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         }
 

@@ -16,6 +16,7 @@ const CRLF_LEN: usize = 2;
 const MAX_FRAME_ELEMENTS: usize = 1_024 * 1_024; // Max elements in an array.
 const DEFAULT_MAX_BULK_STRING_SIZE: usize = 512 * 1024 * 1024; // 512MB default.
 const MAX_RECURSION_DEPTH: usize = 256; // Limit recursion to prevent stack overflow.
+const MAX_LINE_LENGTH: usize = 1024 * 1024; // 1MB max for simple string/error/integer lines.
 /// Hard cap. Even when configured, the user can never raise the bulk string
 /// limit above this value.
 const ABSOLUTE_MAX_BULK_STRING_SIZE: usize = 16 * 1024 * 1024 * 1024; // 16 GiB.
@@ -166,6 +167,13 @@ impl RespFrameCodec {
 
     /// Finds the next CRLF and returns the line and its total length (including CRLF).
     fn parse_line<'a>(&self, bytes: &mut &'a [u8]) -> Result<&'a [u8], SpinelDBError> {
+        // Check for unbounded line length to prevent DoS.
+        if bytes.len() > MAX_LINE_LENGTH {
+            return Err(SpinelDBError::InvalidRequest(format!(
+                "Line exceeds maximum length of {} bytes",
+                MAX_LINE_LENGTH
+            )));
+        }
         if let Some(pos) = find_crlf(bytes) {
             let line = &bytes[..pos];
             // Advance the buffer past the line and CRLF.
@@ -212,8 +220,11 @@ impl RespFrameCodec {
         let s = String::from_utf8_lossy(line);
         let str_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
 
-        if str_len == -1 {
-            return Ok(RespFrame::Null);
+        if str_len < 0 {
+            if str_len == -1 {
+                return Ok(RespFrame::Null);
+            }
+            return Err(SpinelDBError::SyntaxError);
         }
 
         let str_len = str_len as usize;
@@ -243,8 +254,11 @@ impl RespFrameCodec {
         let s = String::from_utf8_lossy(line);
         let arr_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
 
-        if arr_len == -1 {
-            return Ok(RespFrame::NullArray);
+        if arr_len < 0 {
+            if arr_len == -1 {
+                return Ok(RespFrame::NullArray);
+            }
+            return Err(SpinelDBError::SyntaxError);
         }
 
         let arr_len = arr_len as usize;

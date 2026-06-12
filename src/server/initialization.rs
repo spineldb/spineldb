@@ -66,16 +66,21 @@ pub async fn setup(
         );
     }
 
-    let listener_config = server_state.config.lock().await;
-    let listener = TcpListener::bind((listener_config.host.as_str(), listener_config.port)).await?;
-    info!(
-        "SpinelDB server listening on {}:{}",
-        listener_config.host, listener_config.port
-    );
+    let (host, port, max_clients) = {
+        let listener_config = server_state.config.lock().await;
+        (
+            listener_config.host.clone(),
+            listener_config.port,
+            listener_config.max_clients,
+        )
+    };
+    let listener = TcpListener::bind((host.as_str(), port)).await?;
+    info!("SpinelDB server listening on {}:{}", host, port);
 
-    let protected_mode = listener_config.host == "0.0.0.0"
-        && listener_config.password.is_none()
-        && !listener_config.acl.enabled;
+    let protected_mode = host == "0.0.0.0" && {
+        let config = server_state.config.lock().await;
+        config.password.is_none() && !config.acl.enabled
+    };
     if protected_mode {
         warn!("--------------------------------------------------------------------------------");
         warn!("WARNING: Server is running in PROTECTED MODE because it is listening on 0.0.0.0");
@@ -85,8 +90,7 @@ pub async fn setup(
         warn!("--------------------------------------------------------------------------------");
     }
 
-    let connection_permits = Arc::new(tokio::sync::Semaphore::new(listener_config.max_clients));
-    drop(listener_config);
+    let connection_permits = Arc::new(tokio::sync::Semaphore::new(max_clients));
 
     Ok(ServerContext {
         state: server_state,

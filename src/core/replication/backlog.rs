@@ -124,7 +124,7 @@ impl ReplicationBacklog {
             if let Some((_, removed_frame)) = inner.buffer.pop_front() {
                 // To maintain an accurate `current_size`, we must calculate the size of the
                 // removed frame. This is a reasonable approximation.
-                let removed_len = removed_frame.encode_to_vec().unwrap_or_default().len();
+                let removed_len = removed_frame.encode_to_vec().map(|v| v.len()).unwrap_or(1); // Fallback to at least 1 to ensure progress.
                 inner.current_size = inner.current_size.saturating_sub(removed_len);
 
                 // Update the `first_offset` to reflect the new start of the backlog.

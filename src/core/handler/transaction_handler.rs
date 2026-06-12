@@ -105,7 +105,7 @@ impl<'a> TransactionHandler<'a> {
                     command.name()
                 )));
             }
-            _ => command.clone(),
+            _ => command,
         };
 
         tx_state.commands.push(command_to_queue);
@@ -362,11 +362,11 @@ impl<'a> TransactionHandler<'a> {
             }
         }
 
-        if has_error {
-            successful_write_commands.clear();
-            total_keys_changed = 0;
-            has_flush = false;
-        }
+        // Note: We intentionally do NOT clear successful_write_commands on error.
+        // Commands that were successfully executed before the error have already modified
+        // the database state on the primary. They must be propagated to AOF/replicas
+        // to maintain consistency. Only unexecuted commands (after the error) receive
+        // EXECABORT responses and are not included in successful_write_commands.
 
         *guards = temp_guards;
 

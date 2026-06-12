@@ -306,6 +306,9 @@ pub async fn load_from_bytes(data: &Bytes, dbs: &[Arc<Db>]) -> io::Result<()> {
     info!("SPLDB checksum verified successfully.");
 
     // Clear all databases before loading data.
+    // We clear eagerly to ensure a consistent state. If the file is corrupt,
+    // the server will start with a partial/empty state, which is the expected
+    // behavior for a corrupt SPLDB file.
     for db in dbs.iter() {
         let guards = db.lock_all_shards().await;
         for mut guard in guards {

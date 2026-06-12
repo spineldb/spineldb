@@ -175,17 +175,17 @@ impl ExecutableCommand for Set {
             TtlOption::Milliseconds(ms) => Some(Instant::now() + Duration::from_millis(ms)),
             TtlOption::UnixSeconds(ts) => {
                 let target_time = UNIX_EPOCH + Duration::from_secs(ts);
-                target_time
-                    .duration_since(SystemTime::now())
-                    .ok()
-                    .map(|d| Instant::now() + d)
+                Some(match target_time.duration_since(SystemTime::now()) {
+                    Ok(d) => Instant::now() + d,
+                    Err(_) => Instant::now(), // Past timestamp: expire immediately.
+                })
             }
             TtlOption::UnixMilliseconds(ts) => {
                 let target_time = UNIX_EPOCH + Duration::from_millis(ts);
-                target_time
-                    .duration_since(SystemTime::now())
-                    .ok()
-                    .map(|d| Instant::now() + d)
+                Some(match target_time.duration_since(SystemTime::now()) {
+                    Ok(d) => Instant::now() + d,
+                    Err(_) => Instant::now(), // Past timestamp: expire immediately.
+                })
             }
             TtlOption::Persist => None,
             TtlOption::KeepExisting => {

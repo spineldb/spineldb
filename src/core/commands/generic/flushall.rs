@@ -131,6 +131,11 @@ impl ExecutableCommand for FlushAll {
 
         // Flush all local databases.
         info!("Flushing all local databases.");
+
+        // Wake up all blocked clients before clearing to prevent them from being stuck forever.
+        ctx.state.blocker_manager.wake_all_waiters();
+        ctx.state.stream_blocker_manager.wake_all_waiters();
+
         for db in &ctx.state.dbs {
             let guards = db.lock_all_shards().await;
             for mut guard in guards {

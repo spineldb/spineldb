@@ -44,6 +44,13 @@ impl FromStr for StreamId {
         if s == "0" {
             return Ok(StreamId::new(0, 0));
         }
+        // Special boundary markers used by XRANGE, XPENDING, XREAD, etc.
+        if s == "-" {
+            return Ok(StreamId::new(0, 0));
+        }
+        if s == "+" {
+            return Ok(StreamId::new(u64::MAX, u64::MAX));
+        }
 
         let parts: Vec<&str> = s.split('-').collect();
         match parts.len() {

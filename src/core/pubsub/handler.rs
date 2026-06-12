@@ -4,9 +4,12 @@
 
 use crate::connection::{SessionState, SubscriptionReceiver};
 use crate::core::SpinelDBError;
+use crate::core::commands::Command;
+use crate::core::handler::command_router::RouteResponse;
+use crate::core::handler::command_router::Router;
 use crate::core::protocol::{RespFrame, RespFrameCodec, RespValue};
 use crate::core::state::ServerState;
-use futures::{SinkExt, future::FutureExt};
+use futures::{SinkExt, StreamExt, future::FutureExt};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
@@ -21,6 +24,7 @@ pub struct PubSubModeHandler<'a, S: AsyncRead + AsyncWrite + Unpin> {
     shutdown_rx: &'a mut broadcast::Receiver<()>,
     session: &'a mut SessionState,
     state: Arc<ServerState>,
+    addr: std::net::SocketAddr,
 }
 
 impl<'a, S: AsyncRead + AsyncWrite + Unpin> PubSubModeHandler<'a, S> {
@@ -29,17 +33,20 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> PubSubModeHandler<'a, S> {
         shutdown_rx: &'a mut broadcast::Receiver<()>,
         session: &'a mut SessionState,
         state: Arc<ServerState>,
+        addr: std::net::SocketAddr,
     ) -> Self {
         Self {
             framed,
             shutdown_rx,
             session,
             state,
+            addr,
         }
     }
 
-    /// Runs a loop that exclusively listens for broadcast messages from subscribed
-    /// channels/patterns and shutdown signals.
+    /// Runs a loop that listens for broadcast messages from subscribed
+    /// channels/patterns, shutdown signals, and incoming client commands
+    /// (UNSUBSCRIBE, PUNSUBSCRIBE, QUIT).
     pub async fn run(&mut self) -> Result<(), SpinelDBError> {
         debug!("Connection entering Pub/Sub mode loop.");
         loop {
@@ -57,6 +64,22 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> PubSubModeHandler<'a, S> {
                 biased;
                 // Prioritize shutdown signals.
                 _ = self.shutdown_rx.recv() => { return Ok(()); }
+                // Handle incoming client frames (UNSUBSCRIBE, PUNSUBSCRIBE, QUIT).
+                frame_result = self.framed.next() => {
+                    match frame_result {
+                        Some(Ok(frame)) => {
+                            self.handle_client_frame(frame).await?;
+                        }
+                        Some(Err(e)) => {
+                            debug!("Client connection error in pub/sub mode: {e}");
+                            return Ok(());
+                        }
+                        None => {
+                            debug!("Client disconnected in pub/sub mode.");
+                            return Ok(());
+                        }
+                    }
+                }
                 // Wait for a message from any of the subscribed receivers.
                 maybe_msg = receive_pubsub_message_static(&mut self.session.pubsub_receivers) => {
                     match maybe_msg {
@@ -89,6 +112,39 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> PubSubModeHandler<'a, S> {
                 }
             }
         }
+    }
+
+    /// Handles an incoming client frame while in pub/sub mode.
+    /// Only UNSUBSCRIBE, PUNSUBSCRIBE, and QUIT are allowed.
+    async fn handle_client_frame(&mut self, frame: RespFrame) -> Result<(), SpinelDBError> {
+        let command = match Command::try_from(frame) {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                warn!("Invalid command in pub/sub mode: {e}");
+                let err_frame = RespFrame::Error(e.to_string());
+                let _ = self.framed.send(err_frame).await;
+                return Ok(());
+            }
+        };
+
+        let mut router = Router::new(self.state.clone(), 0, self.addr, self.session);
+
+        match router.route(command).await {
+            Ok(RouteResponse::Single(resp)) => {
+                let _ = self.framed.send(resp.into()).await;
+            }
+            Ok(RouteResponse::Multiple(responses)) => {
+                let mut stream = futures::stream::iter(responses).map(|r| Ok(r.into()));
+                let _ = self.framed.send_all(&mut stream).await;
+            }
+            Ok(RouteResponse::NoOp) => {}
+            Ok(_) => {}
+            Err(e) => {
+                let err_frame = RespFrame::Error(e.to_string());
+                let _ = self.framed.send(err_frame).await;
+            }
+        }
+        Ok(())
     }
 
     /// Re-subscribes to all of the session's channels and patterns.

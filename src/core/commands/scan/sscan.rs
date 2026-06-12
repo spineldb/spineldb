@@ -44,8 +44,11 @@ impl ExecutableCommand for SScan {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        let (_, guard) = ctx.get_single_shard_context_mut()?;
-        let (cursor, items) = if let Some(entry) = guard.get_mut(&self.key) {
+        // Manage shard-level locking directly (same pattern as SCAN).
+        let shard_index = ctx.db.get_shard_index(&self.key);
+        let shard = ctx.db.get_shard(shard_index);
+        let mut guard = shard.entries.lock().await;
+        let (cursor, items) = if let Some(entry) = guard.get(&self.key) {
             if entry.is_expired() {
                 // Return an empty result if the key is expired.
                 (0, vec![])

@@ -183,7 +183,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReplicaHandler<S> {
         // 2. Generate and stream the SPLDB snapshot.
         // We write to a temporary file first to avoid buffering the entire DB in memory,
         // then stream that file to the replica.
-        let temp_path = format!("temp-repl-{}.spldb", self.addr.port());
+        let temp_path = format!(
+            "temp-repl-{}-{}.spldb",
+            self.addr.port(),
+            uuid::Uuid::new_v4()
+        );
         let temp_file = TokioFile::create(&temp_path).await?;
         let mut buf_writer = BufWriter::new(temp_file);
 

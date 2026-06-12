@@ -30,6 +30,10 @@ impl ExecutableCommand for FlushDb {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
+        // Wake up all blocked clients before clearing to prevent them from being stuck forever.
+        ctx.state.blocker_manager.wake_all_waiters();
+        ctx.state.stream_blocker_manager.wake_all_waiters();
+
         // The router provides locks on all shards for this command.
         // Iterate through the existing guards and clear each shard.
         if let ExecutionLocks::All { guards } = &mut ctx.locks {

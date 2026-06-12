@@ -34,7 +34,7 @@ pub const MAX_STRING_SIZE: usize = 512 * 1024 * 1024; // 512MB
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LfuInfo {
     /// Stores the last access time in minutes since the Unix epoch (16 bits).
-    pub(crate) last_decrement_time: u16,
+    pub(crate) last_decrement_time: u32,
     /// The 8-bit logarithmic frequency counter.
     pub(crate) counter: u8,
 }
@@ -88,7 +88,7 @@ impl StoredValue {
         let decay_periods = lfu_time_decay(now, self.lfu.last_decrement_time);
 
         let new_counter = if decay_periods > 0 {
-            if decay_periods >= counter as u16 {
+            if decay_periods >= (counter as u32) {
                 0
             } else {
                 counter - decay_periods as u8
@@ -446,18 +446,18 @@ impl DataValue {
 
 // LFU Helper Constants and Functions
 const LFU_INIT_VAL: u8 = 5;
-const LFU_DECAY_TIME_MINUTES: u16 = 1;
+const LFU_DECAY_TIME_MINUTES: u32 = 1;
 const LFU_LOG_FACTOR: f64 = 10.0;
 
-fn lfu_time_now() -> u16 {
+fn lfu_time_now() -> u32 {
     (SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        / 60) as u16
+        / 60) as u32
 }
 
-fn lfu_time_decay(now: u16, last_access: u16) -> u16 {
+fn lfu_time_decay(now: u32, last_access: u32) -> u32 {
     now.saturating_sub(last_access) / LFU_DECAY_TIME_MINUTES
 }
 
@@ -789,5 +789,47 @@ mod tests {
         let cmds = sv.to_construction_commands(&key);
         assert_eq!(cmds.len(), 1);
         assert!(matches!(cmds[0], Command::Set(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_http_cache_with_ttl() {
+        // HttpCache with InMemory variant and TTL should serialize correctly
+        let mut variants = VariantMap::new();
+        variants.insert(
+            1,
+            CacheVariant {
+                body: CacheBody::InMemory(Bytes::from_static(b"test body")),
+                metadata: HttpMetadata::default(),
+                last_accessed: Instant::now(),
+            },
+        );
+        let mut sv = StoredValue::new(DataValue::HttpCache {
+            variants,
+            vary_on: vec![],
+            tags_epoch: 0,
+        });
+        sv.expiry = Some(Instant::now() + Duration::from_secs(60));
+        sv.stale_revalidate_expiry = Some(Instant::now() + Duration::from_secs(90));
+        sv.grace_expiry = Some(Instant::now() + Duration::from_secs(120));
+        let key = Bytes::from_static(b"cache_key");
+        let cmds = sv.to_construction_commands(&key);
+        // HttpCache TTL is bundled into CACHE.SET command, no additional EXPIRE
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], Command::Cache(_)));
+    }
+
+    #[test]
+    fn test_to_construction_commands_http_cache_empty_variants_returns_empty() {
+        // HttpCache with no InMemory variants should return empty commands
+        // (OnDisk and Negative are not persisted via AOF/SPLDB)
+        let variants = VariantMap::new();
+        let sv = StoredValue::new(DataValue::HttpCache {
+            variants,
+            vary_on: vec![],
+            tags_epoch: 0,
+        });
+        let key = Bytes::from_static(b"cache_key");
+        let cmds = sv.to_construction_commands(&key);
+        assert!(cmds.is_empty());
     }
 }

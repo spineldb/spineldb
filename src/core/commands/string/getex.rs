@@ -40,14 +40,20 @@ impl ParseCommand for GetEx {
                     if args.len() != 3 {
                         return Err(SpinelDBError::SyntaxError);
                     }
-                    let seconds = extract_string(&args[2])?.parse()?;
+                    let seconds: u64 = extract_string(&args[2])?.parse()?;
+                    if seconds == 0 {
+                        return Err(SpinelDBError::SyntaxError);
+                    }
                     TtlOption::Seconds(seconds)
                 }
                 "px" => {
                     if args.len() != 3 {
                         return Err(SpinelDBError::SyntaxError);
                     }
-                    let ms = extract_string(&args[2])?.parse()?;
+                    let ms: u64 = extract_string(&args[2])?.parse()?;
+                    if ms == 0 {
+                        return Err(SpinelDBError::SyntaxError);
+                    }
                     TtlOption::Milliseconds(ms)
                 }
                 "exat" => {
@@ -108,17 +114,24 @@ impl ExecutableCommand for GetEx {
                 TtlOption::Milliseconds(ms) => Some(Instant::now() + Duration::from_millis(ms)),
                 TtlOption::UnixSeconds(ts) => {
                     let target_time = UNIX_EPOCH + Duration::from_secs(ts);
-                    target_time
-                        .duration_since(SystemTime::now())
-                        .ok()
-                        .map(|d| Instant::now() + d)
+                    match target_time.duration_since(SystemTime::now()) {
+                        Ok(d) => Some(Instant::now() + d),
+                        Err(_) => {
+                            // Past timestamp: return value then delete key (Redis behavior).
+                            shard_cache_guard.pop(&self.key);
+                            return Ok((response, WriteOutcome::Delete { keys_deleted: 1 }));
+                        }
+                    }
                 }
                 TtlOption::UnixMilliseconds(ts) => {
                     let target_time = UNIX_EPOCH + Duration::from_millis(ts);
-                    target_time
-                        .duration_since(SystemTime::now())
-                        .ok()
-                        .map(|d| Instant::now() + d)
+                    match target_time.duration_since(SystemTime::now()) {
+                        Ok(d) => Some(Instant::now() + d),
+                        Err(_) => {
+                            shard_cache_guard.pop(&self.key);
+                            return Ok((response, WriteOutcome::Delete { keys_deleted: 1 }));
+                        }
+                    }
                 }
                 // PERSIST means removing the expiry.
                 TtlOption::Persist => None,

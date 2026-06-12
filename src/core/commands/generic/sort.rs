@@ -131,7 +131,7 @@ impl ExecutableCommand for Sort {
             // Cluster slot checks now that all keys are known.
             self.check_cluster_slots(&all_keys_to_lock.iter().cloned().collect::<Vec<_>>(), ctx)?;
 
-            self.check_memory_usage_for_copy(&all_keys_to_lock, ctx)
+            self.check_memory_usage_for_copy(&all_keys_to_lock, ctx, &mut guards)
                 .await?;
 
             let mut versions = BTreeMap::new();
@@ -216,14 +216,15 @@ impl Sort {
         &self,
         all_keys: &BTreeSet<Bytes>,
         ctx: &ExecutionContext<'_>,
+        guards: &mut BTreeMap<usize, MutexGuard<'_, crate::core::database::ShardCache>>,
     ) -> Result<(), SpinelDBError> {
         if let Some(maxmemory) = ctx.state.config.lock().await.maxmemory {
             let mut estimated_copy_size = 0;
             for key in all_keys {
                 let shard_index = ctx.db.get_shard_index(key);
-                // We assume locks are already held from the caller.
-                let guard = ctx.db.get_shard(shard_index).entries.lock().await;
-                if let Some(value) = guard.peek(key).filter(|e| !e.is_expired()) {
+                if let Some(guard) = guards.get_mut(&shard_index)
+                    && let Some(value) = guard.peek(key).filter(|e| !e.is_expired())
+                {
                     estimated_copy_size += value.size;
                 }
             }
@@ -320,7 +321,8 @@ impl Sort {
         ctx: &mut ExecutionContext<'b>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         if let Some(dest_key) = &self.store_destination {
-            let (_, guard) = ctx.get_single_shard_context_mut()?;
+            let shard_index = ctx.db.get_shard_index(dest_key);
+            let mut guard = ctx.db.get_shard(shard_index).entries.lock().await;
             let outcome = if guard.pop(dest_key).is_some() {
                 WriteOutcome::Delete { keys_deleted: 1 }
             } else {

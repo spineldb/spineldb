@@ -48,13 +48,23 @@ pub fn extract_keys_from_command(
         | "persist" | "type" | "dump" | "restore" | "bitfield" | "bitcount" | "bitpos"
         | "getbit" | "setbit" | "linsert" | "lpos" | "lrem" | "zcount" | "zlexcount"
         | "zremrangebylex" | "zremrangebyrank" | "zremrangebyscore" | "zrangebylex"
-        | "zrangebyscore" | "xack" | "xclaim" | "xgroup" | "xpending" | "xread" | "xreadgroup"
-        | "xautoclaim" | "geoadd" | "geopos" | "geodist" | "georadius" | "georadiusbymember"
-        | "setex" | "psetex" | "lpushx" | "rpushx" => extract_n_keys(args, 1, 1, 1),
+        | "zrangebyscore" | "xack" | "xclaim" | "xgroup" | "xpending" | "xautoclaim" | "geoadd"
+        | "geopos" | "geodist" | "georadius" | "georadiusbymember" | "setex" | "psetex"
+        | "lpushx" | "rpushx" => extract_n_keys(args, 1, 1, 1),
+
+        "xread" => extract_stream_keys(args),
+        "xreadgroup" => extract_stream_keys(args),
 
         // --- Commands with keys from position 0 to N ---
-        "mget" | "exists" | "sdiff" | "sinter" | "sunion" | "bzpopmin" | "bzpopmax" | "blpop"
-        | "brpop" => extract_up_to_n_keys(args, args.len()),
+        "mget" | "exists" | "sdiff" | "sinter" | "sunion" => extract_up_to_n_keys(args, args.len()),
+
+        // --- Blocking pop commands: last arg is timeout, not a key ---
+        "bzpopmin" | "bzpopmax" | "blpop" | "brpop" => {
+            if args.len() < 2 {
+                return Err(SpinelDBError::SyntaxError);
+            }
+            extract_up_to_n_keys(args, args.len() - 1)
+        }
 
         // --- Commands with keys at pos 0 and 1 ---
         "rename" | "renamenx" | "smove" | "lmove" | "blmove" => extract_n_keys(args, 2, 1, 1),
@@ -130,6 +140,34 @@ fn extract_store_op_keys(args: &[RespFrame]) -> Result<Vec<Bytes>, SpinelDBError
         })?;
 
     Ok(keys)
+}
+
+/// Extracts keys for XREAD/XREADGROUP commands.
+/// Format: XREAD [COUNT n] [BLOCK ms] STREAMS key [key...] id [id...]
+/// Format: XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] STREAMS key [key...] id [id...]
+/// Keys start after the STREAMS keyword.
+fn extract_stream_keys(args: &[RespFrame]) -> Result<Vec<Bytes>, SpinelDBError> {
+    // Find the STREAMS keyword position
+    let mut streams_pos = None;
+    for (i, arg) in args.iter().enumerate() {
+        if let RespFrame::BulkString(b) = arg
+            && b.eq_ignore_ascii_case(b"STREAMS")
+        {
+            streams_pos = Some(i);
+            break;
+        }
+    }
+    let pos = streams_pos.ok_or(SpinelDBError::SyntaxError)?;
+    // After STREAMS: N keys, then N IDs
+    let keys_after = args.len() - pos - 1;
+    if keys_after == 0 || !keys_after.is_multiple_of(2) {
+        return Err(SpinelDBError::SyntaxError);
+    }
+    let num_keys = keys_after / 2;
+    args[pos + 1..pos + 1 + num_keys]
+        .iter()
+        .map(extract_bytes)
+        .collect()
 }
 
 /// Extracts all keys for a BITOP command: dest_key src_key [src_key ...].
@@ -377,11 +415,17 @@ mod tests {
 
     #[test]
     fn test_xreadgroup_extracts_key() {
-        // XREADGROUP has a complex arg shape; current extractor only grabs arg[0].
-        // Just verify the single-key extraction path.
-        let args = vec![bs("GROUP")];
+        // XREADGROUP GROUP mygroup consumer1 STREAMS mystream 0
+        let args = vec![
+            bs("GROUP"),
+            bs("mygroup"),
+            bs("consumer1"),
+            bs("STREAMS"),
+            bs("mystream"),
+            bs("0"),
+        ];
         let keys = extract_keys_from_command("xreadgroup", &args).unwrap();
-        assert_eq!(keys, vec![Bytes::from_static(b"GROUP")]);
+        assert_eq!(keys, vec![Bytes::from_static(b"mystream")]);
     }
 
     #[test]
@@ -392,13 +436,22 @@ mod tests {
     }
 
     #[test]
-    fn test_bzpopmin_extracts_all_keys() {
-        // BZPOPMIN has 1+ keys and a final timeout, but the extractor only takes keys.
-        // Timeout is an integer; the current extract_up_to_n_keys expects all bulk strings,
-        // so use just two keys (no timeout in this test) to verify the keys extraction path.
-        let args = vec![bs("z1"), bs("z2")];
+    fn test_bzpopmin_extracts_keys_not_timeout() {
+        // BZPOPMIN key [key ...] timeout — last arg is timeout, not a key.
+        let args = vec![bs("z1"), bs("z2"), bs("5")];
         let keys = extract_keys_from_command("bzpopmin", &args).unwrap();
         assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], Bytes::from_static(b"z1"));
+        assert_eq!(keys[1], Bytes::from_static(b"z2"));
+    }
+
+    #[test]
+    fn test_blpop_extracts_keys_not_timeout() {
+        let args = vec![bs("l1"), bs("l2"), bs("10")];
+        let keys = extract_keys_from_command("blpop", &args).unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], Bytes::from_static(b"l1"));
+        assert_eq!(keys[1], Bytes::from_static(b"l2"));
     }
 
     #[test]

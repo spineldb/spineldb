@@ -797,7 +797,13 @@ fn parse_memory_string(
         .trim()
         .parse()
         .with_context(|| format!("Invalid number in maxmemory config: '{original_str}'"))?;
-    let result_u64 = value.saturating_mul(multiplier);
+    let result_u64 = value.checked_mul(multiplier).ok_or_else(|| {
+        anyhow!(
+            "maxmemory value '{}' overflows during multiplication (max is {} bytes)",
+            original_str,
+            u64::MAX
+        )
+    })?;
     if result_u64 > (usize::MAX as u64) {
         return Err(anyhow!(
             "maxmemory value '{}' is too large for this system's architecture (max is {} bytes)",
@@ -943,13 +949,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_memory_string_saturates_at_u64_max_on_overflow() {
-        // The implementation uses saturating_mul then checks `> usize::MAX as u64`.
-        // On 64-bit systems, usize::MAX == u64::MAX, so the saturated result is
-        // accepted (but the returned value is the saturated maximum, not the
-        // intended product). This test documents that behavior.
-        let r = parse_memory_string("18000000000gb", "18000000000", 1024 * 1024 * 1024).unwrap();
-        assert_eq!(r, Some(usize::MAX));
+    fn test_parse_memory_string_returns_error_on_overflow() {
+        // checked_mul returns None on overflow, which we convert to an error.
+        let r = parse_memory_string("18000000000gb", "18000000000", 1024 * 1024 * 1024);
+        assert!(r.is_err());
     }
 
     #[test]

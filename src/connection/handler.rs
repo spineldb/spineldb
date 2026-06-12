@@ -318,6 +318,7 @@ impl ConnectionHandler {
             &mut self.shutdown_rx,
             &mut self.session,
             self.state.clone(),
+            self.addr,
         );
         let result = pubsub_handler.run().await;
 
