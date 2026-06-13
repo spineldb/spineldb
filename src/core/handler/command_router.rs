@@ -237,6 +237,12 @@ impl<'a> Router<'a> {
             // Connection state commands (modify session state directly).
             Command::Auth(cmd) => actions::auth::handle_auth(cmd, self.session, &state).await,
             Command::Quit(_) => Ok(RouteResponse::Single(RespValue::SimpleString("OK".into()))),
+            Command::Hello(ref cmd) => {
+                if cmd.proto == 3 || cmd.proto == 2 {
+                    self.session.protocol_version = cmd.proto;
+                }
+                self.execute_command(command, &db).await
+            }
             Command::Select(cmd) => {
                 actions::connection::handle_select(cmd, self.session, &state, self.session_id).await
             }

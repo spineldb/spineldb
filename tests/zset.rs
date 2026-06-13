@@ -59,7 +59,12 @@ async fn test_zset_zscore_zrem() {
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], server.port).into();
     let mut c = common::Client::connect(addr).await;
     c.cmd(&[b"ZADD", b"myzset", b"5", b"member1"]).await;
-    assert_eq!(c.cmd(&[b"ZSCORE", b"myzset", b"member1"]).await, bs(b"5"));
+    let score_resp = c.cmd(&[b"ZSCORE", b"myzset", b"member1"]).await;
+    match score_resp {
+        RespValue::Double(d) => assert!((d - 5.0).abs() < f64::EPSILON),
+        RespValue::BulkString(b) => assert_eq!(b.as_ref(), b"5"),
+        other => panic!("ZSCORE should return Double or BulkString, got {other:?}"),
+    }
     assert_eq!(c.cmd(&[b"ZSCORE", b"myzset", b"missing"]).await, NULL);
     assert_eq!(c.cmd(&[b"ZREM", b"myzset", b"member1"]).await, int(1));
     assert_eq!(c.cmd(&[b"ZCARD", b"myzset"]).await, int(0));

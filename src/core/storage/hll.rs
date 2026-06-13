@@ -30,8 +30,8 @@ impl HyperLogLog {
         }
     }
 
-    pub fn add(&mut self, item: &Bytes) -> bool {
-        let hash = murmur3_x64_128(&mut Cursor::new(item), 0).unwrap();
+    pub fn add(&mut self, item: &Bytes, seed: u32) -> bool {
+        let hash = murmur3_x64_128(&mut Cursor::new(item), seed).unwrap();
         let hash_high = (hash >> 64) as u64;
 
         // Use the first 14 bits for register index
@@ -137,7 +137,7 @@ mod tests {
     fn test_add_increments_count() {
         let mut hll = HyperLogLog::new();
         for i in 0..1000 {
-            hll.add(&Bytes::from(format!("item-{i}")));
+            hll.add(&Bytes::from(format!("item-{i}")), 0);
         }
         // The estimate should be in the right ballpark for 1000 distinct items.
         let estimate = hll.count();
@@ -151,10 +151,10 @@ mod tests {
     fn test_add_returns_false_for_duplicate_with_lower_rho() {
         let mut hll = HyperLogLog::new();
         // The first add for a key will likely return true.
-        let first = hll.add(&Bytes::from_static(b"x"));
+        let first = hll.add(&Bytes::from_static(b"x"), 0);
         assert!(first);
         // Adding the same item a second time should not change registers.
-        let second = hll.add(&Bytes::from_static(b"x"));
+        let second = hll.add(&Bytes::from_static(b"x"), 0);
         assert!(!second);
     }
 
@@ -162,12 +162,12 @@ mod tests {
     fn test_count_does_not_grow_for_duplicates() {
         let mut hll = HyperLogLog::new();
         for _ in 0..10 {
-            hll.add(&Bytes::from_static(b"same"));
+            hll.add(&Bytes::from_static(b"same"), 0);
         }
         let once = hll.count();
         // Adding the same item many more times must not change the count meaningfully.
         for _ in 0..1000 {
-            hll.add(&Bytes::from_static(b"same"));
+            hll.add(&Bytes::from_static(b"same"), 0);
         }
         let after = hll.count();
         // The estimate is non-decreasing: re-adding identical values may bump
@@ -180,8 +180,8 @@ mod tests {
     fn test_merge_takes_max_per_register() {
         let mut a = HyperLogLog::new();
         let mut b = HyperLogLog::new();
-        a.add(&Bytes::from_static(b"alpha"));
-        b.add(&Bytes::from_static(b"beta"));
+        a.add(&Bytes::from_static(b"alpha"), 0);
+        b.add(&Bytes::from_static(b"beta"), 0);
         let before = a.count();
         a.merge(&b);
         // Merged count should be >= either side.
@@ -192,7 +192,7 @@ mod tests {
     fn test_serialize_deserialize_roundtrip() {
         let mut hll = HyperLogLog::new();
         for i in 0..500 {
-            hll.add(&Bytes::from(format!("key-{i}")));
+            hll.add(&Bytes::from(format!("key-{i}")), 0);
         }
         let original_count = hll.count();
         let bytes = hll.serialize();

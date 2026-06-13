@@ -34,19 +34,21 @@ impl ExecutableCommand for HGetAll {
         let resp = if let Some(entry) = shard_cache_guard.get_mut(&self.key) {
             if entry.is_expired() {
                 shard_cache_guard.pop(&self.key);
-                RespValue::Array(vec![])
+                RespValue::Map(vec![])
             } else if let DataValue::Hash(hash) = &entry.data {
-                let mut response = Vec::with_capacity(hash.len() * 2);
+                let mut response = Vec::with_capacity(hash.len());
                 for (field, value) in hash {
-                    response.push(RespValue::BulkString(field.clone()));
-                    response.push(RespValue::BulkString(value.clone()));
+                    response.push((
+                        RespValue::BulkString(field.clone()),
+                        RespValue::BulkString(value.clone()),
+                    ));
                 }
-                RespValue::Array(response)
+                RespValue::Map(response)
             } else {
                 return Err(SpinelDBError::WrongType);
             }
         } else {
-            RespValue::Array(vec![])
+            RespValue::Map(vec![])
         };
         Ok((resp, WriteOutcome::DidNotWrite))
     }

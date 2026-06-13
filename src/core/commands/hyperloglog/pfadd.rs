@@ -43,6 +43,7 @@ impl ExecutableCommand for PfAdd {
             return Ok((RespValue::Integer(0), WriteOutcome::DidNotWrite));
         }
 
+        let seed = ctx.state.hll_seed;
         let (_shard, shard_cache_guard) = ctx.get_single_shard_context_mut()?;
         let entry = shard_cache_guard.get_or_insert_with_mut(self.key.clone(), || {
             StoredValue::new(DataValue::HyperLogLog(Box::default()))
@@ -51,7 +52,7 @@ impl ExecutableCommand for PfAdd {
         if let DataValue::HyperLogLog(ref mut hll) = entry.data {
             let mut changed = false;
             for element in &self.elements {
-                if hll.add(element) {
+                if hll.add(element, seed) {
                     changed = true;
                 }
             }

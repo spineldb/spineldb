@@ -32,8 +32,10 @@ impl TestContext {
     /// Creates a new test context with default configuration
     pub async fn new() -> Self {
         // Create a minimal config for testing with fewer databases to avoid stack overflow
-        let mut config = Config::default();
-        config.databases = 1; // Only 1 database for tests
+        let mut config = Config {
+            databases: 1, // Only 1 database for tests
+            ..Default::default()
+        };
         config.persistence.aof_enabled = false; // Disable AOF for tests
         config.persistence.spldb_enabled = false; // Disable SPLDB for tests
         Self::with_config(config).await

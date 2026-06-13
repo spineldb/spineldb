@@ -35,6 +35,12 @@ pub struct ClientInfo {
     pub library_name: Option<String>,
     /// The version of the client library, set by CLIENT SETINFO.
     pub library_version: Option<String>,
+    /// Whether this client is exempt from maxmemory eviction (CLIENT NO-EVICT).
+    pub no_evict: bool,
+    /// Whether this client bypasses LRU tracking for key accesses (CLIENT NO-TOUCH).
+    pub no_touch: bool,
+    /// The RESP protocol version used by this client (2 or 3).
+    pub protocol_version: u8,
 }
 
 #[cfg(test)]
@@ -54,6 +60,9 @@ mod tests {
             last_command_time: Instant::now(),
             library_name: None,
             library_version: None,
+            no_evict: false,
+            no_touch: false,
+            protocol_version: 3,
         }
     }
 

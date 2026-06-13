@@ -12,7 +12,7 @@ A `[x]` checkbox indicates a feature that is already implemented (at least for t
 - [x] Key Expiration support (EXPIRE, TTL, PEXPIRE, PTTL)
 - [x] Server configuration via file (`config.toml`)
 - [x] RESP (Redis Serialization Protocol) Protocol
-- [ ] Full RESP3 Protocol Support
+- [x] Full RESP3 Protocol Support
 - [x] Command-line Interface (CLI) for basic interaction
 
 ## 2. Data Types

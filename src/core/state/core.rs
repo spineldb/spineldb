@@ -7,6 +7,7 @@ use super::client::*;
 use super::persistence::*;
 use super::replication::*;
 use super::stats::StatsState;
+use super::tracking::TrackingState;
 use crate::config::{AclConfig, AclUsersFile, Config, ReplicationConfig};
 use crate::core::SpinelDBError;
 use crate::core::acl::enforcer::AclEnforcer;
@@ -76,6 +77,8 @@ pub struct ServerState {
     pub is_read_only_due_to_quorum_loss: Arc<AtomicBool>,
     /// An atomic counter for tracking in-flight `EVALSHA` commands to prevent race conditions with `SCRIPT FLUSH`.
     pub evalsha_in_flight: Arc<AtomicUsize>,
+    /// Seed for HyperLogLog hashing to prevent collision attacks.
+    pub hll_seed: u32,
     /// The manager for all publish-subscribe channels and patterns.
     pub pubsub: PubSubManager,
     /// Manages Lua scripts for `EVAL` and `EVALSHA`.
@@ -118,6 +121,8 @@ pub struct ServerState {
     pub replication: ReplicationState,
     /// Holds all state related to the Intelligent Cache feature.
     pub cache: CacheState,
+    /// Holds all state related to CLIENT TRACKING for client-side caching.
+    pub tracking: TrackingState,
     /// Holds all server-wide statistics.
     pub stats: StatsState,
 }
@@ -133,6 +138,10 @@ impl ServerState {
         let mut replid_bytes = [0u8; 20];
         getrandom::fill(&mut replid_bytes).map_err(|e| SpinelDBError::Internal(e.to_string()))?;
         let master_replid = hex::encode(replid_bytes);
+
+        let mut hll_seed_bytes = [0u8; 4];
+        getrandom::fill(&mut hll_seed_bytes).map_err(|e| SpinelDBError::Internal(e.to_string()))?;
+        let hll_seed = u32::from_le_bytes(hll_seed_bytes);
 
         // Initialize channels for inter-task communication.
         let (event_bus, aof_event_rx) = EventBus::new(config.persistence.aof_enabled);
@@ -229,6 +238,7 @@ impl ServerState {
             is_read_only_due_to_quorum_loss: Arc::new(AtomicBool::new(false)),
             pubsub: PubSubManager::new(),
             evalsha_in_flight: Arc::new(AtomicUsize::new(0)),
+            hll_seed,
             scripting: Arc::new(LuaManager::new()),
             event_bus: Arc::new(event_bus),
             blocker_manager: Arc::new(BlockerManager::new()),
@@ -248,6 +258,7 @@ impl ServerState {
             persistence: PersistenceState::new(fsync_tx, rewrite_complete_tx, lazy_free_tx),
             replication: ReplicationState::new(master_replid),
             cache: CacheState::new(reval_tx, on_disk_max_open_files),
+            tracking: TrackingState::new(),
             stats: StatsState::new(),
         });
 

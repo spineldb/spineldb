@@ -36,7 +36,7 @@ async fn test_set_smembers() {
     c.cmd(&[b"SADD", b"myset", b"a", b"b", b"c"]).await;
     let resp = c.cmd(&[b"SMEMBERS", b"myset"]).await;
     match resp {
-        RespValue::Array(mut items) => {
+        RespValue::Array(mut items) | RespValue::Set(mut items) => {
             items.sort_by(|a, b| {
                 let a = match a {
                     RespValue::BulkString(b) => b.clone(),
@@ -50,7 +50,7 @@ async fn test_set_smembers() {
             });
             assert_eq!(items, vec![bs(b"a"), bs(b"b"), bs(b"c")]);
         }
-        other => panic!("SMEMBERS should return Array, got {other:?}"),
+        other => panic!("SMEMBERS should return Array or Set, got {other:?}"),
     }
     server.shutdown();
 }

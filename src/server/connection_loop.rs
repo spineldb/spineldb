@@ -121,6 +121,9 @@ pub async fn run(mut ctx: ServerContext) {
                             last_command_time: Instant::now(),
                             library_name: None,
                             library_version: None,
+                            no_evict: false,
+                            no_touch: false,
+                            protocol_version: 3, // Default to RESP3
                         }));
                         state_clone.clients.insert(session_id, (client_info, conn_shutdown_tx));
 

@@ -32,6 +32,8 @@ pub struct SessionState {
     pub current_db_index: usize,
     /// The `AclUser` associated with the authenticated session, if any.
     pub authenticated_user: Option<Arc<AclUser>>,
+    /// The RESP protocol version used by this session (e.g., 2 or 3).
+    pub protocol_version: u8,
 }
 
 /// An enum holding a receiver for either a channel or pattern subscription.
@@ -57,6 +59,7 @@ impl SessionState {
             pubsub_receivers: Vec::new(),
             current_db_index: 0,
             authenticated_user: None,
+            protocol_version: 3,
         }
     }
 }
@@ -78,6 +81,7 @@ mod tests {
         assert!(s.pubsub_receivers.is_empty());
         assert_eq!(s.current_db_index, 0);
         assert!(s.authenticated_user.is_none());
+        assert_eq!(s.protocol_version, 3);
     }
 
     #[test]

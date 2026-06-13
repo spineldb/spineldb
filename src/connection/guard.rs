@@ -76,6 +76,9 @@ impl Drop for ConnectionGuard {
         self.state
             .stream_blocker_manager
             .remove_waiters_for_session(self.session_id);
+
+        // Clean up CLIENT TRACKING state for this session.
+        self.state.tracking.cleanup_session(self.session_id);
     }
 }
 
@@ -123,6 +126,9 @@ mod tests {
             last_command_time: std::time::Instant::now(),
             library_name: None,
             library_version: None,
+            no_evict: false,
+            no_touch: false,
+            protocol_version: 3,
         }));
         state.clients.insert(session_id, (client_info, shutdown_tx));
 
@@ -152,6 +158,9 @@ mod tests {
             last_command_time: std::time::Instant::now(),
             library_name: None,
             library_version: None,
+            no_evict: false,
+            no_touch: false,
+            protocol_version: 3,
         }));
         state.clients.insert(session_id, (client_info, shutdown_tx));
 

@@ -34,15 +34,15 @@ impl ExecutableCommand for Smembers {
         let resp = if let Some(entry) = shard_cache_guard.get_mut(&self.key) {
             if entry.is_expired() {
                 shard_cache_guard.pop(&self.key);
-                RespValue::Array(vec![])
+                RespValue::Set(vec![])
             } else if let DataValue::Set(set) = &entry.data {
                 let members = set.iter().cloned().map(RespValue::BulkString).collect();
-                RespValue::Array(members)
+                RespValue::Set(members)
             } else {
                 return Err(SpinelDBError::WrongType);
             }
         } else {
-            RespValue::Array(vec![])
+            RespValue::Set(vec![])
         };
         Ok((resp, WriteOutcome::DidNotWrite))
     }

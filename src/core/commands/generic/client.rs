@@ -19,10 +19,17 @@ pub enum ClientSubcommand {
     SetName(Bytes),
     GetName,
     Kill(u64),
-    // Change: SetInfo struct now stores parsed data
     SetInfo {
         lib_name: Option<String>,
         lib_ver: Option<String>,
+    },
+    Id,
+    NoEvict(bool),
+    NoTouch(bool),
+    Tracking {
+        enabled: bool,
+        redirect: Option<u64>,
+        bcast: bool,
     },
 }
 
@@ -96,6 +103,85 @@ impl ParseCommand for Client {
                 }
                 ClientSubcommand::SetInfo { lib_name, lib_ver }
             }
+            "id" => {
+                if args.len() != 1 {
+                    return Err(SpinelDBError::WrongArgumentCount("CLIENT ID".to_string()));
+                }
+                ClientSubcommand::Id
+            }
+            "no-evict" => {
+                if args.len() != 2 {
+                    return Err(SpinelDBError::WrongArgumentCount(
+                        "CLIENT NO-EVICT".to_string(),
+                    ));
+                }
+                let flag = extract_string(&args[1])?.to_ascii_lowercase();
+                match flag.as_str() {
+                    "on" => ClientSubcommand::NoEvict(true),
+                    "off" => ClientSubcommand::NoEvict(false),
+                    _ => return Err(SpinelDBError::SyntaxError),
+                }
+            }
+            "no-touch" => {
+                if args.len() != 2 {
+                    return Err(SpinelDBError::WrongArgumentCount(
+                        "CLIENT NO-TOUCH".to_string(),
+                    ));
+                }
+                let flag = extract_string(&args[1])?.to_ascii_lowercase();
+                match flag.as_str() {
+                    "on" => ClientSubcommand::NoTouch(true),
+                    "off" => ClientSubcommand::NoTouch(false),
+                    _ => return Err(SpinelDBError::SyntaxError),
+                }
+            }
+            "tracking" => {
+                if args.len() < 2 {
+                    return Err(SpinelDBError::WrongArgumentCount(
+                        "CLIENT TRACKING".to_string(),
+                    ));
+                }
+                let enabled_str = extract_string(&args[1])?.to_ascii_lowercase();
+                let enabled = match enabled_str.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(SpinelDBError::SyntaxError),
+                };
+                let mut redirect = None;
+                let mut bcast = false;
+                let mut i = 2;
+                while i < args.len() {
+                    let opt = extract_string(&args[i])?.to_ascii_lowercase();
+                    match opt.as_str() {
+                        "redirect" => {
+                            if i + 1 < args.len() {
+                                redirect = Some(
+                                    extract_string(&args[i + 1])?.parse::<u64>().map_err(|_| {
+                                        SpinelDBError::InvalidState(
+                                            "Invalid client ID for REDIRECT".into(),
+                                        )
+                                    })?,
+                                );
+                                i += 2;
+                            } else {
+                                return Err(SpinelDBError::SyntaxError);
+                            }
+                        }
+                        "bcast" => {
+                            bcast = true;
+                            i += 1;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
+                ClientSubcommand::Tracking {
+                    enabled,
+                    redirect,
+                    bcast,
+                }
+            }
             _ => return Err(SpinelDBError::UnknownCommand(format!("CLIENT {sub_str}"))),
         };
 
@@ -123,6 +209,7 @@ impl ExecutableCommand for Client {
                         format!("age={}", client_info.created.elapsed().as_secs()),
                         format!("idle={}", client_info.last_command_time.elapsed().as_secs()),
                         format!("db={}", client_info.db_index),
+                        format!("proto={}", client_info.protocol_version),
                     ];
                     if let Some(name) = &client_info.name {
                         props.push(format!("name={name}"));
@@ -215,6 +302,72 @@ impl ExecutableCommand for Client {
                     ))
                 }
             }
+            ClientSubcommand::Id => Ok((
+                RespValue::Integer(ctx.session_id as i64),
+                WriteOutcome::DidNotWrite,
+            )),
+            ClientSubcommand::NoEvict(enabled) => {
+                if let Some(entry) = ctx.state.clients.get(&ctx.session_id) {
+                    let (client_info_arc, _) = entry.value();
+                    client_info_arc.lock().await.no_evict = *enabled;
+                    Ok((
+                        RespValue::SimpleString("OK".into()),
+                        WriteOutcome::DidNotWrite,
+                    ))
+                } else {
+                    Err(SpinelDBError::Internal(
+                        "Client not found in registry".into(),
+                    ))
+                }
+            }
+            ClientSubcommand::NoTouch(enabled) => {
+                if let Some(entry) = ctx.state.clients.get(&ctx.session_id) {
+                    let (client_info_arc, _) = entry.value();
+                    client_info_arc.lock().await.no_touch = *enabled;
+                    Ok((
+                        RespValue::SimpleString("OK".into()),
+                        WriteOutcome::DidNotWrite,
+                    ))
+                } else {
+                    Err(SpinelDBError::Internal(
+                        "Client not found in registry".into(),
+                    ))
+                }
+            }
+            ClientSubcommand::Tracking {
+                enabled,
+                redirect,
+                bcast,
+            } => {
+                if *enabled {
+                    // Enable tracking
+                    if let Some(_redirect_id) = redirect {
+                        // Redirect mode: invalidation messages go to the redirect client
+                        // For now, we support it conceptually but don't implement the
+                        // redirect channel yet (requires a separate client to receive).
+                        // We still enable tracking on this session.
+                    }
+
+                    ctx.state.tracking.enable_tracking(ctx.session_id);
+
+                    if *bcast {
+                        // BCAST mode: we'll register keys as they are accessed
+                        // For now, just mark the session as bcast-enabled
+                    }
+
+                    Ok((
+                        RespValue::SimpleString("OK".into()),
+                        WriteOutcome::DidNotWrite,
+                    ))
+                } else {
+                    // Disable tracking
+                    ctx.state.tracking.disable_tracking(ctx.session_id);
+                    Ok((
+                        RespValue::SimpleString("OK".into()),
+                        WriteOutcome::DidNotWrite,
+                    ))
+                }
+            }
         }
     }
 }
@@ -259,6 +412,33 @@ impl CommandSpec for Client {
                 }
                 if let Some(ver) = lib_ver {
                     args.extend_from_slice(&["LIB-VER".into(), ver.clone().into()]);
+                }
+            }
+            ClientSubcommand::Id => args.push("ID".into()),
+            ClientSubcommand::NoEvict(enabled) => {
+                args.extend_from_slice(&[
+                    "NO-EVICT".into(),
+                    if *enabled { "ON" } else { "OFF" }.into(),
+                ]);
+            }
+            ClientSubcommand::NoTouch(enabled) => {
+                args.extend_from_slice(&[
+                    "NO-TOUCH".into(),
+                    if *enabled { "ON" } else { "OFF" }.into(),
+                ]);
+            }
+            ClientSubcommand::Tracking {
+                enabled,
+                redirect,
+                bcast,
+            } => {
+                args.push("TRACKING".into());
+                args.push(if *enabled { "ON" } else { "OFF" }.into());
+                if *bcast {
+                    args.push("BCAST".into());
+                }
+                if let Some(id) = redirect {
+                    args.extend_from_slice(&["REDIRECT".into(), id.to_string().into()]);
                 }
             }
         }

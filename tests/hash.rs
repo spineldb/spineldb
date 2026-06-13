@@ -63,14 +63,29 @@ async fn test_hash_hgetall() {
     c.cmd(&[b"HSET", b"myhash", b"f2", b"v2"]).await;
     let resp = c.cmd(&[b"HGETALL", b"myhash"]).await;
     match resp {
+        RespValue::Map(entries) => {
+            assert_eq!(entries.len(), 2);
+            // RESP3 Map returns key-value pairs
+            let f1 = entries.iter().find(|(k, _)| k == &bs(b"f1"));
+            assert!(f1.is_some());
+            if let Some((_, v)) = f1 {
+                assert_eq!(*v, bs(b"v1"));
+            }
+            let f2 = entries.iter().find(|(k, _)| k == &bs(b"f2"));
+            assert!(f2.is_some());
+            if let Some((_, v)) = f2 {
+                assert_eq!(*v, bs(b"v2"));
+            }
+        }
         RespValue::Array(items) => {
+            // RESP2 flat array fallback
             assert_eq!(items.len(), 4);
             assert_eq!(items[0], bs(b"f1"));
             assert_eq!(items[1], bs(b"v1"));
             assert_eq!(items[2], bs(b"f2"));
             assert_eq!(items[3], bs(b"v2"));
         }
-        _ => panic!("HGETALL should return Array"),
+        _ => panic!("HGETALL should return Map or Array"),
     }
     server.shutdown();
 }
@@ -82,8 +97,9 @@ async fn test_hash_hgetall_empty() {
     let mut c = common::Client::connect(addr).await;
     let resp = c.cmd(&[b"HGETALL", b"empty"]).await;
     match resp {
+        RespValue::Map(entries) => assert!(entries.is_empty()),
         RespValue::Array(items) => assert!(items.is_empty()),
-        _ => panic!("HGETALL empty should return Array"),
+        _ => panic!("HGETALL empty should return Map or Array"),
     }
     server.shutdown();
 }

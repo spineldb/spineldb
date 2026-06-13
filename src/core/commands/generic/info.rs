@@ -178,7 +178,7 @@ impl ExecutableCommand for Info {
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
         let info_string = get_info_string(&ctx.state, &self.section).await;
         Ok((
-            RespValue::BulkString(info_string.into()),
+            RespValue::VerbatimString("txt".to_string(), info_string.into()),
             WriteOutcome::DidNotWrite,
         ))
     }

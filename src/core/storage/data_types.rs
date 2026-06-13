@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn test_to_construction_commands_hll() {
         let mut hll = HyperLogLog::new();
-        hll.add(&Bytes::from_static(b"elem"));
+        hll.add(&Bytes::from_static(b"elem"), 0);
         let sv = StoredValue::new(DataValue::HyperLogLog(Box::new(hll)));
         let key = Bytes::from_static(b"hll");
         let cmds = sv.to_construction_commands(&key);

@@ -8,16 +8,17 @@ use crate::core::handler::command_router::{RouteResponse, Router};
 use crate::core::protocol::{RespFrame, RespFrameCodec};
 use crate::core::pubsub::handler::PubSubModeHandler;
 use crate::core::replication::handler::ReplicaHandler;
-use crate::core::state::{ClientRole, ServerState};
+use crate::core::state::{ClientRole, InvalidationMessage, ServerState};
 use crate::core::{Command, SpinelDBError};
 use crate::server::AnyStream;
+use bytes::Bytes;
 use futures::{SinkExt, StreamExt, stream};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_rustls::server::TlsStream;
 use tokio_util::codec::Framed;
 use tracing::{debug, info, warn};
@@ -46,6 +47,8 @@ pub struct ConnectionHandler {
     global_shutdown_rx: broadcast::Receiver<()>,
     session: SessionState,
     role: ConnectionRole,
+    /// Receiver for CLIENT TRACKING invalidation Push messages.
+    invalidation_rx: Option<mpsc::Receiver<InvalidationMessage>>,
 }
 
 impl ConnectionHandler {
@@ -60,6 +63,13 @@ impl ConnectionHandler {
     ) -> Self {
         let is_auth_required = state.config.lock().await.password.is_some();
         let acl_enabled = state.acl_config.read().await.enabled;
+
+        // Create a channel for CLIENT TRACKING invalidation Push messages.
+        let (invalidation_tx, invalidation_rx) = mpsc::channel(64);
+        state
+            .tracking
+            .set_invalidation_channel(session_id, invalidation_tx);
+
         Self {
             framed: Some(Framed::new(socket, RespFrameCodec)),
             addr,
@@ -69,6 +79,7 @@ impl ConnectionHandler {
             global_shutdown_rx,
             session: SessionState::new(is_auth_required, acl_enabled),
             role: ConnectionRole::Client,
+            invalidation_rx: Some(invalidation_rx),
         }
     }
 
@@ -82,10 +93,19 @@ impl ConnectionHandler {
                 break 'main_loop;
             }
 
+            // Take the invalidation_rx temporarily for the select! macro
+            let mut inv_rx = self.invalidation_rx.take().unwrap_or_else(|| {
+                // This shouldn't happen, but create a channel that's immediately closed
+                // as a fallback.
+                let (_, rx) = mpsc::channel(1);
+                rx
+            });
+
             tokio::select! {
                 // Prioritize shutdown signals over other events.
                 biased;
                 _ = self.global_shutdown_rx.recv() => {
+                    self.invalidation_rx = Some(inv_rx);
                     info!("Connection handler for {} received GLOBAL shutdown signal.", self.addr);
                     if let Some(framed) = self.framed.as_mut() {
                         let shutdown_msg = RespFrame::Error("SHUTDOWN Server is shutting down".to_string());
@@ -94,10 +114,34 @@ impl ConnectionHandler {
                     break 'main_loop;
                 }
                 _ = self.shutdown_rx.recv() => {
+                    self.invalidation_rx = Some(inv_rx);
                     info!("Connection handler for {} received kill signal.", self.addr);
                     break 'main_loop;
                 }
+                // Handle CLIENT TRACKING invalidation Push messages.
+                invalidation = inv_rx.recv() => {
+                    self.invalidation_rx = Some(inv_rx);
+                    if let Some(msg) = invalidation
+                        && !msg.keys.is_empty()
+                        && let Some(framed) = self.framed.as_mut()
+                    {
+                        let invalidate_frame = RespFrame::Push(vec![
+                            RespFrame::BulkString(Bytes::from_static(b"invalidate")),
+                            RespFrame::Array(
+                                msg.keys.into_iter()
+                                    .map(RespFrame::BulkString)
+                                    .collect(),
+                            ),
+                        ]);
+                        debug!(
+                            "Session {}: Sending tracking invalidation",
+                            self.session_id
+                        );
+                        let _ = framed.send(invalidate_frame).await;
+                    }
+                }
                 result = self.framed.as_mut().unwrap().next() => {
+                    self.invalidation_rx = Some(inv_rx);
                     match result {
                         Some(Ok(frame)) => {
                             debug!("Session {}: Received frame: {:?}", self.session_id, frame);
@@ -194,21 +238,36 @@ impl ConnectionHandler {
         );
         let route_response = router.route(command).await?;
         let framed = self.framed.as_mut().unwrap();
+        let protocol_version = self.session.protocol_version;
 
         match route_response {
             RouteResponse::Single(response) => {
+                let frame: RespFrame = response.into();
+                let frame = if protocol_version == 2 {
+                    frame.downgrade_to_resp2()
+                } else {
+                    frame
+                };
                 debug!(
                     "Session {}: Sending single response: {:?}",
-                    self.session_id, response
+                    self.session_id, frame
                 );
-                framed.send(response.into()).await?;
+                framed.send(frame).await?;
             }
             RouteResponse::Multiple(responses) => {
                 debug!(
                     "Session {}: Sending multiple responses: {:?}",
                     self.session_id, responses
                 );
-                let mut stream = stream::iter(responses).map(|r| Ok(r.into()));
+                let prepared = responses.into_iter().map(|r| {
+                    let frame: RespFrame = r.into();
+                    Ok(if protocol_version == 2 {
+                        frame.downgrade_to_resp2()
+                    } else {
+                        frame
+                    })
+                });
+                let mut stream = stream::iter(prepared);
                 framed.send_all(&mut stream).await?;
             }
             RouteResponse::StreamBody {

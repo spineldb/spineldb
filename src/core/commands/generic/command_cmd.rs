@@ -87,13 +87,31 @@ fn flags_to_resp_values(flags: CommandFlags) -> Vec<RespValue> {
 
 /// Builds the detailed RESP response for a single command from its `CommandSpec`.
 fn build_command_details_from_spec(spec: &dyn CommandSpec) -> RespValue {
-    RespValue::Array(vec![
-        RespValue::BulkString(spec.name().to_ascii_uppercase().into()),
-        RespValue::Integer(spec.arity()),
-        RespValue::Array(flags_to_resp_values(spec.flags())),
-        RespValue::Integer(spec.first_key()),
-        RespValue::Integer(spec.last_key()),
-        RespValue::Integer(spec.step()),
+    RespValue::Map(vec![
+        (
+            RespValue::BulkString("name".into()),
+            RespValue::BulkString(spec.name().to_ascii_uppercase().into()),
+        ),
+        (
+            RespValue::BulkString("arity".into()),
+            RespValue::Integer(spec.arity()),
+        ),
+        (
+            RespValue::BulkString("flags".into()),
+            RespValue::Array(flags_to_resp_values(spec.flags())),
+        ),
+        (
+            RespValue::BulkString("first_key".into()),
+            RespValue::Integer(spec.first_key()),
+        ),
+        (
+            RespValue::BulkString("last_key".into()),
+            RespValue::Integer(spec.last_key()),
+        ),
+        (
+            RespValue::BulkString("step".into()),
+            RespValue::Integer(spec.step()),
+        ),
     ])
 }
 
@@ -109,12 +127,23 @@ static SORTED_COMMAND_SPECS: Lazy<Vec<RespValue>> = Lazy::new(|| {
 
     // Sort the command details alphabetically by name for consistent output.
     details.sort_by(|a, b| {
-        if let RespValue::Array(arr_a) = a
-            && let RespValue::Array(arr_b) = b
-            && let RespValue::BulkString(name_a) = &arr_a[0]
-            && let RespValue::BulkString(name_b) = &arr_b[0]
+        if let RespValue::Map(entries_a) = a
+            && let RespValue::Map(entries_b) = b
         {
-            return name_a.cmp(name_b);
+            // Find the "name" entry in each Map
+            let name_a = entries_a
+                .iter()
+                .find(|(k, _)| matches!(k, RespValue::BulkString(bs) if bs.as_ref() == b"name"))
+                .map(|(_, v)| v);
+            let name_b = entries_b
+                .iter()
+                .find(|(k, _)| matches!(k, RespValue::BulkString(bs) if bs.as_ref() == b"name"))
+                .map(|(_, v)| v);
+            if let (Some(RespValue::BulkString(a)), Some(RespValue::BulkString(b))) =
+                (name_a, name_b)
+            {
+                return a.cmp(b);
+            }
         }
         std::cmp::Ordering::Equal
     });

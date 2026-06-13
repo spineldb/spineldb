@@ -120,12 +120,26 @@ pub fn frame_to_value(frame: RespFrame) -> RespValue {
         RespFrame::BulkString(b) => RespValue::BulkString(b),
         RespFrame::Integer(i) => RespValue::Integer(i),
         RespFrame::Array(arr) => RespValue::Array(arr.into_iter().map(frame_to_value).collect()),
-        // The codec emits a single `Null` variant for both null bulk
-        // and null array (this RESP2 server does not distinguish them
-        // at the protocol layer).
         RespFrame::Null => RespValue::Null,
         RespFrame::NullArray => RespValue::NullArray,
         RespFrame::Error(s) => RespValue::Error(s),
+        RespFrame::Boolean(b) => RespValue::Boolean(b),
+        RespFrame::Double(d) => RespValue::Double(d),
+        RespFrame::BigNumber(s) => RespValue::BigNumber(s),
+        RespFrame::Map(m) => RespValue::Map(
+            m.into_iter()
+                .map(|(k, v)| (frame_to_value(k), frame_to_value(v)))
+                .collect(),
+        ),
+        RespFrame::Set(s) => RespValue::Set(s.into_iter().map(frame_to_value).collect()),
+        RespFrame::Push(p) => RespValue::Push(p.into_iter().map(frame_to_value).collect()),
+        RespFrame::VerbatimString(fmt, data) => RespValue::VerbatimString(fmt, data),
+        RespFrame::Attribute(attr, inner) => RespValue::Attribute(
+            attr.into_iter()
+                .map(|(k, v)| (frame_to_value(k), frame_to_value(v)))
+                .collect(),
+            Box::new(frame_to_value(*inner)),
+        ),
     }
 }
 

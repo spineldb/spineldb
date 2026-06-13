@@ -4,6 +4,7 @@
 //! and replication subsystems.
 
 use crate::core::Command;
+use crate::core::commands::command_trait::CommandExt;
 use crate::core::protocol::RespFrame;
 use crate::core::state::ServerState;
 use std::sync::Arc;
@@ -124,6 +125,28 @@ impl EventBus {
     /// "immediate read-only" behavior.
     pub fn publish(&self, uow: UnitOfWork, state: &Arc<ServerState>) {
         let work = PropagatedWork { uow };
+
+        // --- CLIENT TRACKING INVALIDATION ---
+        // Extract affected keys from the command(s) and notify tracking clients.
+        let keys = match &work.uow {
+            UnitOfWork::Command(cmd) => cmd.get_keys(),
+            UnitOfWork::Transaction(tx_data) => {
+                let mut all_keys = Vec::new();
+                for cmd in &tx_data.write_commands {
+                    all_keys.extend(cmd.get_keys());
+                }
+                all_keys
+            }
+        };
+        if !keys.is_empty() {
+            // Use db_index 0 as a default; the actual db_index isn't stored in the command.
+            // Tracking invalidation is best-effort, so this is acceptable.
+            let state_clone = state.clone();
+            let keys_clone = keys;
+            tokio::spawn(async move {
+                state_clone.tracking.invalidate_keys(0, &keys_clone).await;
+            });
+        }
 
         // Send to replication subscribers. It's okay if there are no active subscribers.
         if self.replication_sender.send(work.clone()).is_err() {

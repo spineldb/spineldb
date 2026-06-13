@@ -9,6 +9,7 @@ mod core;
 mod persistence;
 mod replication;
 mod stats;
+pub mod tracking;
 
 pub use cache::CacheState;
 pub use client::*;
@@ -16,3 +17,4 @@ pub use core::{ServerInit, ServerState};
 pub use persistence::*;
 pub use replication::*;
 pub use stats::StatsState;
+pub use tracking::{InvalidationMessage, TrackingState};

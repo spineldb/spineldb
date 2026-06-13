@@ -21,6 +21,54 @@ async fn test_pubsub_publish_no_subscribers() {
     server.shutdown();
 }
 
+fn check_subscribe_response(resp: RespValue, channel: &str, expected_count: i64) {
+    match resp {
+        RespValue::Push(items) | RespValue::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], bs(b"subscribe"));
+            assert_eq!(items[1], bs(channel.as_bytes()));
+            assert_eq!(items[2], int(expected_count));
+        }
+        other => panic!("subscribe response should be Push or Array, got {other:?}"),
+    }
+}
+
+fn check_unsubscribe_response(resp: RespValue, channel: &str, expected_count: i64) {
+    match resp {
+        RespValue::Push(items) | RespValue::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], bs(b"unsubscribe"));
+            assert_eq!(items[1], bs(channel.as_bytes()));
+            assert_eq!(items[2], int(expected_count));
+        }
+        other => panic!("unsubscribe response should be Push or Array, got {other:?}"),
+    }
+}
+
+fn check_psubscribe_response(resp: RespValue, pattern: &str, expected_count: i64) {
+    match resp {
+        RespValue::Push(items) | RespValue::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], bs(b"psubscribe"));
+            assert_eq!(items[1], bs(pattern.as_bytes()));
+            assert_eq!(items[2], int(expected_count));
+        }
+        other => panic!("psubscribe response should be Push or Array, got {other:?}"),
+    }
+}
+
+fn check_punsubscribe_response(resp: RespValue, pattern: &str, expected_count: i64) {
+    match resp {
+        RespValue::Push(items) | RespValue::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], bs(b"punsubscribe"));
+            assert_eq!(items[1], bs(pattern.as_bytes()));
+            assert_eq!(items[2], int(expected_count));
+        }
+        other => panic!("punsubscribe response should be Push or Array, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn test_pubsub_subscribe_returns_ok() {
     let server = common::start_server().await;
@@ -28,15 +76,7 @@ async fn test_pubsub_subscribe_returns_ok() {
     let mut c = common::Client::connect(addr).await;
     c.send(&[b"SUBSCRIBE", b"mychannel"]).await;
     let resp = c.read_response().await;
-    match resp {
-        RespValue::Array(items) => {
-            assert_eq!(items.len(), 3);
-            assert_eq!(items[0], bs(b"subscribe"));
-            assert_eq!(items[1], bs(b"mychannel"));
-            assert_eq!(items[2], int(1));
-        }
-        other => panic!("SUBSCRIBE response should be Array, got {other:?}"),
-    }
+    check_subscribe_response(resp, "mychannel", 1);
     server.shutdown();
 }
 
@@ -47,15 +87,7 @@ async fn test_pubsub_psubscribe_returns_ok() {
     let mut c = common::Client::connect(addr).await;
     c.send(&[b"PSUBSCRIBE", b"my*"]).await;
     let resp = c.read_response().await;
-    match resp {
-        RespValue::Array(items) => {
-            assert_eq!(items.len(), 3);
-            assert_eq!(items[0], bs(b"psubscribe"));
-            assert_eq!(items[1], bs(b"my*"));
-            assert_eq!(items[2], int(1));
-        }
-        other => panic!("PSUBSCRIBE response should be Array, got {other:?}"),
-    }
+    check_psubscribe_response(resp, "my*", 1);
     server.shutdown();
 }
 
@@ -69,15 +101,7 @@ async fn test_pubsub_unsubscribe() {
 
     c.send(&[b"UNSUBSCRIBE", b"ch1"]).await;
     let resp = c.read_response().await;
-    match resp {
-        RespValue::Array(items) => {
-            assert_eq!(items.len(), 3);
-            assert_eq!(items[0], bs(b"unsubscribe"));
-            assert_eq!(items[1], bs(b"ch1"));
-            assert_eq!(items[2], int(0));
-        }
-        other => panic!("UNSUBSCRIBE response should be Array, got {other:?}"),
-    }
+    check_unsubscribe_response(resp, "ch1", 0);
     server.shutdown();
 }
 
@@ -91,15 +115,7 @@ async fn test_pubsub_punsubscribe() {
 
     c.send(&[b"PUNSUBSCRIBE", b"ch*"]).await;
     let resp = c.read_response().await;
-    match resp {
-        RespValue::Array(items) => {
-            assert_eq!(items.len(), 3);
-            assert_eq!(items[0], bs(b"punsubscribe"));
-            assert_eq!(items[1], bs(b"ch*"));
-            assert_eq!(items[2], int(0));
-        }
-        other => panic!("PUNSUBSCRIBE response should be Array, got {other:?}"),
-    }
+    check_punsubscribe_response(resp, "ch*", 0);
     server.shutdown();
 }
 

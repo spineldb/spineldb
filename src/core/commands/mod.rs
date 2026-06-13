@@ -53,6 +53,7 @@ define_commands! {
     },
     standard: {
         // --- Generic Commands ---
+        (Hello, Hello, generic),
         (Command, CommandInfo, generic),
         (Config, ConfigGetSet, generic),
         (Type, TypeInfo, generic),

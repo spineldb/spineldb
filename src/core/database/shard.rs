@@ -188,11 +188,11 @@ impl ShardCache {
     where
         F: FnOnce() -> StoredValue,
     {
-        if self.store.get(&key).is_none() {
+        if !self.store.contains(&key) {
             let new_value = f();
             self.put(key.clone(), new_value);
         }
-        self.store.get_mut(&key).unwrap()
+        self.store.get_mut(&key).expect("Key must exist after put")
     }
 
     /// Gets a mutable reference to a value, updating its LFU/LRU metadata.

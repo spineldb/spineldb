@@ -46,6 +46,14 @@ pub enum RespFrame {
     Null,
     NullArray,
     Array(Vec<RespFrame>),
+    Boolean(bool),
+    Double(f64),
+    BigNumber(String),
+    Map(Vec<(RespFrame, RespFrame)>),
+    Set(Vec<RespFrame>),
+    Push(Vec<RespFrame>),
+    VerbatimString(String, Bytes),
+    Attribute(Vec<(RespFrame, RespFrame)>, Box<RespFrame>),
 }
 
 impl RespFrame {
@@ -55,6 +63,66 @@ impl RespFrame {
         let mut buf = BytesMut::new();
         RespFrameCodec.encode(self.clone(), &mut buf)?;
         Ok(buf.to_vec())
+    }
+
+    /// Recursively downgrades RESP3-specific frame types to RESP2-compatible equivalents.
+    ///
+    /// This ensures backward compatibility with RESP2 clients:
+    /// - `Map` → flat `Array` of alternating key-value pairs
+    /// - `Set` → `Array`
+    /// - `Push` → `Array`
+    /// - `Boolean` → `SimpleString("t"|"f")`
+    /// - `Double` → `BulkString`
+    /// - `BigNumber` → `BulkString`
+    /// - `VerbatimString` → `BulkString` (payload only)
+    /// - `Attribute` → downgraded inner value (attributes are stripped)
+    pub fn downgrade_to_resp2(&self) -> RespFrame {
+        match self {
+            RespFrame::Map(map) => {
+                let mut flat = Vec::with_capacity(map.len() * 2);
+                for (k, v) in map {
+                    flat.push(k.downgrade_to_resp2());
+                    flat.push(v.downgrade_to_resp2());
+                }
+                RespFrame::Array(flat)
+            }
+            RespFrame::Set(items) => {
+                RespFrame::Array(items.iter().map(|i| i.downgrade_to_resp2()).collect())
+            }
+            RespFrame::Push(items) => {
+                RespFrame::Array(items.iter().map(|i| i.downgrade_to_resp2()).collect())
+            }
+            RespFrame::Boolean(b) => {
+                RespFrame::SimpleString(if *b { "t".to_string() } else { "f".to_string() })
+            }
+            RespFrame::Double(d) => {
+                let s = if d.is_infinite() {
+                    if d.is_sign_positive() {
+                        "inf".to_string()
+                    } else {
+                        "-inf".to_string()
+                    }
+                } else if d.is_nan() {
+                    "nan".to_string()
+                } else {
+                    d.to_string()
+                };
+                RespFrame::BulkString(Bytes::from(s))
+            }
+            RespFrame::BigNumber(s) => RespFrame::BulkString(Bytes::from(s.clone())),
+            RespFrame::VerbatimString(_fmt, data) => RespFrame::BulkString(data.clone()),
+            RespFrame::Attribute(_attr, inner) => inner.downgrade_to_resp2(),
+            RespFrame::Array(items) => {
+                RespFrame::Array(items.iter().map(|i| i.downgrade_to_resp2()).collect())
+            }
+            // Already RESP2-compatible types pass through unchanged.
+            RespFrame::SimpleString(_)
+            | RespFrame::Error(_)
+            | RespFrame::Integer(_)
+            | RespFrame::BulkString(_)
+            | RespFrame::Null
+            | RespFrame::NullArray => self.clone(),
+        }
     }
 }
 
@@ -104,6 +172,77 @@ impl Encoder<RespFrame> for RespFrameCodec {
                     // Recursively encode each frame in the array.
                     self.encode(frame, dst)?;
                 }
+            }
+            RespFrame::Boolean(b) => {
+                dst.extend_from_slice(b"#");
+                dst.extend_from_slice(if b { b"t" } else { b"f" });
+                dst.extend_from_slice(CRLF);
+            }
+            RespFrame::Double(d) => {
+                dst.extend_from_slice(b",");
+                let s = if d.is_infinite() {
+                    if d.is_sign_positive() {
+                        "inf".to_string()
+                    } else {
+                        "-inf".to_string()
+                    }
+                } else if d.is_nan() {
+                    "nan".to_string()
+                } else {
+                    d.to_string()
+                };
+                dst.extend_from_slice(s.as_bytes());
+                dst.extend_from_slice(CRLF);
+            }
+            RespFrame::BigNumber(s) => {
+                dst.extend_from_slice(b"(");
+                dst.extend_from_slice(s.as_bytes());
+                dst.extend_from_slice(CRLF);
+            }
+            RespFrame::Map(map) => {
+                dst.extend_from_slice(b"%");
+                dst.extend_from_slice(map.len().to_string().as_bytes());
+                dst.extend_from_slice(CRLF);
+                for (k, v) in map {
+                    self.encode(k, dst)?;
+                    self.encode(v, dst)?;
+                }
+            }
+            RespFrame::Set(set) => {
+                dst.extend_from_slice(b"~");
+                dst.extend_from_slice(set.len().to_string().as_bytes());
+                dst.extend_from_slice(CRLF);
+                for frame in set {
+                    self.encode(frame, dst)?;
+                }
+            }
+            RespFrame::Push(push) => {
+                dst.extend_from_slice(b">");
+                dst.extend_from_slice(push.len().to_string().as_bytes());
+                dst.extend_from_slice(CRLF);
+                for frame in push {
+                    self.encode(frame, dst)?;
+                }
+            }
+            RespFrame::VerbatimString(fmt, data) => {
+                dst.extend_from_slice(b"=");
+                let len = fmt.len() + 1 + data.len();
+                dst.extend_from_slice(len.to_string().as_bytes());
+                dst.extend_from_slice(CRLF);
+                dst.extend_from_slice(fmt.as_bytes());
+                dst.extend_from_slice(b":");
+                dst.extend_from_slice(&data);
+                dst.extend_from_slice(CRLF);
+            }
+            RespFrame::Attribute(attr, data) => {
+                dst.extend_from_slice(b"|");
+                dst.extend_from_slice(attr.len().to_string().as_bytes());
+                dst.extend_from_slice(CRLF);
+                for (k, v) in attr {
+                    self.encode(k, dst)?;
+                    self.encode(v, dst)?;
+                }
+                self.encode(*data, dst)?;
             }
         }
         Ok(())
@@ -161,6 +300,15 @@ impl RespFrameCodec {
             b':' => self.parse_integer(bytes),
             b'$' => self.parse_bulk_string(bytes),
             b'*' => self.parse_array(bytes, depth),
+            b'_' => self.parse_null(bytes),
+            b'#' => self.parse_boolean(bytes),
+            b',' => self.parse_double(bytes),
+            b'(' => self.parse_bignumber(bytes),
+            b'%' => self.parse_map(bytes, depth),
+            b'~' => self.parse_set(bytes, depth),
+            b'>' => self.parse_push(bytes, depth),
+            b'=' => self.parse_verbatim_string(bytes),
+            b'|' => self.parse_attribute(bytes, depth),
             _ => Err(SpinelDBError::SyntaxError),
         }
     }
@@ -271,6 +419,169 @@ impl RespFrameCodec {
             frames.push(self.decode_recursive(bytes, depth + 1)?);
         }
         Ok(RespFrame::Array(frames))
+    }
+
+    fn parse_null(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let _ = self.parse_line(bytes)?;
+        Ok(RespFrame::Null)
+    }
+
+    fn parse_boolean(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        match s.as_ref() {
+            "t" => Ok(RespFrame::Boolean(true)),
+            "f" => Ok(RespFrame::Boolean(false)),
+            _ => Err(SpinelDBError::SyntaxError),
+        }
+    }
+
+    fn parse_double(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        let d = match s.as_ref() {
+            "inf" | "+inf" => f64::INFINITY,
+            "-inf" => f64::NEG_INFINITY,
+            "nan" | "NaN" => f64::NAN,
+            _ => s.parse::<f64>().map_err(|_| SpinelDBError::SyntaxError)?,
+        };
+        Ok(RespFrame::Double(d))
+    }
+
+    fn parse_bignumber(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        Ok(RespFrame::BigNumber(
+            String::from_utf8_lossy(line).to_string(),
+        ))
+    }
+
+    fn parse_map(&self, bytes: &mut &[u8], depth: usize) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        let map_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
+
+        if map_len < 0 {
+            return Err(SpinelDBError::SyntaxError);
+        }
+        let map_len = map_len as usize;
+        if map_len > MAX_FRAME_ELEMENTS {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let mut frames = Vec::with_capacity(map_len);
+        for _ in 0..map_len {
+            let k = self.decode_recursive(bytes, depth + 1)?;
+            let v = self.decode_recursive(bytes, depth + 1)?;
+            frames.push((k, v));
+        }
+        Ok(RespFrame::Map(frames))
+    }
+
+    fn parse_set(&self, bytes: &mut &[u8], depth: usize) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        let set_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
+
+        if set_len < 0 {
+            return Err(SpinelDBError::SyntaxError);
+        }
+        let set_len = set_len as usize;
+        if set_len > MAX_FRAME_ELEMENTS {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let mut frames = Vec::with_capacity(set_len);
+        for _ in 0..set_len {
+            frames.push(self.decode_recursive(bytes, depth + 1)?);
+        }
+        Ok(RespFrame::Set(frames))
+    }
+
+    fn parse_push(&self, bytes: &mut &[u8], depth: usize) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        let push_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
+
+        if push_len < 0 {
+            return Err(SpinelDBError::SyntaxError);
+        }
+        let push_len = push_len as usize;
+        if push_len > MAX_FRAME_ELEMENTS {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let mut frames = Vec::with_capacity(push_len);
+        for _ in 0..push_len {
+            frames.push(self.decode_recursive(bytes, depth + 1)?);
+        }
+        Ok(RespFrame::Push(frames))
+    }
+
+    fn parse_verbatim_string(&self, bytes: &mut &[u8]) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        let str_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
+
+        if str_len < 4 {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let str_len = str_len as usize;
+        if str_len > MAX_BULK_STRING_SIZE.load(Ordering::Relaxed) {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        if bytes.len() < str_len + CRLF_LEN {
+            return Err(SpinelDBError::IncompleteData);
+        }
+
+        if &bytes[str_len..str_len + CRLF_LEN] != CRLF {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let data = Bytes::copy_from_slice(&bytes[..str_len]);
+        *bytes = &bytes[str_len + CRLF_LEN..];
+
+        if data[3] != b':' {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let fmt = String::from_utf8_lossy(&data[..3]).to_string();
+        let payload = data.slice(4..);
+
+        Ok(RespFrame::VerbatimString(fmt, payload))
+    }
+
+    fn parse_attribute(&self, bytes: &mut &[u8], depth: usize) -> Result<RespFrame, SpinelDBError> {
+        *bytes = &bytes[1..];
+        let line = self.parse_line(bytes)?;
+        let s = String::from_utf8_lossy(line);
+        let attr_len = s.parse::<isize>().map_err(|_| SpinelDBError::SyntaxError)?;
+
+        if attr_len < 0 {
+            return Err(SpinelDBError::SyntaxError);
+        }
+        let attr_len = attr_len as usize;
+        if attr_len > MAX_FRAME_ELEMENTS {
+            return Err(SpinelDBError::SyntaxError);
+        }
+
+        let mut attr = Vec::with_capacity(attr_len);
+        for _ in 0..attr_len {
+            let k = self.decode_recursive(bytes, depth + 1)?;
+            let v = self.decode_recursive(bytes, depth + 1)?;
+            attr.push((k, v));
+        }
+        let data = self.decode_recursive(bytes, depth + 1)?;
+        Ok(RespFrame::Attribute(attr, Box::new(data)))
     }
 }
 
@@ -592,5 +903,288 @@ mod tests {
         assert_eq!(encoded.len(), 12);
         let decoded = decode_one(&encoded).unwrap().unwrap();
         assert_eq!(decoded, frame);
+    }
+    #[test]
+    fn test_resp3_types() {
+        // Boolean
+        let frame = RespFrame::Boolean(true);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"#t\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        let frame = RespFrame::Boolean(false);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"#f\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // Double
+        let frame = RespFrame::Double(123.456);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b",123.456\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        let frame = RespFrame::Double(f64::INFINITY);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b",inf\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // BigNumber
+        let frame = RespFrame::BigNumber("3492890328409238509324850943850943825024385".to_string());
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"(3492890328409238509324850943850943825024385\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // Null
+        let encoded = b"_\r\n";
+        let decoded = decode_one(encoded).unwrap().unwrap();
+        assert_eq!(decoded, RespFrame::Null);
+
+        // Map
+        let frame = RespFrame::Map(vec![
+            (
+                RespFrame::SimpleString("first".to_string()),
+                RespFrame::Integer(1),
+            ),
+            (
+                RespFrame::SimpleString("second".to_string()),
+                RespFrame::Integer(2),
+            ),
+        ]);
+        let encoded = encode(frame.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // Set
+        let frame = RespFrame::Set(vec![RespFrame::Integer(1), RespFrame::Integer(2)]);
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"~2\r\n:1\r\n:2\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // Push
+        let frame = RespFrame::Push(vec![
+            RespFrame::SimpleString("message".to_string()),
+            RespFrame::Integer(42),
+        ]);
+        let encoded = encode(frame.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // VerbatimString
+        let frame =
+            RespFrame::VerbatimString("txt".to_string(), Bytes::from_static(b"hello world"));
+        let encoded = encode(frame.clone());
+        assert_eq!(encoded, b"=15\r\ntxt:hello world\r\n");
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+
+        // Attribute
+        let frame = RespFrame::Attribute(
+            vec![(
+                RespFrame::SimpleString("key-popularity".to_string()),
+                RespFrame::Array(vec![RespFrame::Integer(1), RespFrame::Integer(2)]),
+            )],
+            Box::new(RespFrame::Integer(42)),
+        );
+        let encoded = encode(frame.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_downgrade_map_to_array() {
+        let map = RespFrame::Map(vec![
+            (
+                RespFrame::BulkString(Bytes::from_static(b"key1")),
+                RespFrame::Integer(1),
+            ),
+            (
+                RespFrame::BulkString(Bytes::from_static(b"key2")),
+                RespFrame::Integer(2),
+            ),
+        ]);
+        let downgraded = map.downgrade_to_resp2();
+        assert_eq!(
+            downgraded,
+            RespFrame::Array(vec![
+                RespFrame::BulkString(Bytes::from_static(b"key1")),
+                RespFrame::Integer(1),
+                RespFrame::BulkString(Bytes::from_static(b"key2")),
+                RespFrame::Integer(2),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_downgrade_set_to_array() {
+        let set = RespFrame::Set(vec![
+            RespFrame::Integer(1),
+            RespFrame::Integer(2),
+            RespFrame::Integer(3),
+        ]);
+        let downgraded = set.downgrade_to_resp2();
+        assert_eq!(
+            downgraded,
+            RespFrame::Array(vec![
+                RespFrame::Integer(1),
+                RespFrame::Integer(2),
+                RespFrame::Integer(3),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_downgrade_push_to_array() {
+        let push = RespFrame::Push(vec![
+            RespFrame::BulkString(Bytes::from_static(b"message")),
+            RespFrame::BulkString(Bytes::from_static(b"chan")),
+            RespFrame::BulkString(Bytes::from_static(b"hello")),
+        ]);
+        let downgraded = push.downgrade_to_resp2();
+        assert_eq!(
+            downgraded,
+            RespFrame::Array(vec![
+                RespFrame::BulkString(Bytes::from_static(b"message")),
+                RespFrame::BulkString(Bytes::from_static(b"chan")),
+                RespFrame::BulkString(Bytes::from_static(b"hello")),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_downgrade_boolean_to_simple_string() {
+        assert_eq!(
+            RespFrame::Boolean(true).downgrade_to_resp2(),
+            RespFrame::SimpleString("t".to_string())
+        );
+        assert_eq!(
+            RespFrame::Boolean(false).downgrade_to_resp2(),
+            RespFrame::SimpleString("f".to_string())
+        );
+    }
+
+    #[test]
+    fn test_downgrade_double_to_bulk_string() {
+        let frame = RespFrame::Double(123.456);
+        let downgraded = frame.downgrade_to_resp2();
+        assert_eq!(downgraded, RespFrame::BulkString(Bytes::from("123.456")));
+    }
+
+    #[test]
+    fn test_downgrade_double_inf() {
+        assert_eq!(
+            RespFrame::Double(f64::INFINITY).downgrade_to_resp2(),
+            RespFrame::BulkString(Bytes::from("inf"))
+        );
+        assert_eq!(
+            RespFrame::Double(f64::NEG_INFINITY).downgrade_to_resp2(),
+            RespFrame::BulkString(Bytes::from("-inf"))
+        );
+    }
+
+    #[test]
+    fn test_downgrade_double_nan() {
+        assert_eq!(
+            RespFrame::Double(f64::NAN).downgrade_to_resp2(),
+            RespFrame::BulkString(Bytes::from("nan"))
+        );
+    }
+
+    #[test]
+    fn test_downgrade_bignumber_to_bulk_string() {
+        let frame = RespFrame::BigNumber("12345678901234567890".to_string());
+        let downgraded = frame.downgrade_to_resp2();
+        assert_eq!(
+            downgraded,
+            RespFrame::BulkString(Bytes::from("12345678901234567890"))
+        );
+    }
+
+    #[test]
+    fn test_downgrade_verbatim_string_to_bulk_string() {
+        let frame = RespFrame::VerbatimString("txt".to_string(), Bytes::from_static(b"hello"));
+        let downgraded = frame.downgrade_to_resp2();
+        assert_eq!(
+            downgraded,
+            RespFrame::BulkString(Bytes::from_static(b"hello"))
+        );
+    }
+
+    #[test]
+    fn test_downgrade_attribute_strips_to_inner() {
+        let frame = RespFrame::Attribute(
+            vec![(
+                RespFrame::BulkString(Bytes::from_static(b"ttl")),
+                RespFrame::Integer(3600),
+            )],
+            Box::new(RespFrame::Integer(42)),
+        );
+        let downgraded = frame.downgrade_to_resp2();
+        assert_eq!(downgraded, RespFrame::Integer(42));
+    }
+
+    #[test]
+    fn test_downgrade_nested_map_in_array() {
+        let frame = RespFrame::Array(vec![RespFrame::Map(vec![(
+            RespFrame::BulkString(Bytes::from_static(b"inner")),
+            RespFrame::Integer(1),
+        )])]);
+        let downgraded = frame.downgrade_to_resp2();
+        assert_eq!(
+            downgraded,
+            RespFrame::Array(vec![RespFrame::Array(vec![
+                RespFrame::BulkString(Bytes::from_static(b"inner")),
+                RespFrame::Integer(1),
+            ])])
+        );
+    }
+
+    #[test]
+    fn test_downgrade_already_resp2_types_passthrough() {
+        let simple = RespFrame::SimpleString("OK".to_string());
+        assert_eq!(simple.downgrade_to_resp2(), simple);
+
+        let error = RespFrame::Error("ERR".to_string());
+        assert_eq!(error.downgrade_to_resp2(), error);
+
+        let integer = RespFrame::Integer(42);
+        assert_eq!(integer.downgrade_to_resp2(), integer);
+
+        let bulk = RespFrame::BulkString(Bytes::from_static(b"data"));
+        assert_eq!(bulk.downgrade_to_resp2(), bulk);
+
+        let null = RespFrame::Null;
+        assert_eq!(null.downgrade_to_resp2(), null);
+
+        let null_array = RespFrame::NullArray;
+        assert_eq!(null_array.downgrade_to_resp2(), null_array);
+
+        let array = RespFrame::Array(vec![RespFrame::Integer(1)]);
+        assert_eq!(array.downgrade_to_resp2(), array);
+    }
+
+    #[test]
+    fn test_downgrade_map_roundtrip_through_encoder() {
+        let map = RespFrame::Map(vec![
+            (
+                RespFrame::BulkString(Bytes::from_static(b"server")),
+                RespFrame::BulkString(Bytes::from_static(b"spineldb")),
+            ),
+            (
+                RespFrame::BulkString(Bytes::from_static(b"proto")),
+                RespFrame::Integer(3),
+            ),
+        ]);
+        let downgraded = map.downgrade_to_resp2();
+        let encoded = encode(downgraded.clone());
+        let decoded = decode_one(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, downgraded);
+        // Verify it encodes as RESP2 array format (*)
+        assert_eq!(encoded[0], b'*');
     }
 }

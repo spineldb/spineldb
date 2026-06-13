@@ -57,12 +57,18 @@ async fn test_geo_geodist() {
         .await;
     let resp = c.cmd(&[b"GEODIST", b"points", b"A", b"B", b"km"]).await;
     match &resp {
+        RespValue::Double(dist) => {
+            assert!(
+                *dist > 50.0 && *dist < 300.0,
+                "distance out of range: {dist}"
+            );
+        }
         RespValue::BulkString(b) => {
             let s = String::from_utf8_lossy(b);
             let dist: f64 = s.parse().expect("distance should be a number");
             assert!(dist > 50.0 && dist < 300.0, "distance out of range: {dist}");
         }
-        other => panic!("GEODIST should return BulkString, got {other:?}"),
+        other => panic!("GEODIST should return Double or BulkString, got {other:?}"),
     }
     server.shutdown();
 }

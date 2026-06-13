@@ -66,10 +66,7 @@ impl ExecutableCommand for GeoDist {
                     let (lon1, lat1) = score_to_coordinates(score1)?;
                     let (lon2, lat2) = score_to_coordinates(score2)?;
                     let dist = haversine_distance(lon1, lat1, lon2, lat2, self.unit);
-                    return Ok((
-                        RespValue::BulkString(dist.to_string().into()),
-                        WriteOutcome::DidNotWrite,
-                    ));
+                    return Ok((RespValue::Double(dist), WriteOutcome::DidNotWrite));
                 }
             } else {
                 return Err(SpinelDBError::WrongType);

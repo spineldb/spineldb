@@ -84,7 +84,12 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> PubSubModeHandler<'a, S> {
                 maybe_msg = receive_pubsub_message_static(&mut self.session.pubsub_receivers) => {
                     match maybe_msg {
                         Some(Ok(frame)) => {
-                            // Forward the message to the client.
+                            // Apply RESP3→RESP2 downgrade if needed, then forward.
+                            let frame = if self.session.protocol_version == 2 {
+                                frame.downgrade_to_resp2()
+                            } else {
+                                frame
+                            };
                             if self.framed.send(frame).await.is_err() {
                                 warn!("Failed to send pubsub message to client. Connection likely closed.");
                                 return Ok(());
@@ -131,10 +136,27 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> PubSubModeHandler<'a, S> {
 
         match router.route(command).await {
             Ok(RouteResponse::Single(resp)) => {
-                let _ = self.framed.send(resp.into()).await;
+                let frame: RespFrame = resp.into();
+                let frame = if self.session.protocol_version == 2 {
+                    frame.downgrade_to_resp2()
+                } else {
+                    frame
+                };
+                let _ = self.framed.send(frame).await;
             }
             Ok(RouteResponse::Multiple(responses)) => {
-                let mut stream = futures::stream::iter(responses).map(|r| Ok(r.into()));
+                let frames: Vec<RespFrame> = responses
+                    .into_iter()
+                    .map(|r| {
+                        let f: RespFrame = r.into();
+                        if self.session.protocol_version == 2 {
+                            f.downgrade_to_resp2()
+                        } else {
+                            f
+                        }
+                    })
+                    .collect();
+                let mut stream = futures::stream::iter(frames).map(Ok);
                 let _ = self.framed.send_all(&mut stream).await;
             }
             Ok(RouteResponse::NoOp) => {}
@@ -188,30 +210,27 @@ async fn receive_pubsub_message_static(
     let select_all = futures::future::select_all(pubsub_receivers.iter_mut().map(|sub_receiver| {
         async move {
             match sub_receiver {
-                // For channel subscriptions, format the message as `(message, channel_name, message_body)`.
+                // For channel subscriptions, format as Push: ["message", channel_name, body]
                 SubscriptionReceiver::Channel(name, rx) => rx.recv().await.map(|msg| {
-                    RespValue::Array(vec![
+                    RespValue::Push(vec![
                         RespValue::BulkString("message".into()),
                         RespValue::BulkString(name.clone()),
                         RespValue::BulkString(msg),
                     ])
                 }),
-                // For pattern subscriptions, format as `(pmessage, pattern, channel_name, message_body)`.
-                SubscriptionReceiver::Pattern(pattern, rx) => {
-                    // Correctly handle the Result before destructuring the tuple.
-                    rx.recv().await.map(|pmsg_result| {
-                        let (_p, chan, msg) = pmsg_result;
-                        RespValue::Array(vec![
-                            RespValue::BulkString("pmessage".into()),
-                            RespValue::BulkString(pattern.clone()),
-                            RespValue::BulkString(chan),
-                            RespValue::BulkString(msg),
-                        ])
-                    })
-                }
+                // For pattern subscriptions, format as Push: ["pmessage", pattern, channel_name, body]
+                SubscriptionReceiver::Pattern(pattern, rx) => rx.recv().await.map(|pmsg_result| {
+                    let (_p, chan, msg) = pmsg_result;
+                    RespValue::Push(vec![
+                        RespValue::BulkString("pmessage".into()),
+                        RespValue::BulkString(pattern.clone()),
+                        RespValue::BulkString(chan),
+                        RespValue::BulkString(msg),
+                    ])
+                }),
             }
         }
-        .boxed() // Box the future to create a homogenous type for `select_all`.
+        .boxed()
     }));
 
     let (recv_result, _index, _remaining) = select_all.await;

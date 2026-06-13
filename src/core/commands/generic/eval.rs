@@ -106,7 +106,27 @@ impl ExecutableCommand for Eval {
         // the blocking Lua execution. The Lua script will re-acquire the necessary
         // locks via `spinel.call()` / `spinel.pcall()`. Holding the outer locks
         // would deadlock because `tokio::sync::Mutex` is not re-entrant.
-        ctx.locks = crate::core::database::locking::ExecutionLocks::None;
+        let original_locks = std::mem::replace(
+            &mut ctx.locks,
+            crate::core::database::locking::ExecutionLocks::None,
+        );
+
+        enum LockKind {
+            None,
+            Single(usize),
+            Multi,
+            All,
+        }
+
+        let lock_kind = match &original_locks {
+            crate::core::database::locking::ExecutionLocks::None => LockKind::None,
+            crate::core::database::locking::ExecutionLocks::Single { shard_index, .. } => {
+                LockKind::Single(*shard_index)
+            }
+            crate::core::database::locking::ExecutionLocks::Multi { .. } => LockKind::Multi,
+            crate::core::database::locking::ExecutionLocks::All { .. } => LockKind::All,
+        };
+        drop(original_locks);
 
         let script_has_timeout = timeout_duration.as_millis() > 0;
         let script_has_mem_limit = memory_limit_mb > 0;
@@ -267,19 +287,40 @@ impl ExecutableCommand for Eval {
                 res
             });
 
-        match lua_future.await {
+        let result = match lua_future.await {
             Ok(Ok(res)) => Ok(res),
             Ok(Err(e)) => {
                 // Check if the error is due to memory limit.
                 if let LuaError::MemoryError(_) = e {
-                    return Err(SpinelDBError::MaxMemoryReached);
+                    Err(SpinelDBError::MaxMemoryReached)
+                } else {
+                    Err(SpinelDBError::from(e))
                 }
-                Err(SpinelDBError::from(e))
             }
             Err(join_err) => Err(SpinelDBError::Internal(format!(
                 "Lua execution task panicked: {join_err}"
             ))),
-        }
+        };
+
+        // Restore or re-acquire locks to satisfy the ExecutionContext's post-condition,
+        // which is critical for TransactionHandler and general consistency.
+        ctx.locks = match lock_kind {
+            LockKind::None => crate::core::database::locking::ExecutionLocks::None,
+            LockKind::Multi => crate::core::database::locking::ExecutionLocks::Multi {
+                guards: ctx.db.lock_shards_for_keys(&self.keys).await,
+            },
+            LockKind::Single(shard_index) => {
+                crate::core::database::locking::ExecutionLocks::Single {
+                    shard_index,
+                    guard: ctx.db.get_shard(shard_index).entries.lock().await,
+                }
+            }
+            LockKind::All => crate::core::database::locking::ExecutionLocks::All {
+                guards: ctx.db.lock_all_shards().await,
+            },
+        };
+
+        result
     }
 }
 
@@ -347,12 +388,52 @@ fn lua_value_to_resp_value(lua_val: LuaValue) -> mlua::Result<RespValue> {
         LuaValue::Boolean(b) => Ok(RespValue::Integer(b as i64)),
         mlua::Value::Nil => Ok(RespValue::Null),
         LuaValue::Table(t) => {
-            let mut items = Vec::new();
-            for pair in t.pairs::<LuaValue, LuaValue>() {
-                let (_, v) = pair?;
-                items.push(lua_value_to_resp_value(v)?);
+            // Check if the table is a sequence (array-like) or a hash (map-like).
+            // A sequence has consecutive integer keys starting from 1.
+            let mut array_items = Vec::new();
+            let mut map_items = Vec::new();
+            let mut max_index: i64 = 0;
+            let mut count: i64 = 0;
+
+            for pair in t.clone().pairs::<LuaValue, LuaValue>() {
+                let (k, v) = pair?;
+                let resp_k = lua_value_to_resp_value(k.clone())?;
+                let resp_v = lua_value_to_resp_value(v)?;
+                count += 1;
+
+                match &resp_k {
+                    RespValue::Integer(idx) if *idx >= 1 => {
+                        if *idx > max_index {
+                            max_index = *idx;
+                        }
+                        // Store for potential array conversion
+                        array_items.push((Some(*idx), resp_v));
+                    }
+                    _ => {
+                        // Non-integer key → definitely a map
+                        map_items.push((resp_k, resp_v));
+                    }
+                }
             }
-            Ok(RespValue::Array(items))
+
+            // If there are map items, or the array is not a perfect sequence,
+            // return as Map. Otherwise, return as Array.
+            if !map_items.is_empty() || max_index != count {
+                // Has non-integer keys or gaps → Map
+                let mut entries: Vec<(RespValue, RespValue)> = Vec::with_capacity(count as usize);
+                // Re-build the full map from the table
+                entries.clear();
+                for pair in t.pairs::<LuaValue, LuaValue>() {
+                    let (k, v) = pair?;
+                    entries.push((lua_value_to_resp_value(k)?, lua_value_to_resp_value(v)?));
+                }
+                Ok(RespValue::Map(entries))
+            } else {
+                // Pure sequence → Array
+                Ok(RespValue::Array(
+                    array_items.into_iter().map(|(_, v)| v).collect(),
+                ))
+            }
         }
         _ => Err(mlua::Error::FromLuaConversionError {
             from: lua_val.type_name(),
@@ -382,6 +463,35 @@ fn resp_value_to_lua_value(lua: &Lua, resp_val: RespValue) -> mlua::Result<LuaVa
             }
             Ok(LuaValue::Table(table))
         }
+        // RESP3 types - convert to their best-effort Lua equivalents
+        RespValue::Boolean(b) => Ok(LuaValue::Boolean(b)),
+        RespValue::Double(d) => Ok(LuaValue::Number(d)),
+        RespValue::BigNumber(s) => Ok(LuaValue::String(lua.create_string(s.as_bytes())?)),
+        RespValue::Map(m) => {
+            let table = lua.create_table_with_capacity(0, m.len())?;
+            for (k, v) in m {
+                let key = resp_value_to_lua_value(lua, k)?;
+                let val = resp_value_to_lua_value(lua, v)?;
+                table.set(key, val)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
+        RespValue::Set(s) => {
+            let table = lua.create_table_with_capacity(s.len(), 0)?;
+            for (i, item) in s.into_iter().enumerate() {
+                table.set(i + 1, resp_value_to_lua_value(lua, item)?)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
+        RespValue::Push(p) => {
+            let table = lua.create_table_with_capacity(p.len(), 0)?;
+            for (i, item) in p.into_iter().enumerate() {
+                table.set(i + 1, resp_value_to_lua_value(lua, item)?)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
+        RespValue::VerbatimString(_fmt, data) => Ok(LuaValue::String(lua.create_string(&data)?)),
+        RespValue::Attribute(_attr, inner) => resp_value_to_lua_value(lua, *inner),
     }
 }
 

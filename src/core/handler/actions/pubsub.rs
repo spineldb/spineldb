@@ -32,7 +32,7 @@ pub fn handle_subscribe(
                 .push(SubscriptionReceiver::Channel(name.clone(), rx));
         }
         let total_subs = session.subscribed_channels.len() + session.subscribed_patterns.len();
-        responses.push(RespValue::Array(vec![
+        responses.push(RespValue::Push(vec![
             RespValue::BulkString("subscribe".into()),
             RespValue::BulkString(name),
             RespValue::Integer(total_subs as i64),
@@ -65,7 +65,7 @@ pub fn handle_psubscribe(
                 .push(SubscriptionReceiver::Pattern(pattern.clone(), rx));
         }
         let total_subs = session.subscribed_channels.len() + session.subscribed_patterns.len();
-        responses.push(RespValue::Array(vec![
+        responses.push(RespValue::Push(vec![
             RespValue::BulkString("psubscribe".into()),
             RespValue::BulkString(pattern),
             RespValue::Integer(total_subs as i64),
@@ -87,7 +87,7 @@ pub fn handle_unsubscribe(
     };
     let mut responses = Vec::new();
     if to_process.is_empty() && session.subscribed_channels.is_empty() {
-        responses.push(RespValue::Array(vec![
+        responses.push(RespValue::Push(vec![
             RespValue::BulkString("unsubscribe".into()),
             RespValue::Null,
             RespValue::Integer(session.subscribed_patterns.len() as i64),
@@ -97,14 +97,14 @@ pub fn handle_unsubscribe(
             let was_removed = session.subscribed_channels.remove(name);
             let total_subs = session.subscribed_channels.len() + session.subscribed_patterns.len();
             if was_removed {
-                responses.push(RespValue::Array(vec![
+                responses.push(RespValue::Push(vec![
                     RespValue::BulkString("unsubscribe".into()),
                     RespValue::BulkString(name.clone()),
                     RespValue::Integer(total_subs as i64),
                 ]));
             } else {
                 // Per Redis protocol, unsubscribing from a non-existent channel still returns a response.
-                responses.push(RespValue::Array(vec![
+                responses.push(RespValue::Push(vec![
                     RespValue::BulkString("unsubscribe".into()),
                     RespValue::BulkString(name.clone()),
                     RespValue::Integer(total_subs as i64),
@@ -135,7 +135,7 @@ pub fn handle_punsubscribe(
     };
     let mut responses = Vec::new();
     if to_process.is_empty() && session.subscribed_patterns.is_empty() {
-        responses.push(RespValue::Array(vec![
+        responses.push(RespValue::Push(vec![
             RespValue::BulkString("punsubscribe".into()),
             RespValue::Null,
             RespValue::Integer(session.subscribed_channels.len() as i64),
@@ -145,14 +145,14 @@ pub fn handle_punsubscribe(
             let was_removed = session.subscribed_patterns.remove(pattern);
             let total_subs = session.subscribed_channels.len() + session.subscribed_patterns.len();
             if was_removed {
-                responses.push(RespValue::Array(vec![
+                responses.push(RespValue::Push(vec![
                     RespValue::BulkString("punsubscribe".into()),
                     RespValue::BulkString(pattern.clone()),
                     RespValue::Integer(total_subs as i64),
                 ]));
             } else {
                 // Per Redis protocol, punsubscribing from a non-existent pattern still returns a response.
-                responses.push(RespValue::Array(vec![
+                responses.push(RespValue::Push(vec![
                     RespValue::BulkString("punsubscribe".into()),
                     RespValue::BulkString(pattern.clone()),
                     RespValue::Integer(total_subs as i64),
@@ -188,6 +188,7 @@ mod tests {
             pubsub_receivers: Vec::new(),
             current_db_index: 0,
             authenticated_user: None,
+            protocol_version: 2,
         }
     }
 
@@ -198,11 +199,11 @@ mod tests {
         match resp {
             RouteResponse::Multiple(arr) => {
                 assert_eq!(arr.len(), 1);
-                if let RespValue::Array(inner) = &arr[0] {
+                if let RespValue::Push(inner) = &arr[0] {
                     assert_eq!(inner.len(), 3);
                     assert_eq!(inner[1], RespValue::Null);
                 } else {
-                    panic!("expected array");
+                    panic!("expected Push");
                 }
             }
             _ => panic!("expected Multiple"),
@@ -247,13 +248,13 @@ mod tests {
             RouteResponse::Multiple(arr) => {
                 // Per Redis protocol, unsubscribing from a non-existent channel still returns a response.
                 assert_eq!(arr.len(), 1);
-                if let RespValue::Array(inner) = &arr[0] {
+                if let RespValue::Push(inner) = &arr[0] {
                     assert_eq!(inner.len(), 3);
                     assert_eq!(inner[0], RespValue::BulkString("unsubscribe".into()));
                     assert_eq!(inner[1], RespValue::BulkString(Bytes::from_static(b"nope")));
                     assert_eq!(inner[2], RespValue::Integer(0));
                 } else {
-                    panic!("expected array");
+                    panic!("expected Push");
                 }
             }
             _ => panic!("expected Multiple"),
@@ -278,10 +279,10 @@ mod tests {
         match resp {
             RouteResponse::Multiple(arr) => {
                 assert_eq!(arr.len(), 1);
-                if let RespValue::Array(inner) = &arr[0] {
+                if let RespValue::Push(inner) = &arr[0] {
                     assert_eq!(inner[1], RespValue::Null);
                 } else {
-                    panic!("expected array");
+                    panic!("expected Push");
                 }
             }
             _ => panic!("expected Multiple"),
@@ -340,7 +341,7 @@ mod tests {
 
         let resp = handle_unsubscribe(vec![Bytes::from_static(b"a")], &mut session).unwrap();
         if let RouteResponse::Multiple(arr) = resp
-            && let RespValue::Array(inner) = &arr[0]
+            && let RespValue::Push(inner) = &arr[0]
             && let RespValue::Integer(count) = inner[2]
         {
             assert_eq!(count, 1); // 1 remaining sub

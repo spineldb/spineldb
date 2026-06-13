@@ -121,10 +121,10 @@ impl ExecutableCommand for ConfigGetSet {
                 };
                 if let Some(val) = value {
                     Ok((
-                        RespValue::Array(vec![
+                        RespValue::Map(vec![(
                             RespValue::BulkString(param.clone().into()),
                             RespValue::BulkString(val.into()),
-                        ]),
+                        )]),
                         WriteOutcome::DidNotWrite,
                     ))
                 } else {

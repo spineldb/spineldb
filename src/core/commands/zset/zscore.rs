@@ -40,7 +40,7 @@ impl ExecutableCommand for ZScore {
                 RespValue::Null
             } else if let DataValue::SortedSet(zset) = &entry.data {
                 zset.get_score(&self.member)
-                    .map(|s| RespValue::BulkString(s.to_string().into()))
+                    .map(RespValue::Double)
                     .unwrap_or(RespValue::Null)
             } else {
                 return Err(SpinelDBError::WrongType);

@@ -20,6 +20,14 @@ pub enum RespValue {
     Null,
     NullArray,
     Error(String),
+    Boolean(bool),
+    Double(f64),
+    BigNumber(String),
+    Map(Vec<(RespValue, RespValue)>),
+    Set(Vec<RespValue>),
+    Push(Vec<RespValue>),
+    VerbatimString(String, Bytes),
+    Attribute(Vec<(RespValue, RespValue)>, Box<RespValue>),
 }
 
 /// Implements the conversion from the internal `RespValue` to the wire-protocol `RespFrame`.
@@ -36,6 +44,21 @@ impl From<RespValue> for super::RespFrame {
             RespValue::Null => super::RespFrame::Null,
             RespValue::NullArray => super::RespFrame::NullArray,
             RespValue::Error(s) => super::RespFrame::Error(s),
+            RespValue::Boolean(b) => super::RespFrame::Boolean(b),
+            RespValue::Double(d) => super::RespFrame::Double(d),
+            RespValue::BigNumber(s) => super::RespFrame::BigNumber(s),
+            RespValue::Map(m) => {
+                super::RespFrame::Map(m.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+            }
+            RespValue::Set(s) => super::RespFrame::Set(s.into_iter().map(Into::into).collect()),
+            RespValue::Push(p) => super::RespFrame::Push(p.into_iter().map(Into::into).collect()),
+            RespValue::VerbatimString(fmt, data) => super::RespFrame::VerbatimString(fmt, data),
+            RespValue::Attribute(attr, data) => super::RespFrame::Attribute(
+                attr.into_iter()
+                    .map(|(k, v)| (k.into(), v.into()))
+                    .collect(),
+                Box::new((*data).into()),
+            ),
         }
     }
 }
@@ -93,5 +116,67 @@ mod tests {
             RespFrame::Array(vec![RespFrame::Null, RespFrame::Integer(3)]),
         ]);
         assert_eq!(f, expected);
+    }
+    #[test]
+    fn test_resp3_types_conversion() {
+        let v = RespValue::Boolean(true);
+        assert_eq!(RespFrame::from(v), RespFrame::Boolean(true));
+
+        let v = RespValue::Double(123.456);
+        assert_eq!(RespFrame::from(v), RespFrame::Double(123.456));
+
+        let v = RespValue::BigNumber("1234567890".to_string());
+        assert_eq!(
+            RespFrame::from(v),
+            RespFrame::BigNumber("1234567890".to_string())
+        );
+
+        let v = RespValue::Map(vec![(
+            RespValue::SimpleString("key".to_string()),
+            RespValue::Integer(1),
+        )]);
+        assert_eq!(
+            RespFrame::from(v),
+            RespFrame::Map(vec![(
+                RespFrame::SimpleString("key".to_string()),
+                RespFrame::Integer(1)
+            )])
+        );
+
+        let v = RespValue::Set(vec![RespValue::Integer(1)]);
+        assert_eq!(
+            RespFrame::from(v),
+            RespFrame::Set(vec![RespFrame::Integer(1)])
+        );
+
+        let v = RespValue::Push(vec![RespValue::SimpleString("message".to_string())]);
+        assert_eq!(
+            RespFrame::from(v),
+            RespFrame::Push(vec![RespFrame::SimpleString("message".to_string())])
+        );
+
+        let v = RespValue::VerbatimString("txt".to_string(), Bytes::from_static(b"hello"));
+        assert_eq!(
+            RespFrame::from(v),
+            RespFrame::VerbatimString("txt".to_string(), Bytes::from_static(b"hello"))
+        );
+
+        let v = RespValue::Attribute(
+            vec![(
+                RespValue::SimpleString("ttl".to_string()),
+                RespValue::Integer(3600),
+            )],
+            Box::new(RespValue::Integer(42)),
+        );
+        assert_eq!(
+            RespFrame::from(v),
+            RespFrame::Attribute(
+                vec![(
+                    RespFrame::SimpleString("ttl".to_string()),
+                    RespFrame::Integer(3600)
+                )],
+                Box::new(RespFrame::Integer(42)),
+            )
+        );
     }
 }

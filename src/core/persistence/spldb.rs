@@ -1035,7 +1035,7 @@ mod tests {
     fn test_serialize_deserialize_hll_roundtrip() {
         let mut hll = crate::core::storage::hll::HyperLogLog::new();
         for i in 0..50 {
-            hll.add(&Bytes::from(format!("item-{i}")));
+            hll.add(&Bytes::from(format!("item-{i}")), 0);
         }
         let original_count = hll.count();
         let val = DataValue::HyperLogLog(Box::new(hll));
