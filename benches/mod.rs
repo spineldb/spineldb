@@ -8,3 +8,4 @@
 pub mod command_bench;
 pub mod concurrent_bench;
 pub mod memory_bench;
+pub mod vector_bench;

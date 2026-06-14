@@ -34,7 +34,7 @@ A `[x]` checkbox indicates a feature that is already implemented (at least for t
 - [ ] **SpinelGraph**: Graph database functionality.
 - [ ] **SpinelTimeSeries**: Time-series data support.
 - [x] **SpinelBloom**: Probabilistic data structures (Bloom and Cuckoo filters).
-- [ ] **SpinelVector**: Vector similarity search and embeddings.
+- [x] **SpinelVector**: Vector similarity search and embeddings.
 
 ## 4. Persistence
 

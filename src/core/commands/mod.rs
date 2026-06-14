@@ -39,6 +39,7 @@ pub mod scan;
 pub mod set;
 pub mod streams;
 pub mod string;
+pub mod vector;
 pub mod zset;
 
 // Use the macro to define all supported commands.
@@ -49,7 +50,8 @@ define_commands! {
         (Cache, Cache, cache),
         (Cluster, ClusterInfo, cluster),
         (Json, Json, json),
-        (Bf, Bloom, bloom)
+        (Bf, Bloom, bloom),
+        (Vs, Vector, vector)
     },
     standard: {
         // --- Generic Commands ---

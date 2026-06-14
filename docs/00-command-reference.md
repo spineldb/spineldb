@@ -269,6 +269,31 @@ These are the top-level commands, often compatible with Redis's standard command
 *   `GEORADIUS key longitude latitude radius M|KM|FT|MI [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count] [ASC|DESC] [STORE key] [STOREDIST key]`
 *   `GEORADIUSBYMEMBER key member radius M|KM|FT|MI [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count] [ASC|DESC] [STORE key] [STOREDIST key]`
 
+### `VS.*` Commands (SpinelVector)
+
+The `VS` command provides access to SpinelDB's vector similarity search engine.
+
+*   `VS.RESERVE key dimension metric [CAPACITY capacity] [M m] [EF_CONSTRUCTION ef] [EF_SEARCH ef]`
+*   `VS.ADD key id vector [METADATA metadata]`
+*   `VS.MADD key [id vector [METADATA metadata] ...]`
+*   `VS.GET key id`
+*   `VS.UPDATE key id [VECTOR v1 v2 ...] [METADATA metadata]`
+*   `VS.DEL key id [id ...]`
+*   `VS.EXISTS key id [id ...]`
+*   `VS.SEARCH key vector [EF ef] [COUNT count] [FILTER filter] [THRESHOLD threshold]`
+*   `VS.MSEARCH key [COUNT count] [EF ef] [FILTER filter] [THRESHOLD threshold] QUERY v1 v2 ... QUERY v1 v2 ...`
+*   `VS.HYBRIDSEARCH key VECTOR vec... TEXT text [COUNT count] [EF ef] [FILTER filter] [WEIGHTS wv wb]`
+*   `VS.FEDERATEDSEARCH key vector [EF ef] [COUNT count] [FILTER filter] [THRESHOLD threshold]`
+*   `VS.CARD key [FILTER filter]`
+*   `VS.INFO key`
+*   `VS.STATS key`
+*   `VS.REBUILD key`
+*   `VS.OPTIMIZE key`
+*   `VS.EXPIRE key seconds`
+*   `VS.TTL key`
+*   `VS.QUANTIZE key method`
+*   `VS.TRAINPQ key [SUBSPACES n] [BITS b]`
+
 ### Stream Commands
 
 *   `XADD key ID field value [field value ...]`

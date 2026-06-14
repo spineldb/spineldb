@@ -85,6 +85,10 @@ harness = false
 name = "memory_bench"
 harness = false
 
+[[bench]]
+name = "vector_bench"
+harness = false
+
 [dev-dependencies]
 # Property-based testing
 proptest = "1.4"

@@ -6,3 +6,4 @@ pub mod data_types;
 pub mod hll;
 pub mod stream;
 pub mod ttl;
+pub mod vector;

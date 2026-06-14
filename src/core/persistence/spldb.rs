@@ -54,6 +54,7 @@ const SPLDB_TYPE_JSON: u8 = 6;
 const SPLDB_TYPE_HTTPCACHE: u8 = 7;
 const SPLDB_TYPE_HYPERLOGLOG: u8 = 8;
 const SPLDB_TYPE_BLOOMFILTER: u8 = 9;
+const SPLDB_TYPE_SPINELVECTOR: u8 = 10;
 /// Highest type_id this build knows how to deserialize. Anything above is
 /// a future variant that we cannot load and must reject.
 const SPLDB_KNOWN_MAX_TYPE: u8 = SPLDB_TYPE_BLOOMFILTER;
@@ -646,6 +647,11 @@ fn serialize_single_value_data(buf: &mut BytesMut, data: &DataValue) -> io::Resu
             let serialized_bf = bf.serialize();
             write_string(buf, &serialized_bf);
         }
+        DataValue::SpinelVector(sv) => {
+            buf.put_u8(SPLDB_TYPE_SPINELVECTOR);
+            let serialized_sv = sv.serialize();
+            write_string(buf, &serialized_sv);
+        }
         DataValue::HttpCache {
             variants, vary_on, ..
         } => {
@@ -840,6 +846,14 @@ fn deserialize_single_value_data(cursor: &mut Bytes, value_type: u8) -> io::Resu
                     Error::new(ErrorKind::InvalidData, "Failed to deserialize BloomFilter")
                 })?;
             Ok(DataValue::BloomFilter(Box::new(bf)))
+        }
+        SPLDB_TYPE_SPINELVECTOR => {
+            let vector_bytes = read_string(cursor)?;
+            let sv = crate::core::storage::vector::SpinelVector::deserialize(&vector_bytes)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "Failed to deserialize SpinelVector")
+                })?;
+            Ok(DataValue::SpinelVector(Box::new(sv)))
         }
         SPLDB_TYPE_HTTPCACHE => {
             let vary_len = read_length_encoding(cursor)? as usize;
