@@ -1,3 +1,4 @@
+use crate::core::SpinelDBError;
 use crate::core::cluster::state::NodeFlags;
 use crate::core::commands::command_spec::CommandSpec;
 use crate::core::commands::command_trait::{
@@ -8,7 +9,6 @@ use crate::core::database::ExecutionContext;
 use crate::core::protocol::{RespFrame, RespFrameCodec, RespValue};
 use crate::core::storage::data_types::DataValue;
 use crate::core::storage::vector::MetadataFilter;
-use crate::core::SpinelDBError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::join_all;
@@ -233,7 +233,13 @@ impl ExecutableCommand for VsFederatedSearch {
                         None
                     };
                     let results = sv
-                        .search_with_filter(&query, count * 2, ef, parsed_filter.as_ref(), threshold)
+                        .search_with_filter(
+                            &query,
+                            count * 2,
+                            ef,
+                            parsed_filter.as_ref(),
+                            threshold,
+                        )
                         .map_err(SpinelDBError::InvalidRequest)?;
                     // Serialize results as RespFrame
                     let mut resp_results = Vec::new();
@@ -298,8 +304,7 @@ impl ExecutableCommand for VsFederatedSearch {
                             .ok()
                             .and_then(|s| s.parse::<f32>().ok())
                     {
-                        all_results
-                            .push((String::from_utf8_lossy(id).to_string(), dist));
+                        all_results.push((String::from_utf8_lossy(id).to_string(), dist));
                     }
                 }
             }
@@ -333,10 +338,7 @@ impl ExecutableCommand for VsFederatedSearch {
             })
             .collect();
 
-        Ok((
-            RespValue::Array(resp_results),
-            WriteOutcome::DidNotWrite,
-        ))
+        Ok((RespValue::Array(resp_results), WriteOutcome::DidNotWrite))
     }
 }
 
@@ -403,14 +405,8 @@ mod tests {
 
     #[test]
     fn test_parse_federatedsearch_with_count() {
-        let c = VsFederatedSearch::parse(&[
-            bs("idx"),
-            bs("1.0"),
-            bs("2.0"),
-            bs("COUNT"),
-            bs("5"),
-        ])
-        .unwrap();
+        let c = VsFederatedSearch::parse(&[bs("idx"), bs("1.0"), bs("2.0"), bs("COUNT"), bs("5")])
+            .unwrap();
         assert_eq!(c.count, 5);
     }
 

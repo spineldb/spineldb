@@ -11,6 +11,7 @@ use crate::core::storage::data_types::DataValue;
 use crate::core::{RespValue, SpinelDBError};
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::time::{Duration, Instant};
 
 /// Implements the `VS.EXPIRE` command to set TTL on a vector index.
 ///
@@ -56,6 +57,8 @@ impl ExecutableCommand for VsExpire {
 
         if let DataValue::SpinelVector(ref mut sv) = entry.data {
             sv.set_ttl(self.seconds);
+            // Also set StoredValue expiry so the lazy-free system actually deletes the key
+            entry.expiry = Some(Instant::now() + Duration::from_secs(self.seconds));
             entry.version = entry.version.wrapping_add(1);
 
             Ok((

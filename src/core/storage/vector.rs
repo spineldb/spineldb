@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 /// Distance metric used for vector similarity search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -190,12 +191,13 @@ pub fn quantize_int8(v: &[f32]) -> (Vec<u8>, f32, i8) {
     };
 
     let scale = range / 255.0;
-    let zero_point = (-min / scale).round() as i8;
+    let zero_point_f = (-min / scale).round();
+    let zero_point = (zero_point_f as i32).clamp(-128, 127) as i8;
 
     let quantized: Vec<u8> = v
         .iter()
         .map(|&x| {
-            let q = (x / scale + zero_point as f32).round() as i32;
+            let q = (x / scale + zero_point_f).round() as i32;
             q.clamp(0, 255) as u8
         })
         .collect();
@@ -532,6 +534,11 @@ impl BM25Index {
     /// Score a query against all documents.
     pub fn score(&self, query_terms: &[String]) -> Vec<(usize, f32)> {
         let mut scores: Vec<(usize, f32)> = Vec::new();
+        let avg_dl = if self.avg_doc_len > 0.0 {
+            self.avg_doc_len
+        } else {
+            1.0
+        };
 
         for entry in &self.entries {
             let mut score = 0.0f32;
@@ -541,8 +548,7 @@ impl BM25Index {
                     let tf_norm = (tf as f32 * (self.k1 + 1.0))
                         / (tf as f32
                             + self.k1
-                                * (1.0 - self.b
-                                    + self.b * entry.terms.len() as f32 / self.avg_doc_len));
+                                * (1.0 - self.b + self.b * entry.terms.len() as f32 / avg_dl));
                     score += idf * tf_norm;
                 }
             }
@@ -620,10 +626,14 @@ pub enum MetadataFilter {
     NotEquals(String, String),
     /// Key contains substring
     Contains(String, String),
-    /// Key > value (lexicographic comparison)
+    /// Key > value (numeric comparison for numbers, lexicographic for strings)
     GreaterThan(String, String),
-    /// Key < value (lexicographic comparison)
+    /// Key >= value (inclusive)
+    GreaterThanEquals(String, String),
+    /// Key < value (numeric comparison for numbers, lexicographic for strings)
     LessThan(String, String),
+    /// Key <= value (inclusive)
+    LessThanEquals(String, String),
     /// Logical AND of multiple filters
     And(Vec<MetadataFilter>),
     /// Logical OR of multiple filters
@@ -632,28 +642,33 @@ pub enum MetadataFilter {
     Not(Box<MetadataFilter>),
 }
 
+/// Try to parse a string as f64 for numeric comparison.
+fn try_parse_f64(s: &str) -> Option<f64> {
+    s.parse::<f64>().ok()
+}
+
 impl MetadataFilter {
     /// Check if a metadata entry matches this filter.
     pub fn matches(&self, metadata: Option<&Bytes>) -> bool {
         match self {
             MetadataFilter::Equals(key, value) => {
                 if let Some(meta) = metadata {
-                    if let Ok(obj) = serde_json::from_slice::<serde_json::Value>(meta)
-                        && let Some(v) = obj.get(key)
-                    {
-                        return match v {
-                            serde_json::Value::String(s) => s == value,
-                            serde_json::Value::Number(n) => n.to_string() == *value,
-                            serde_json::Value::Bool(b) => {
-                                b.to_string().to_lowercase() == value.to_lowercase()
-                            }
-                            serde_json::Value::Null => value == "null",
-                            _ => v.to_string().as_str() == value.as_str(),
+                    if let Ok(obj) = serde_json::from_slice::<serde_json::Value>(meta) {
+                        return match obj.get(key.as_str()) {
+                            Some(v) => match v {
+                                serde_json::Value::String(s) => s == value,
+                                serde_json::Value::Number(n) => n.to_string() == *value,
+                                serde_json::Value::Bool(b) => {
+                                    b.to_string().to_lowercase() == value.to_lowercase()
+                                }
+                                serde_json::Value::Null => value == "null",
+                                _ => v.to_string().as_str() == value.as_str(),
+                            },
+                            None => false,
                         };
                     }
-                    // Fallback: simple substring match
-                    let meta_str = String::from_utf8_lossy(meta);
-                    meta_str.contains(value.as_str())
+                    // JSON parse failed: no match possible
+                    false
                 } else {
                     false
                 }
@@ -680,11 +695,35 @@ impl MetadataFilter {
                         && let Some(v) = obj.get(key)
                     {
                         let v_str = match v {
-                            serde_json::Value::Number(n) => n.to_string(),
                             serde_json::Value::String(s) => s.clone(),
                             _ => v.to_string(),
                         };
+                        // Try numeric comparison first
+                        if let (Some(vn), Some(vn2)) = (try_parse_f64(&v_str), try_parse_f64(value))
+                        {
+                            return vn > vn2;
+                        }
                         return v_str > *value;
+                    }
+                    false
+                } else {
+                    false
+                }
+            }
+            MetadataFilter::GreaterThanEquals(key, value) => {
+                if let Some(meta) = metadata {
+                    if let Ok(obj) = serde_json::from_slice::<serde_json::Value>(meta)
+                        && let Some(v) = obj.get(key)
+                    {
+                        let v_str = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => v.to_string(),
+                        };
+                        if let (Some(vn), Some(vn2)) = (try_parse_f64(&v_str), try_parse_f64(value))
+                        {
+                            return vn >= vn2;
+                        }
+                        return v_str >= *value;
                     }
                     false
                 } else {
@@ -697,11 +736,34 @@ impl MetadataFilter {
                         && let Some(v) = obj.get(key)
                     {
                         let v_str = match v {
-                            serde_json::Value::Number(n) => n.to_string(),
                             serde_json::Value::String(s) => s.clone(),
                             _ => v.to_string(),
                         };
+                        if let (Some(vn), Some(vn2)) = (try_parse_f64(&v_str), try_parse_f64(value))
+                        {
+                            return vn < vn2;
+                        }
                         return v_str < *value;
+                    }
+                    false
+                } else {
+                    false
+                }
+            }
+            MetadataFilter::LessThanEquals(key, value) => {
+                if let Some(meta) = metadata {
+                    if let Ok(obj) = serde_json::from_slice::<serde_json::Value>(meta)
+                        && let Some(v) = obj.get(key)
+                    {
+                        let v_str = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => v.to_string(),
+                        };
+                        if let (Some(vn), Some(vn2)) = (try_parse_f64(&v_str), try_parse_f64(value))
+                        {
+                            return vn <= vn2;
+                        }
+                        return v_str <= *value;
                     }
                     false
                 } else {
@@ -734,7 +796,7 @@ impl MetadataFilter {
             return Ok(MetadataFilter::Not(Box::new(inner)));
         }
 
-        // Parse simple operators
+        // Parse simple operators (order matters: check >=, <=, != before >, <, =)
         if let Some(pos) = expr.find("!=") {
             let key = expr[..pos].trim().to_string();
             let val = expr[pos + 2..].trim().to_string();
@@ -743,12 +805,21 @@ impl MetadataFilter {
         if let Some(pos) = expr.find(">=") {
             let key = expr[..pos].trim().to_string();
             let val = expr[pos + 2..].trim().to_string();
-            // Approximate: use GreaterThan
-            return Ok(MetadataFilter::GreaterThan(key, val));
+            return Ok(MetadataFilter::GreaterThanEquals(key, val));
         }
         if let Some(pos) = expr.find("<=") {
             let key = expr[..pos].trim().to_string();
             let val = expr[pos + 2..].trim().to_string();
+            return Ok(MetadataFilter::LessThanEquals(key, val));
+        }
+        if let Some(pos) = expr.find('>') {
+            let key = expr[..pos].trim().to_string();
+            let val = expr[pos + 1..].trim().to_string();
+            return Ok(MetadataFilter::GreaterThan(key, val));
+        }
+        if let Some(pos) = expr.find('<') {
+            let key = expr[..pos].trim().to_string();
+            let val = expr[pos + 1..].trim().to_string();
             return Ok(MetadataFilter::LessThan(key, val));
         }
         if let Some(pos) = expr.find('=') {
@@ -857,7 +928,7 @@ struct HnswSearchCtx<'a> {
 }
 
 /// HNSW index for approximate nearest neighbor search.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct HnswIndex {
     max_level: usize,
     ef_construction: usize,
@@ -870,7 +941,7 @@ pub struct HnswIndex {
     node_connections: Vec<Vec<Vec<usize>>>,
     deleted: std::collections::HashSet<usize>,
     total_inserts: u64,
-    total_searches: u64,
+    total_searches: AtomicU64,
     total_deletes: u64,
 }
 
@@ -885,6 +956,28 @@ impl PartialEq for HnswIndex {
             && self.entry_point == other.entry_point
             && self.node_levels == other.node_levels
             && self.node_connections == other.node_connections
+            && self.total_searches.load(AtomicOrdering::Relaxed)
+                == other.total_searches.load(AtomicOrdering::Relaxed)
+    }
+}
+
+impl Clone for HnswIndex {
+    fn clone(&self) -> Self {
+        Self {
+            max_level: self.max_level,
+            ef_construction: self.ef_construction,
+            ef_search: self.ef_search,
+            m: self.m,
+            m_max0: self.m_max0,
+            levels: self.levels.clone(),
+            entry_point: self.entry_point,
+            node_levels: self.node_levels.clone(),
+            node_connections: self.node_connections.clone(),
+            deleted: self.deleted.clone(),
+            total_inserts: self.total_inserts,
+            total_searches: AtomicU64::new(self.total_searches.load(AtomicOrdering::Relaxed)),
+            total_deletes: self.total_deletes,
+        }
     }
 }
 
@@ -903,7 +996,7 @@ impl HnswIndex {
             node_connections: Vec::new(),
             deleted: std::collections::HashSet::new(),
             total_inserts: 0,
-            total_searches: 0,
+            total_searches: AtomicU64::new(0),
             total_deletes: 0,
         }
     }
@@ -975,7 +1068,8 @@ impl HnswIndex {
             }
 
             let node_id = current.id;
-            if level < self.node_connections[node_id].len() {
+            if node_id < self.node_connections.len() && level < self.node_connections[node_id].len()
+            {
                 for &neighbor_id in &self.node_connections[node_id][level] {
                     if visited.contains(&neighbor_id) || self.deleted.contains(&neighbor_id) {
                         continue;
@@ -1207,7 +1301,8 @@ impl HnswIndex {
         ef: usize,
     ) -> (Vec<(usize, f32)>, u64) {
         let results = self.search(query, vectors, k, metric, ef);
-        (results, self.total_searches)
+        let count = self.total_searches.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+        (results, count)
     }
 
     pub fn remove_node(&mut self, node_id: usize) {
@@ -1263,12 +1358,7 @@ impl HnswIndex {
 
     /// Incrementally update a node: remove old connections and re-insert with new vector.
     /// This avoids a full graph rebuild.
-    pub fn update_node(
-        &mut self,
-        node_id: usize,
-        vectors: &[Vec<f32>],
-        metric: DistanceMetric,
-    ) {
+    pub fn update_node(&mut self, node_id: usize, vectors: &[Vec<f32>], metric: DistanceMetric) {
         if node_id >= self.node_levels.len() {
             return;
         }
@@ -1292,7 +1382,7 @@ impl HnswIndex {
 
     /// Returns the total number of search operations.
     pub fn total_searches(&self) -> u64 {
-        self.total_searches
+        self.total_searches.load(AtomicOrdering::Relaxed)
     }
 
     /// Returns the total number of delete operations.
@@ -1302,7 +1392,11 @@ impl HnswIndex {
 
     /// Rebuild the HNSW index from scratch.
     pub fn rebuild(&mut self, vectors: &[Vec<f32>], metric: DistanceMetric) {
+        let saved_searches = self.total_searches.load(AtomicOrdering::Relaxed);
+        let saved_deletes = self.total_deletes;
         *self = HnswIndex::new(self.m, self.ef_construction, self.ef_search);
+        self.total_searches = AtomicU64::new(saved_searches);
+        self.total_deletes = saved_deletes;
         for i in 0..vectors.len() {
             self.insert(i, vectors, metric);
         }
@@ -1360,7 +1454,7 @@ impl PartialEq for SpinelVector {
 
 impl SpinelVector {
     const MAGIC: &'static [u8] = b"SPINELVEC";
-    const VERSION: u8 = 1;
+    const VERSION: u8 = 2;
 
     /// Maximum supported vector dimension.
     pub const MAX_DIMENSION: u32 = 65536;
@@ -1427,7 +1521,7 @@ impl SpinelVector {
             deleted_count: self.hnsw.deleted.len(),
             entry_point: self.hnsw.entry_point,
             total_inserts: self.hnsw.total_inserts,
-            total_searches: self.hnsw.total_searches,
+            total_searches: self.hnsw.total_searches.load(AtomicOrdering::Relaxed),
             total_deletes: self.hnsw.total_deletes,
         }
     }
@@ -1534,6 +1628,9 @@ impl SpinelVector {
             }
             QuantizationMethod::None => {}
             QuantizationMethod::ProductQuantize => {
+                if self.pq.is_none() {
+                    return Err("PQ not trained: call VS.TRAINPQ first".to_string());
+                }
                 for v in &self.vectors_raw {
                     if let Some(ref pq) = self.pq {
                         self.pq_codes.push(pq.encode(v));
@@ -1561,6 +1658,11 @@ impl SpinelVector {
     /// Set TTL in seconds for the entire index.
     pub fn set_ttl(&mut self, seconds: u64) {
         self.ttl_seconds = Some(seconds);
+        // Reset created_at so TTL is calculated from this moment
+        self.created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
     }
 
     /// Get TTL in seconds.
@@ -1701,9 +1803,9 @@ impl SpinelVector {
         let vector_refs: Vec<(usize, f32)> = vector_results
             .iter()
             .enumerate()
-            .map(|(rank, r)| {
-                let idx = *self.id_to_index.get(&r.id).unwrap_or(&0);
-                (idx, rank as f32)
+            .filter_map(|(rank, r)| {
+                let idx = *self.id_to_index.get(&r.id)?;
+                Some((idx, rank as f32))
             })
             .collect();
 
@@ -1824,10 +1926,33 @@ impl SpinelVector {
             self.remove_metadata_index(idx, &old_metadata);
             self.entries[idx].vector = final_vector.clone();
             self.entries[idx].metadata = metadata.clone();
-            self.vectors_raw[idx] = final_vector;
+            self.vectors_raw[idx] = final_vector.clone();
             if let Some(ref meta) = metadata {
                 self.index_metadata(idx, meta);
             }
+
+            // Update quantized representation if quantization is active
+            match self.quantization {
+                QuantizationMethod::Int8 => {
+                    let (quantized, scale, zero_point) = quantize_int8(&final_vector);
+                    if idx < self.quantized_vectors.len() {
+                        self.quantized_vectors[idx] = quantized;
+                    }
+                    if idx < self.quantization_params.len() {
+                        self.quantization_params[idx] = QuantizationParams { scale, zero_point };
+                    }
+                }
+                QuantizationMethod::ProductQuantize => {
+                    if let Some(ref pq) = self.pq {
+                        let codes = pq.encode(&final_vector);
+                        if idx < self.pq_codes.len() {
+                            self.pq_codes[idx] = codes;
+                        }
+                    }
+                }
+                QuantizationMethod::None => {}
+            }
+
             // Rebuild HNSW to maintain correct graph structure
             self.hnsw.rebuild(&self.vectors_raw, self.metric);
             return Ok(false);
@@ -1884,9 +2009,18 @@ impl SpinelVector {
             let old_metadata = self.entries[idx].metadata.take();
             self.remove_metadata_index(idx, &old_metadata);
 
-            // Remove from entries and vectors_raw
+            // Remove from all parallel arrays
             self.entries.remove(idx);
             self.vectors_raw.remove(idx);
+            if idx < self.quantized_vectors.len() {
+                self.quantized_vectors.remove(idx);
+            }
+            if idx < self.quantization_params.len() {
+                self.quantization_params.remove(idx);
+            }
+            if idx < self.pq_codes.len() {
+                self.pq_codes.remove(idx);
+            }
             self.id_to_index.remove(id);
 
             // Rebuild id_to_index since indices shifted
@@ -1897,27 +2031,16 @@ impl SpinelVector {
 
             // Rebuild metadata index since indices shifted
             self.metadata_index.clear();
-            let entries_meta: Vec<Option<Bytes>> = self
-                .entries
-                .iter()
-                .map(|e| e.metadata.clone())
-                .collect();
+            let entries_meta: Vec<Option<Bytes>> =
+                self.entries.iter().map(|e| e.metadata.clone()).collect();
             for (i, meta) in entries_meta.into_iter().enumerate() {
                 if let Some(ref m) = meta {
                     self.index_metadata(i, m);
                 }
             }
 
-            // Rebuild HNSW if too many deleted nodes accumulate
-            // Threshold: deleted nodes > 30% of live nodes or > 1000 nodes
-            let live_count = self.entries.len();
-            let deleted_count = self.hnsw.deleted_count();
-            let should_rebuild =
-                (live_count > 0 && deleted_count > live_count * 3 / 10) || deleted_count > 1000;
-
-            if should_rebuild {
-                self.hnsw.rebuild(&self.vectors_raw, self.metric);
-            }
+            // Always rebuild HNSW after shifting indices to keep node IDs aligned
+            self.hnsw.rebuild(&self.vectors_raw, self.metric);
 
             true
         } else {
@@ -2003,9 +2126,10 @@ impl SpinelVector {
             }
             // Check inverted index candidates first (O(1) lookup)
             if let Some(ref candidates) = index_set
-                && !candidates.contains(&idx) {
-                    return false;
-                }
+                && !candidates.contains(&idx)
+            {
+                return false;
+            }
             // Check metadata filter (for complex filters or when no index available)
             if index_set.is_none()
                 && let Some(f) = filter
@@ -2041,6 +2165,10 @@ impl SpinelVector {
                 effective_ef,
             )
         };
+
+        self.hnsw
+            .total_searches
+            .fetch_add(1, AtomicOrdering::Relaxed);
 
         let mut results: Vec<SearchResult> = raw_results
             .into_iter()
@@ -2118,6 +2246,13 @@ impl SpinelVector {
         }
 
         if let Some(m) = metadata {
+            // Remove old metadata from inverted index
+            let old_metadata = self.entries[idx].metadata.take();
+            self.remove_metadata_index(idx, &old_metadata);
+            // Set new metadata and index it
+            if let Some(ref meta_bytes) = m {
+                self.index_metadata(idx, meta_bytes);
+            }
             self.entries[idx].metadata = m;
         }
 
@@ -2150,14 +2285,71 @@ impl SpinelVector {
                 .sum::<usize>();
         let id_map_size: usize = self.id_to_index.capacity()
             * (std::mem::size_of::<Bytes>() + std::mem::size_of::<usize>());
-        base + entries_size + vectors_raw_size + id_map_size
+
+        // HNSW graph memory: node_levels, levels, node_connections
+        let hnsw_node_levels_size = self.hnsw.node_levels.capacity() * std::mem::size_of::<usize>();
+        let hnsw_levels_size: usize = self
+            .hnsw
+            .levels
+            .iter()
+            .map(|l| l.capacity() * std::mem::size_of::<usize>())
+            .sum();
+        let hnsw_connections_size: usize = self
+            .hnsw
+            .node_connections
+            .iter()
+            .map(|node| {
+                node.iter()
+                    .map(|level| level.capacity() * std::mem::size_of::<usize>())
+                    .sum::<usize>()
+            })
+            .sum();
+        let hnsw_deleted_size = self.hnsw.deleted.capacity() * std::mem::size_of::<usize>();
+
+        // Quantized vectors and PQ codes
+        let quantized_size: usize = self.quantized_vectors.iter().map(|v| v.capacity()).sum();
+        let pq_codes_size: usize = self.pq_codes.iter().map(|v| v.capacity()).sum();
+
+        // Metadata inverted index
+        let metadata_index_size: usize = self
+            .metadata_index
+            .iter()
+            .map(|(k, v)| {
+                k.len()
+                    + v.iter()
+                        .map(|(vk, vl)| vk.len() + vl.capacity() * std::mem::size_of::<usize>())
+                        .sum::<usize>()
+            })
+            .sum();
+
+        base + entries_size
+            + vectors_raw_size
+            + id_map_size
+            + hnsw_node_levels_size
+            + hnsw_levels_size
+            + hnsw_connections_size
+            + hnsw_deleted_size
+            + quantized_size
+            + pq_codes_size
+            + metadata_index_size
     }
 
     /// Serialize the SpinelVector to a compact binary format.
     ///
-    /// Format:
+    /// Format v2:
     /// "SPINELVEC" (9) | version (1) | dimension (4) | metric (1) |
     /// max_capacity (8) | vectors_added (8) | m (4) | ef_construction (4) | ef_search (4) |
+    /// vectors_deleted (8) | has_ttl (1) | [ttl_seconds (8)] | created_at (8) |
+    /// quantization_method (1) |
+    /// [INT8: count(4) | for each: data_len(4) + data + scale(4) + zero_point(1)] |
+    /// [PQ: trained(1) | num_subspaces(4) | bits_per_code(4) |
+    ///   for each codebook: centroid_count(4) | for each centroid: dim(4) + floats |
+    ///   pq_count(4) | for each: len(4) + codes] |
+    /// bm25_doc_count(4) | bm25_avg_doc_len(4) |
+    /// [for each bm25 entry: doc_id(4) | terms_count(4) | for each term: len(4)+bytes |
+    ///   tf_count(4) | for each tf: len(4)+bytes + val(4)] |
+    /// idf_count(4) | for each idf: len(4)+bytes + val(4) |
+    /// hybrid_weight_vector(4) | hybrid_weight_bm25(4) |
     /// count (4) | [for each vector: id_len (4) | id | vec_len (4) | vec_data | meta_len (4) | meta]
     pub fn serialize(&self) -> Bytes {
         let mut bytes = Vec::new();
@@ -2172,6 +2364,95 @@ impl SpinelVector {
         bytes.extend_from_slice(&(self.m as u32).to_le_bytes());
         bytes.extend_from_slice(&(self.ef_construction as u32).to_le_bytes());
         bytes.extend_from_slice(&(self.ef_search as u32).to_le_bytes());
+
+        // State
+        bytes.extend_from_slice(&self.vectors_deleted.to_le_bytes());
+        match self.ttl_seconds {
+            Some(ttl) => {
+                bytes.push(1u8);
+                bytes.extend_from_slice(&ttl.to_le_bytes());
+            }
+            None => {
+                bytes.push(0u8);
+            }
+        }
+        bytes.extend_from_slice(&self.created_at.to_le_bytes());
+
+        // Quantization
+        bytes.push(self.quantization as u8);
+        match self.quantization {
+            QuantizationMethod::Int8 => {
+                let count = self.quantized_vectors.len() as u32;
+                bytes.extend_from_slice(&count.to_le_bytes());
+                for (qv, qp) in self
+                    .quantized_vectors
+                    .iter()
+                    .zip(self.quantization_params.iter())
+                {
+                    bytes.extend_from_slice(&(qv.len() as u32).to_le_bytes());
+                    bytes.extend_from_slice(qv);
+                    bytes.extend_from_slice(&qp.scale.to_le_bytes());
+                    bytes.push(qp.zero_point as u8);
+                }
+            }
+            QuantizationMethod::ProductQuantize => {
+                match &self.pq {
+                    Some(pq) => {
+                        bytes.push(1u8); // trained
+                        bytes.extend_from_slice(&(pq.num_subspaces as u32).to_le_bytes());
+                        bytes.extend_from_slice(&(pq.bits_per_code as u32).to_le_bytes());
+                        for codebook in &pq.codebooks {
+                            bytes.extend_from_slice(
+                                &(codebook.centroids.len() as u32).to_le_bytes(),
+                            );
+                            for centroid in &codebook.centroids {
+                                bytes.extend_from_slice(&(centroid.len() as u32).to_le_bytes());
+                                for &v in centroid {
+                                    bytes.extend_from_slice(&v.to_le_bytes());
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        bytes.push(0u8); // not trained
+                    }
+                }
+                let count = self.pq_codes.len() as u32;
+                bytes.extend_from_slice(&count.to_le_bytes());
+                for codes in &self.pq_codes {
+                    bytes.extend_from_slice(&(codes.len() as u32).to_le_bytes());
+                    bytes.extend_from_slice(codes);
+                }
+            }
+            QuantizationMethod::None => {}
+        }
+
+        // BM25
+        bytes.extend_from_slice(&(self.bm25.doc_count as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.bm25.avg_doc_len.to_le_bytes());
+        bytes.extend_from_slice(&(self.bm25.entries.len() as u32).to_le_bytes());
+        for entry in &self.bm25.entries {
+            bytes.extend_from_slice(&(entry.doc_id as u32).to_le_bytes());
+            bytes.extend_from_slice(&(entry.terms.len() as u32).to_le_bytes());
+            for term in &entry.terms {
+                bytes.extend_from_slice(&(term.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(term.as_bytes());
+            }
+            bytes.extend_from_slice(&(entry.term_freq.len() as u32).to_le_bytes());
+            for (k, v) in &entry.term_freq {
+                bytes.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(k.as_bytes());
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&(self.bm25.idf.len() as u32).to_le_bytes());
+        for (k, v) in &self.bm25.idf {
+            bytes.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(k.as_bytes());
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        bytes.extend_from_slice(&self.hybrid_weight_vector.to_le_bytes());
+        bytes.extend_from_slice(&self.hybrid_weight_bm25.to_le_bytes());
 
         // Vector count
         let count = self.entries.len() as u32;
@@ -2239,6 +2520,228 @@ impl SpinelVector {
         let ef_search = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
         cursor += 4;
 
+        // v2 state fields
+        let vectors_deleted = if version >= 2 {
+            let v = u64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+            cursor += 8;
+            v
+        } else {
+            0
+        };
+
+        let (ttl_seconds, created_at) = if version >= 2 {
+            let has_ttl = *data.get(cursor)?;
+            cursor += 1;
+            let ttl = if has_ttl == 1 {
+                let t = u64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+                cursor += 8;
+                Some(t)
+            } else {
+                None
+            };
+            let ca = u64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+            cursor += 8;
+            (ttl, ca)
+        } else {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            (None, now)
+        };
+
+        // Quantization
+        let (quantization, quantized_vectors, quantization_params, pq, pq_codes) = if version >= 2 {
+            let qm = match *data.get(cursor)? {
+                0 => QuantizationMethod::None,
+                1 => QuantizationMethod::Int8,
+                2 => QuantizationMethod::ProductQuantize,
+                _ => return None,
+            };
+            cursor += 1;
+
+            let mut qv = Vec::new();
+            let mut qp = Vec::new();
+            let mut pq_inst = None;
+            let mut pq_c = Vec::new();
+
+            match qm {
+                QuantizationMethod::Int8 => {
+                    let count = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                    cursor += 4;
+                    for _ in 0..count {
+                        let data_len =
+                            u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                        cursor += 4;
+                        let qd =
+                            Bytes::copy_from_slice(data.get(cursor..cursor + data_len as usize)?);
+                        cursor += data_len as usize;
+                        let scale =
+                            f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                        cursor += 4;
+                        let zp = *data.get(cursor)? as i8;
+                        cursor += 1;
+                        qv.push(qd.to_vec());
+                        qp.push(QuantizationParams {
+                            scale,
+                            zero_point: zp,
+                        });
+                    }
+                }
+                QuantizationMethod::ProductQuantize => {
+                    let trained = *data.get(cursor)?;
+                    cursor += 1;
+                    if trained == 1 {
+                        let num_subspaces =
+                            u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?)
+                                as usize;
+                        cursor += 4;
+                        let bits_per_code =
+                            u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?)
+                                as usize;
+                        cursor += 4;
+                        let mut codebooks = Vec::with_capacity(num_subspaces);
+                        for _ in 0..num_subspaces {
+                            let centroid_count =
+                                u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?)
+                                    as usize;
+                            cursor += 4;
+                            let mut centroids = Vec::with_capacity(centroid_count);
+                            for _ in 0..centroid_count {
+                                let dim = u32::from_le_bytes(
+                                    data.get(cursor..cursor + 4)?.try_into().ok()?,
+                                ) as usize;
+                                cursor += 4;
+                                let mut centroid = Vec::with_capacity(dim);
+                                for _ in 0..dim {
+                                    let v = f32::from_le_bytes(
+                                        data.get(cursor..cursor + 4)?.try_into().ok()?,
+                                    );
+                                    cursor += 4;
+                                    centroid.push(v);
+                                }
+                                centroids.push(centroid);
+                            }
+                            codebooks.push(PQCodebook { centroids });
+                        }
+                        pq_inst = Some(ProductQuantizer {
+                            num_subspaces,
+                            bits_per_code,
+                            codebooks,
+                            trained: true,
+                        });
+                    }
+                    let pq_count =
+                        u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                    cursor += 4;
+                    for _ in 0..pq_count {
+                        let len =
+                            u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                        cursor += 4;
+                        let codes =
+                            Bytes::copy_from_slice(data.get(cursor..cursor + len as usize)?);
+                        cursor += len as usize;
+                        pq_c.push(codes.to_vec());
+                    }
+                }
+                QuantizationMethod::None => {}
+            }
+            (qm, qv, qp, pq_inst, pq_c)
+        } else {
+            (
+                QuantizationMethod::None,
+                Vec::new(),
+                Vec::new(),
+                None,
+                Vec::new(),
+            )
+        };
+
+        // BM25
+        let (bm25, hybrid_weight_vector, hybrid_weight_bm25) = if version >= 2 {
+            let doc_count =
+                u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+            cursor += 4;
+            let avg_doc_len = f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+            cursor += 4;
+
+            let entries_count =
+                u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+            cursor += 4;
+            let mut entries = Vec::with_capacity(entries_count);
+            for _ in 0..entries_count {
+                let doc_id =
+                    u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+                cursor += 4;
+                let terms_count =
+                    u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+                cursor += 4;
+                let mut terms = Vec::with_capacity(terms_count);
+                for _ in 0..terms_count {
+                    let len = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                    cursor += 4;
+                    let s = String::from_utf8(data.get(cursor..cursor + len as usize)?.to_vec())
+                        .ok()?;
+                    cursor += len as usize;
+                    terms.push(s);
+                }
+                let tf_count =
+                    u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+                cursor += 4;
+                let mut term_freq = std::collections::HashMap::with_capacity(tf_count);
+                for _ in 0..tf_count {
+                    let len = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                    cursor += 4;
+                    let k = String::from_utf8(data.get(cursor..cursor + len as usize)?.to_vec())
+                        .ok()?;
+                    cursor += len as usize;
+                    let v = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                    cursor += 4;
+                    term_freq.insert(k, v);
+                }
+                entries.push(BM25Entry {
+                    doc_id,
+                    terms,
+                    term_freq,
+                });
+            }
+
+            let idf_count =
+                u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+            cursor += 4;
+            let mut idf = std::collections::HashMap::with_capacity(idf_count);
+            for _ in 0..idf_count {
+                let len = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                cursor += 4;
+                let k =
+                    String::from_utf8(data.get(cursor..cursor + len as usize)?.to_vec()).ok()?;
+                cursor += len as usize;
+                let v = f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+                cursor += 4;
+                idf.insert(k, v);
+            }
+
+            let hwv = f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+            cursor += 4;
+            let hwb = f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
+            cursor += 4;
+
+            (
+                BM25Index {
+                    entries,
+                    avg_doc_len,
+                    doc_count,
+                    idf,
+                    k1: 1.5,
+                    b: 0.75,
+                },
+                hwv,
+                hwb,
+            )
+        } else {
+            (BM25Index::new(), 0.5, 0.5)
+        };
+
         let count = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
         cursor += 4;
 
@@ -2248,10 +2751,7 @@ impl SpinelVector {
         // Auto-normalize for Cosine metric
         let normalize_vectors = metric == DistanceMetric::Cosine;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let last_expiry_check = created_at;
 
         let mut sv = Self {
             dimension,
@@ -2265,19 +2765,19 @@ impl SpinelVector {
             vectors_raw: Vec::with_capacity(count as usize),
             id_to_index: HashMap::with_capacity(count as usize),
             hnsw: HnswIndex::new(m_usize, ef_construction_usize, ef_search as usize),
-            vectors_deleted: 0,
+            vectors_deleted,
             normalize_vectors,
-            quantization: QuantizationMethod::None,
-            quantized_vectors: Vec::new(),
-            quantization_params: Vec::new(),
-            pq: None,
-            pq_codes: Vec::new(),
-            ttl_seconds: None,
-            created_at: now,
-            last_expiry_check: now,
-            bm25: BM25Index::new(),
-            hybrid_weight_vector: 0.5,
-            hybrid_weight_bm25: 0.5,
+            quantization,
+            quantized_vectors,
+            quantization_params,
+            pq,
+            pq_codes,
+            ttl_seconds,
+            created_at,
+            last_expiry_check,
+            bm25,
+            hybrid_weight_vector,
+            hybrid_weight_bm25,
             metadata_index: HashMap::new(),
         };
 
@@ -2550,6 +3050,7 @@ mod tests {
             let meta = Some(Bytes::from(format!("meta-{}", i)));
             sv.add(id, vector, meta).unwrap();
         }
+        sv.set_ttl(3600);
 
         let bytes = sv.serialize();
         let restored = SpinelVector::deserialize(&bytes).expect("deserialize should succeed");
@@ -2558,6 +3059,8 @@ mod tests {
         assert_eq!(restored.metric(), sv.metric());
         assert_eq!(restored.len(), sv.len());
         assert_eq!(restored.vectors_added(), sv.vectors_added());
+        assert_eq!(restored.get_ttl(), Some(3600));
+        assert_eq!(restored.vectors_deleted(), sv.vectors_deleted());
 
         for i in 0..50 {
             let id = Bytes::from(format!("vec-{}", i));
@@ -2566,6 +3069,45 @@ mod tests {
             assert_eq!(orig.vector, rest.vector);
             assert_eq!(orig.metadata, rest.metadata);
         }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_v1_compat() {
+        // Manually construct a v1 payload (no v2 state fields)
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"SPINELVEC");
+        bytes.push(1u8); // version 1
+        bytes.extend_from_slice(&3u32.to_le_bytes()); // dimension
+        bytes.push(0u8); // metric L2
+        bytes.extend_from_slice(&1000u64.to_le_bytes()); // max_capacity
+        bytes.extend_from_slice(&2u64.to_le_bytes()); // vectors_added
+        bytes.extend_from_slice(&16u32.to_le_bytes()); // m
+        bytes.extend_from_slice(&200u32.to_le_bytes()); // ef_construction
+        bytes.extend_from_slice(&10u32.to_le_bytes()); // ef_search
+        // v1: no vectors_deleted, no ttl, no created_at, no quantization, no bm25
+        bytes.extend_from_slice(&2u32.to_le_bytes()); // count
+        // vector 1
+        bytes.extend_from_slice(&2u32.to_le_bytes()); // id_len
+        bytes.extend_from_slice(b"v1");
+        bytes.extend_from_slice(&3u32.to_le_bytes()); // vec_len
+        for &v in &[1.0f32, 2.0, 3.0] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // meta_len
+        // vector 2
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(b"v2");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        for &v in &[4.0f32, 5.0, 6.0] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        let data = Bytes::from(bytes);
+        let restored = SpinelVector::deserialize(&data).expect("v1 compat should work");
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored.get_ttl(), None);
+        assert_eq!(restored.vectors_deleted(), 0);
     }
 
     #[test]
@@ -2579,7 +3121,7 @@ mod tests {
     fn test_deserialize_rejects_future_version() {
         let mut bad = Vec::from(b"SPINELVEC");
         bad.push(255u8); // future version
-        bad.extend_from_slice(&[0u8; 100]);
+        bad.extend_from_slice(&[0u8; 200]);
         assert!(SpinelVector::deserialize(&Bytes::from(bad)).is_none());
     }
 
@@ -2882,5 +3424,94 @@ mod tests {
     #[test]
     fn test_max_dimension() {
         assert_eq!(SpinelVector::MAX_DIMENSION, 65536);
+    }
+
+    #[test]
+    fn test_quantize_int8_extreme_values_no_panic() {
+        // Vector with values that would cause zero_point to overflow i8
+        let v = vec![1e6, -1e6, 1e6, -1e6];
+        let (quantized, scale, zero_point) = quantize_int8(&v);
+        assert_eq!(quantized.len(), 4);
+        assert!(scale > 0.0);
+        // zero_point should be clamped to i8 range (i8::MIN..=i8::MAX is always true for i8)
+        // Just verify it was computed without panic
+
+        // Roundtrip: dequantize should approximate original
+        let restored = dequantize_int8(&quantized, scale, zero_point);
+        for (orig, rest) in v.iter().zip(restored.iter()) {
+            // Quantization loses precision, but sign should be preserved
+            assert_eq!(orig.signum(), rest.signum());
+        }
+    }
+
+    #[test]
+    fn test_quantize_int8_all_same_values() {
+        let v = vec![5.0, 5.0, 5.0, 5.0];
+        let (quantized, _scale, _zp) = quantize_int8(&v);
+        // All same values should quantize to same value
+        assert!(quantized.windows(2).all(|w| w[0] == w[1]));
+    }
+
+    #[test]
+    fn test_metadata_filter_equals_missing_key_returns_false() {
+        // Metadata exists but doesn't contain the filter key
+        let f = MetadataFilter::parse_expr("nonexistent=value").unwrap();
+        let meta = Some(Bytes::from(r#"{"other_key":"value"}"#));
+        assert!(!f.matches(meta.as_ref()));
+    }
+
+    #[test]
+    fn test_metadata_filter_equals_no_json_returns_false() {
+        // Metadata is not valid JSON
+        let f = MetadataFilter::parse_expr("key=value").unwrap();
+        let meta = Some(Bytes::from_static(b"not json at all"));
+        assert!(!f.matches(meta.as_ref()));
+    }
+
+    #[test]
+    fn test_metadata_filter_equals_empty_metadata_returns_false() {
+        let f = MetadataFilter::parse_expr("key=value").unwrap();
+        assert!(!f.matches(None));
+    }
+
+    #[test]
+    fn test_metadata_filter_equals_partial_match_rejected() {
+        // "cat" should NOT match "category" key
+        let f = MetadataFilter::parse_expr("type=cat").unwrap();
+        let meta = Some(Bytes::from(r#"{"type":"category"}"#));
+        assert!(!f.matches(meta.as_ref()));
+    }
+
+    #[test]
+    fn test_hybrid_search_empty_bm25_no_panic() {
+        let mut sv = SpinelVector::new(2, DistanceMetric::L2, 1000, 16, 200, 10);
+        sv.add(Bytes::from_static(b"v1"), make_vector(&[1.0, 0.0]), None)
+            .unwrap();
+
+        // Hybrid search with no BM25 documents indexed should not panic
+        let results = sv.hybrid_search(&make_vector(&[1.0, 0.0]), "test query", 1, None, None);
+        assert!(results.is_ok());
+        assert_eq!(results.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_hybrid_search_with_bm25_documents() {
+        let mut sv = SpinelVector::new(2, DistanceMetric::L2, 1000, 16, 200, 10);
+        sv.add(Bytes::from_static(b"v1"), make_vector(&[1.0, 0.0]), None)
+            .unwrap();
+        sv.add(Bytes::from_static(b"v2"), make_vector(&[0.0, 1.0]), None)
+            .unwrap();
+
+        // Index BM25 documents
+        sv.add_hybrid_document(0, "red apple fruit");
+        sv.add_hybrid_document(1, "blue ocean water");
+
+        // Query matching v1's text
+        let results = sv
+            .hybrid_search(&make_vector(&[1.0, 0.0]), "apple", 2, None, None)
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        // v1 should rank higher due to BM25 match
+        assert_eq!(results[0].id, Bytes::from_static(b"v1"));
     }
 }

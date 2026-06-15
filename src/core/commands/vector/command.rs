@@ -152,7 +152,7 @@ impl CommandSpec for Vector {
         -2
     }
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::READONLY
+        CommandFlags::WRITE | CommandFlags::DENY_OOM
     }
     fn first_key(&self) -> i64 {
         0

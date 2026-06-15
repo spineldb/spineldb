@@ -106,6 +106,12 @@ impl ParseCommand for VsReserve {
                 "dimension must be greater than 0".to_string(),
             ));
         }
+        if dimension > SpinelVector::MAX_DIMENSION {
+            return Err(SpinelDBError::InvalidRequest(format!(
+                "dimension must be at most {}",
+                SpinelVector::MAX_DIMENSION
+            )));
+        }
         if capacity == 0 {
             return Err(SpinelDBError::InvalidRequest(
                 "capacity must be greater than 0".to_string(),

@@ -86,6 +86,8 @@ impl ExecutableCommand for VsTrainPq {
             sv.train_pq(self.subspaces, self.bits)
                 .map_err(SpinelDBError::InvalidRequest)?;
 
+            entry.version = entry.version.wrapping_add(1);
+
             let (subspaces, bits) = sv.pq_info();
             let pq_info = vec![
                 RespValue::BulkString(Bytes::from_static(b"subspaces")),
@@ -94,7 +96,10 @@ impl ExecutableCommand for VsTrainPq {
                 RespValue::BulkString(Bytes::from(bits.to_string())),
             ];
 
-            Ok((RespValue::Array(pq_info), WriteOutcome::DidNotWrite))
+            Ok((
+                RespValue::Array(pq_info),
+                WriteOutcome::Write { keys_modified: 1 },
+            ))
         } else {
             Err(SpinelDBError::WrongType)
         }
