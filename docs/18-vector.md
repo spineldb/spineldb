@@ -9,7 +9,7 @@ SpinelDB provides vector similarity search commands powered by SpinelVector. A S
 Creates a new vector index with the specified parameters.
 
 -   **key**: The name of the vector index to create.
--   **dimension**: The dimensionality of vectors to be stored (1–32768).
+-   **dimension**: The dimensionality of vectors to be stored (1–65536).
 -   **metric**: The distance metric to use: `L2` (Euclidean), `COSINE`, or `IP` (inner product).
 -   **CAPACITY**: Maximum number of vectors (default: 10000).
 -   **M**: Maximum number of connections per node in the HNSW graph (default: 16, minimum: 2).
@@ -63,15 +63,15 @@ Adds a vector to an existing index.
 -   **key**: The name of the vector index.
 -   **id**: A unique string identifier for the vector.
 -   **vector**: One or more floating-point values representing the vector data, separated by spaces.
--   **metadata**: Optional string metadata to associate with the vector.
+-   **metadata**: Optional string metadata to associate with the vector (JSON recommended for filtering).
 
-**Return Value:** `OK` on success. Error if the index is full, dimension mismatches, or the vector contains NaN/Inf.
+**Return Value:** `1` if a new vector was added, `0` if an existing vector was overwritten. Error if the index is full, dimension mismatches, or the vector contains NaN/Inf.
 
 **Examples:**
 
 ```
 VS.ADD myapp:embeddings vec:001 0.1 0.2 0.3 0.4
-VS.ADD myapp:embeddings vec:002 0.5 0.6 0.7 0.8 METADATA "user:123"
+VS.ADD myapp:embeddings vec:002 0.5 0.6 0.7 0.8 METADATA "{\"user\":\"123\"}"
 ```
 
 ### VS.MADD key [id vector [METADATA metadata] ...]
@@ -81,13 +81,13 @@ Adds multiple vectors to an index in a single command.
 -   **key**: The name of the vector index.
 -   **id vector**: Pairs of ID and vector data, optionally followed by `METADATA`.
 
-**Return Value:** An array of results, one per input pair. Each result is `OK` on success or an error message.
+**Return Value:** An array of results, one per input pair. Each result is `1` (new) or `0` (overwrite) on success, or an error message.
 
 **Examples:**
 
 ```
 VS.MADD myapp:embeddings v1 0.1 0.2 0.3 v2 0.4 0.5 0.6
-VS.MADD myapp:embeddings v1 0.1 0.2 METADATA "a" v2 0.3 0.4 METADATA "b"
+VS.MADD myapp:embeddings v1 0.1 0.2 METADATA "{\"a\":1}" v2 0.3 0.4 METADATA "{\"b\":2}"
 ```
 
 ### VS.GET key id
@@ -107,7 +107,7 @@ VS.GET myapp:embeddings vec:001
 
 ### VS.UPDATE key id [VECTOR v1 v2 ...] [METADATA metadata]
 
-Updates a vector's embedding and/or metadata in place. At least one of `VECTOR` or `METADATA` must be provided. Updating the vector triggers an HNSW rebuild.
+Updates a vector's embedding and/or metadata in place. At least one of `VECTOR` or `METADATA` must be provided. Updating the vector triggers an incremental HNSW node update (no full rebuild needed).
 
 -   **key**: The name of the vector index.
 -   **id**: The vector identifier.
@@ -120,13 +120,13 @@ Updates a vector's embedding and/or metadata in place. At least one of `VECTOR` 
 
 ```
 VS.UPDATE myapp:embeddings vec:001 VECTOR 0.9 0.8 0.7 0.6
-VS.UPDATE myapp:embeddings vec:001 METADATA "user:456"
-VS.UPDATE myapp:embeddings vec:001 VECTOR 0.1 0.2 0.3 METADATA "updated"
+VS.UPDATE myapp:embeddings vec:001 METADATA "{\"user\":\"456\"}"
+VS.UPDATE myapp:embeddings vec:001 VECTOR 0.1 0.2 0.3 METADATA "{\"updated\":true}"
 ```
 
 ### VS.DEL key id [id ...]
 
-Removes one or more vectors by ID.
+Removes one or more vectors by ID. Uses lazy deletion — the entry is tombstoned and removed from the HNSW graph, but storage is not reclaimed until `VS.OPTIMIZE` is called.
 
 -   **key**: The name of the vector index.
 -   **id**: One or more vector identifiers to remove.
@@ -275,7 +275,7 @@ VS.QUANTIZE myapp:embeddings NONE
 
 ### VS.TRAINPQ key [SUBSPACES n] [BITS b]
 
-Trains Product Quantization (PQ) codebooks on the existing vectors in the index.
+Trains Product Quantization (PQ) codebooks on the existing vectors in the index. Uses k-means++ initialization for faster convergence and better codebook quality.
 
 -   **key**: The name of the vector index.
 -   **SUBSPACES**: Number of PQ subspaces (default: dimension/4).
@@ -343,7 +343,7 @@ Returns metadata about a vector index.
 -   `deleted_count` — number of lazily deleted nodes
 -   `vectors_added` — total vectors ever added
 -   `vectors_deleted` — total vectors ever deleted
--   `memory_usage_bytes` — estimated memory usage
+-   `memory_usage_bytes` — estimated memory usage in bytes
 
 **Examples:**
 
@@ -363,7 +363,7 @@ Returns detailed HNSW and index performance statistics.
 -   `hnsw_node_count` — number of nodes in the graph
 -   `hnsw_deleted_count` — lazily deleted nodes
 -   `hnsw_total_inserts`, `hnsw_total_searches`, `hnsw_total_deletes` — lifetime counters
--   `memory_usage_bytes` — estimated memory usage
+-   `memory_usage_bytes` — estimated memory usage in bytes
 
 **Examples:**
 
@@ -383,11 +383,13 @@ The `FILTER` parameter accepted by `VS.SEARCH`, `VS.MSEARCH`, `VS.CARD`, `VS.HYB
 | `>=` | `price>=10` | Greater than or equal |
 | `<` | `price<10` | Less than |
 | `<=` | `price<=10` | Less than or equal |
-| `,` (AND) | `type=a,price<10` | All conditions must match |
-| `\|` (OR) | `type=a\|type=b` | Any condition matches |
-| `!` (NOT) | `!type=a` | Negation |
+| `AND` | `type=a AND status=active` | Logical AND (both must match) |
+| `OR` | `type=a OR type=b` | Logical OR (either matches) |
+| `NOT` | `NOT type=a` | Negation |
 
-Metadata is stored as JSON. Filter expressions are evaluated against the JSON fields.
+Complex expressions can be combined: `NOT (type=a AND status=deleted)`.
+
+Metadata is stored as JSON. Filter expressions are evaluated against the JSON fields. Values are compared as strings unless both sides are parseable as numbers.
 
 **Performance note:** Equality filters (`=`) use an internal inverted index for O(1) lookup, making them significantly faster than comparison or compound filters on large datasets.
 
@@ -400,7 +402,7 @@ Metadata is stored as JSON. Filter expressions are evaluated against the JSON fi
 | `IP` | Negated inner product (-a·b) | (-∞, 0] |
 
 -   **L2**: Best for general-purpose similarity. Lower distance means more similar.
--   **Cosine**: Best for normalized embeddings (e.g., text embeddings). Measures angle between vectors.
+-   **Cosine**: Best for normalized embeddings (e.g., text embeddings). Measures angle between vectors. Vectors are auto-normalized on insert and search.
 -   **Inner Product**: Best for embeddings where magnitude matters. Lower (more negative) distance means more similar.
 
 ## HNSW Parameters
@@ -424,6 +426,27 @@ The HNSW algorithm uses these parameters to balance speed vs. recall:
 SpinelVector includes several built-in optimizations for production workloads:
 
 -   **Loop-unrolled distance computation**: L2, Cosine, and Inner Product distances use 8-element loop unrolling for automatic compiler vectorization.
+-   **K-means++ initialization**: PQ codebook training uses k-means++ seeding for faster convergence and better quantization quality.
 -   **Metadata inverted index**: Equality filters (`FILTER key=value`) use an internal inverted index for O(1) lookup instead of scanning all entries.
 -   **Incremental HNSW updates**: `VS.UPDATE` reconnects only the updated node instead of rebuilding the entire graph.
--   **Pre-filter during graph traversal**: Metadata filters and distance thresholds are evaluated during HNSW traversal, not after, reducing unnecessary distance computations.
+-   **Pre-filter during graph traversal**: Metadata filters and distance thresholds are evaluated during HNSW traversal, not after, reducing unnecessary distance computations. Filtered search uses adaptive expansion factor bounded by total entries.
+-   **O(1) BM25 average**: Hybrid search maintains a running total of term counts for O(1) average document length updates instead of O(N) re-scans.
+-   **Lazy deletion with compaction**: `VS.DEL` marks vectors as tombstones without shifting indices. `VS.OPTIMIZE` compacts storage and rebuilds the metadata index.
+-   **Binary serialization**: Compact binary format (v3) with backward compatibility to v1. BM25 state, quantization parameters, and TTL are persisted across restarts.
+
+## Serialization Format
+
+SpinelVector indices are serialized using a compact binary format for persistence (`.spldb` files). The format uses little-endian encoding with the following layout:
+
+```
+Header: "SPINELVEC" (9 bytes) | version (1 byte, currently 3)
+Config: dimension (4) | metric (1) | max_capacity (8) | vectors_added (8)
+        | m (4) | ef_construction (4) | ef_search (4)
+State:  vectors_deleted (8) | has_ttl (1) | [ttl (8)] | created_at (8)
+Quant:  quantization_method (1) | [quantized data]
+Text:   bm25_doc_count (4) | bm25_total_term_count (4) | bm25_avg_doc_len (4)
+        | bm25 entries... | bm25 idf... | hybrid_weights (8)
+Data:   vector_count (4) | [for each: id + vector + metadata]
+```
+
+Version 1 and 2 data files are automatically upgraded to v3 on deserialization.

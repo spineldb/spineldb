@@ -376,7 +376,75 @@ impl ProductQuantizer {
     }
 }
 
-/// Simple k-means implementation for PQ training.
+/// Compute squared L2 distance between two vectors (used in k-means).
+fn squared_l2(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
+}
+
+/// K-means++ initialization: pick centroids spread far apart.
+fn kmeans_pp_init(vectors: &[Vec<f32>], k: usize) -> Vec<Vec<f32>> {
+    let n = vectors.len();
+    let actual_k = k.min(n);
+    let mut rng_seed: u64 = 0xdeadbeef;
+
+    // Simple xorshift64 PRNG for deterministic but good centroid seeding.
+    let next_rand = |state: &mut u64| -> usize {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        (*state % n as u64) as usize
+    };
+
+    let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(actual_k);
+    // Pick first centroid deterministically (index 0)
+    centroids.push(vectors[0].clone());
+
+    // Squared distances from each vector to nearest existing centroid
+    let mut min_sq_dists: Vec<f32> = vectors
+        .iter()
+        .map(|v| squared_l2(v, &centroids[0]))
+        .collect();
+
+    for _ in 1..actual_k {
+        // Compute total distance for weighted random selection
+        let total: f32 = min_sq_dists.iter().sum();
+        if total <= 0.0 {
+            // All remaining vectors are identical to existing centroids;
+            // pick evenly spaced indices as fallback
+            let idx = next_rand(&mut rng_seed);
+            centroids.push(vectors[idx].clone());
+            continue;
+        }
+
+        // Weighted random selection proportional to squared distance
+        let threshold = total * (next_rand(&mut rng_seed) as f32 / n as f32);
+        let mut cumulative = 0.0f32;
+        let mut selected = centroids.len().min(n - 1);
+        for (i, &d) in min_sq_dists.iter().enumerate() {
+            cumulative += d;
+            if cumulative >= threshold {
+                selected = i;
+                break;
+            }
+        }
+
+        centroids.push(vectors[selected].clone());
+
+        // Update min distances for the new centroid
+        for (i, v) in vectors.iter().enumerate() {
+            let d = squared_l2(v, centroids.last().unwrap());
+            if d < min_sq_dists[i] {
+                min_sq_dists[i] = d;
+            }
+        }
+    }
+
+    centroids
+}
+
+/// K-means clustering for PQ training.
+///
+/// Uses k-means++ initialization and runs up to `max_iterations` EM steps.
 fn k_means(vectors: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<Vec<f32>> {
     if vectors.is_empty() || k == 0 {
         return Vec::new();
@@ -386,11 +454,7 @@ fn k_means(vectors: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<Vec<f32
     let n = vectors.len();
     let actual_k = k.min(n);
 
-    // Initialize centroids randomly
-    let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(actual_k);
-    for i in 0..actual_k {
-        centroids.push(vectors[i * n / actual_k].clone());
-    }
+    let mut centroids = kmeans_pp_init(vectors, actual_k);
 
     let mut assignments = vec![0usize; n];
 
@@ -402,11 +466,7 @@ fn k_means(vectors: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<Vec<f32
             let mut best = 0;
             let mut best_dist = f32::MAX;
             for (c, centroid) in centroids.iter().enumerate() {
-                let dist: f32 = v
-                    .iter()
-                    .zip(centroid.iter())
-                    .map(|(a, b)| (a - b).powi(2))
-                    .sum();
+                let dist = squared_l2(v, centroid);
                 if dist < best_dist {
                     best_dist = dist;
                     best = c;
@@ -422,7 +482,7 @@ fn k_means(vectors: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<Vec<f32
             break;
         }
 
-        // Recompute centroids
+        // Recompute centroids (handle empty clusters by keeping old centroid)
         let mut counts = vec![0usize; actual_k];
         let mut sums = vec![vec![0.0f32; dim]; actual_k];
         for (i, v) in vectors.iter().enumerate() {
@@ -438,6 +498,7 @@ fn k_means(vectors: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<Vec<f32
                     centroids[c][j] = sums[c][j] / counts[c] as f32;
                 }
             }
+            // If counts[c] == 0, keep old centroid (avoids dead clusters)
         }
     }
 
@@ -459,6 +520,7 @@ pub struct BM25Entry {
 pub struct BM25Index {
     pub entries: Vec<BM25Entry>,
     pub avg_doc_len: f32,
+    pub total_term_count: usize,
     pub doc_count: usize,
     pub idf: std::collections::HashMap<String, f32>,
     pub df: std::collections::HashMap<String, usize>,
@@ -477,6 +539,7 @@ impl BM25Index {
         Self {
             entries: Vec::new(),
             avg_doc_len: 0.0,
+            total_term_count: 0,
             doc_count: 0,
             idf: std::collections::HashMap::new(),
             df: std::collections::HashMap::new(),
@@ -510,20 +573,17 @@ impl BM25Index {
             }
         }
 
+        let doc_len = terms.len();
         self.entries.push(BM25Entry {
             doc_id,
-            terms: terms.clone(),
+            terms,
             term_freq,
         });
         self.doc_count += 1;
+        self.total_term_count += doc_len;
 
-        // Update average document length incrementally
-        let total_len: usize = self.entries.iter().map(|e| e.terms.len()).sum();
-        self.avg_doc_len = if self.doc_count > 0 {
-            total_len as f32 / self.doc_count as f32
-        } else {
-            0.0
-        };
+        // O(1) incremental average update instead of O(N) full scan
+        self.avg_doc_len = self.total_term_count as f32 / self.doc_count as f32;
 
         // Incrementally update IDF for affected terms
         let n = self.doc_count as f32;
@@ -592,6 +652,13 @@ pub fn reciprocal_rank_fusion(
     let mut results: Vec<(usize, f32)> = scores.into_iter().collect();
     results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
     results.into_iter().take(k).collect()
+}
+
+/// Get current Unix timestamp in seconds. Falls back to 0 if system clock is before UNIX_EPOCH.
+fn current_timestamp_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Compute cosine distance between two vectors. Returns a value in [0, 2].
@@ -1473,7 +1540,7 @@ impl PartialEq for SpinelVector {
 
 impl SpinelVector {
     const MAGIC: &'static [u8] = b"SPINELVEC";
-    const VERSION: u8 = 2;
+    const VERSION: u8 = 3;
 
     /// Maximum supported vector dimension.
     pub const MAX_DIMENSION: u32 = 65536;
@@ -1489,10 +1556,7 @@ impl SpinelVector {
     ) -> Self {
         // Auto-normalize for Cosine metric
         let normalize_vectors = metric == DistanceMetric::Cosine;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = current_timestamp_secs();
         Self {
             dimension,
             metric,
@@ -1736,11 +1800,7 @@ impl SpinelVector {
     /// Set TTL in seconds for the entire index.
     pub fn set_ttl(&mut self, seconds: u64) {
         self.ttl_seconds = Some(seconds);
-        // Reset created_at so TTL is calculated from this moment
-        self.created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        self.created_at = current_timestamp_secs();
     }
 
     /// Get TTL in seconds.
@@ -1751,10 +1811,7 @@ impl SpinelVector {
     /// Get remaining TTL in seconds.
     pub fn get_remaining_ttl(&self) -> Option<u64> {
         let ttl = self.ttl_seconds?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = current_timestamp_secs();
         let elapsed = now.saturating_sub(self.created_at);
         Some(ttl.saturating_sub(elapsed))
     }
@@ -1780,10 +1837,7 @@ impl SpinelVector {
 
     /// Update last expiry check timestamp.
     pub fn update_expiry_check(&mut self) {
-        self.last_expiry_check = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        self.last_expiry_check = current_timestamp_secs();
     }
 
     // ─── Count with Filter ─────────────────────────────────────────────────
@@ -2210,8 +2264,16 @@ impl SpinelVector {
         // Use pre-filter during HNSW traversal for better performance
         let raw_results = if has_filter {
             // Use pre-filtered search: filter is checked during graph traversal
-            // Use larger ef to compensate for filtered-out nodes
-            let search_ef = (effective_ef * 3).max(k * 3);
+            // Adaptive ef: cap at total entries to avoid excessive expansion
+            let total_entries = self.entries.len();
+            let search_ef = if let Some(ref candidates) = index_set {
+                // When inverted index provides candidates, ef is bounded by match count
+                let match_count = candidates.len();
+                (effective_ef + match_count).min(total_entries)
+            } else {
+                // Without index: use 2x multiplier with floor of k*2, capped by total
+                (effective_ef * 2).max(k * 2).min(total_entries)
+            };
             self.hnsw.search_with_filter(
                 &final_query,
                 &self.vectors_raw,
@@ -2329,7 +2391,7 @@ impl SpinelVector {
         Ok(true)
     }
 
-    /// Estimate memory usage in bytes.
+    /// Estimate actual memory usage in bytes (RSS-oriented: counts allocated capacity).
     pub fn memory_usage(&self) -> usize {
         let base = std::mem::size_of::<Self>();
         let entries_size: usize = self
@@ -2338,26 +2400,28 @@ impl SpinelVector {
             .map(|e| {
                 std::mem::size_of::<VectorEntry>()
                     + e.id.len()
-                    + e.vector.capacity() * std::mem::size_of::<f32>()
+                    + e.vector.len() * std::mem::size_of::<f32>()
                     + e.metadata.as_ref().map_or(0, |m| m.len())
             })
             .sum();
-        let vectors_raw_size: usize = self.vectors_raw.capacity() * std::mem::size_of::<Vec<f32>>()
+        // vectors_raw stores raw float vectors; len() == actual used elements
+        let vectors_raw_size: usize = std::mem::size_of::<Vec<Vec<f32>>>() * self.vectors_raw.len()
             + self
                 .vectors_raw
                 .iter()
-                .map(|v| v.capacity() * std::mem::size_of::<f32>())
+                .map(|v| v.len() * std::mem::size_of::<f32>())
                 .sum::<usize>();
+        // id_to_index: HashMap overhead + entries (using capacity for actual allocation)
         let id_map_size: usize = self.id_to_index.capacity()
             * (std::mem::size_of::<Bytes>() + std::mem::size_of::<usize>());
 
-        // HNSW graph memory: node_levels, levels, node_connections
-        let hnsw_node_levels_size = self.hnsw.node_levels.capacity() * std::mem::size_of::<usize>();
+        // HNSW graph memory
+        let hnsw_node_levels_size = self.hnsw.node_levels.len() * std::mem::size_of::<usize>();
         let hnsw_levels_size: usize = self
             .hnsw
             .levels
             .iter()
-            .map(|l| l.capacity() * std::mem::size_of::<usize>())
+            .map(|l| l.len() * std::mem::size_of::<usize>())
             .sum();
         let hnsw_connections_size: usize = self
             .hnsw
@@ -2365,15 +2429,16 @@ impl SpinelVector {
             .iter()
             .map(|node| {
                 node.iter()
-                    .map(|level| level.capacity() * std::mem::size_of::<usize>())
+                    .map(|level| level.len() * std::mem::size_of::<usize>())
                     .sum::<usize>()
             })
             .sum();
-        let hnsw_deleted_size = self.hnsw.deleted.capacity() * std::mem::size_of::<usize>();
+        // HashSet capacity is approximate; count actual deleted nodes
+        let hnsw_deleted_size = self.hnsw.deleted.len() * std::mem::size_of::<usize>();
 
         // Quantized vectors and PQ codes
-        let quantized_size: usize = self.quantized_vectors.iter().map(|v| v.capacity()).sum();
-        let pq_codes_size: usize = self.pq_codes.iter().map(|v| v.capacity()).sum();
+        let quantized_size: usize = self.quantized_vectors.iter().map(|v| v.len()).sum();
+        let pq_codes_size: usize = self.pq_codes.iter().map(|v| v.len()).sum();
 
         // Metadata inverted index
         let metadata_index_size: usize = self
@@ -2382,7 +2447,11 @@ impl SpinelVector {
             .map(|(k, v)| {
                 k.len()
                     + v.iter()
-                        .map(|(vk, vl)| vk.len() + vl.capacity() * std::mem::size_of::<usize>())
+                        .map(|(vk, vl)| {
+                            vk.len()
+                                + std::mem::size_of::<String>()
+                                + vl.len() * std::mem::size_of::<usize>()
+                        })
                         .sum::<usize>()
             })
             .sum();
@@ -2494,6 +2563,7 @@ impl SpinelVector {
 
         // BM25
         bytes.extend_from_slice(&(self.bm25.doc_count as u32).to_le_bytes());
+        bytes.extend_from_slice(&(self.bm25.total_term_count as u32).to_le_bytes());
         bytes.extend_from_slice(&self.bm25.avg_doc_len.to_le_bytes());
         bytes.extend_from_slice(&(self.bm25.entries.len() as u32).to_le_bytes());
         for entry in &self.bm25.entries {
@@ -2608,11 +2678,7 @@ impl SpinelVector {
             cursor += 8;
             (ttl, ca)
         } else {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            (None, now)
+            (None, current_timestamp_secs())
         };
 
         // Quantization
@@ -2727,6 +2793,15 @@ impl SpinelVector {
             let doc_count =
                 u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
             cursor += 4;
+            // total_term_count added in v3
+            let total_term_count = if version >= 3 {
+                let v = u32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+                cursor += 4;
+                v
+            } else {
+                // Reconstruct from entries during deserialization
+                0
+            };
             let avg_doc_len = f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
             cursor += 4;
 
@@ -2791,10 +2866,18 @@ impl SpinelVector {
             let hwb = f32::from_le_bytes(data.get(cursor..cursor + 4)?.try_into().ok()?);
             cursor += 4;
 
+            // v2 compat: reconstruct total_term_count from entries if not stored
+            let resolved_total_term_count = if total_term_count > 0 {
+                total_term_count
+            } else {
+                entries.iter().map(|e| e.terms.len()).sum()
+            };
+
             (
                 BM25Index {
                     entries,
                     avg_doc_len,
+                    total_term_count: resolved_total_term_count,
                     doc_count,
                     idf,
                     df: std::collections::HashMap::new(),
