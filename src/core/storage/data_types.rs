@@ -363,7 +363,7 @@ impl StoredValue {
 }
 
 /// Recursively estimates the memory usage of a `serde_json::Value` without serialization.
-fn estimate_json_memory(val: &serde_json::Value) -> usize {
+pub fn estimate_json_memory(val: &serde_json::Value) -> usize {
     use serde_json::Value;
     match val {
         Value::Null | Value::Bool(_) => std::mem::size_of::<Value>(),

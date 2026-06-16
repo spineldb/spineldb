@@ -91,6 +91,20 @@ impl Db {
                 guards: self.lock_shards_for_keys(&keys).await,
             },
 
+            // `JSON.MGET` always requires multi-key locks because its implementation
+            // accesses the `guards` map directly. Even with a single key, it needs
+            // `ExecutionLocks::Multi`.
+            Command::Json(j)
+                if matches!(
+                    j.subcommand,
+                    crate::core::commands::json::command::JsonSubcommand::MGet(_)
+                ) =>
+            {
+                ExecutionLocks::Multi {
+                    guards: self.lock_shards_for_keys(&keys).await,
+                }
+            }
+
             // Commands operating on multiple keys require locks on all relevant shards.
             _ if keys.len() > 1 => ExecutionLocks::Multi {
                 guards: self.lock_shards_for_keys(&keys).await,

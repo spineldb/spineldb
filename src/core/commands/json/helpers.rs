@@ -150,7 +150,9 @@ where
         }
     }
 
-    unreachable!();
+    Err(SpinelDBError::Internal(
+        "Unexpected end of path traversal".into(),
+    ))
 }
 
 /// Finds and removes a value at a specific path, returning the removed value.
@@ -226,27 +228,7 @@ pub fn format_json_number(num: &Number) -> String {
     }
 }
 
-/// Recursively estimates the memory usage of a `serde_json::Value` without serialization.
-pub fn estimate_json_memory(val: &serde_json::Value) -> usize {
-    use serde_json::Value;
-    match val {
-        Value::Null | Value::Bool(_) => std::mem::size_of::<Value>(),
-        Value::Number(n) => std::mem::size_of::<Value>() + n.to_string().len(),
-        Value::String(s) => std::mem::size_of::<Value>() + s.capacity(),
-        Value::Array(arr) => {
-            std::mem::size_of::<Value>()
-                + arr.capacity() * std::mem::size_of::<Value>()
-                + arr.iter().map(estimate_json_memory).sum::<usize>()
-        }
-        Value::Object(map) => {
-            std::mem::size_of::<Value>()
-                + map
-                    .iter()
-                    .map(|(k, v)| k.capacity() + estimate_json_memory(v))
-                    .sum::<usize>()
-        }
-    }
-}
+pub use crate::core::storage::data_types::estimate_json_memory;
 
 #[cfg(test)]
 mod tests {

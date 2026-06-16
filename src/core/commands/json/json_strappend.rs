@@ -37,14 +37,14 @@ impl ParseCommand for JsonStrAppend {
             value_to_append: {
                 let json_str_arg = extract_string(&args[2])?;
                 let parsed_value: Value = serde_json::from_str(&json_str_arg).map_err(|_| {
-                    SpinelDBError::InvalidRequest(
+                    SpinelDBError::InvalidState(
                         "Value to append must be a valid JSON string".to_string(),
                     )
                 })?;
                 parsed_value
                     .as_str()
                     .ok_or_else(|| {
-                        SpinelDBError::InvalidRequest(
+                        SpinelDBError::InvalidState(
                             "Value to append must be a JSON string".to_string(),
                         )
                     })?
@@ -184,13 +184,13 @@ mod tests {
     #[test]
     fn test_json_strappend_invalid_json_value_is_error() {
         let r = JsonStrAppend::parse(&[bs("k"), bs("$.a"), bs("not_a_json_string")]);
-        assert!(matches!(r, Err(SpinelDBError::InvalidRequest(_))));
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
     }
 
     #[test]
     fn test_json_strappend_non_string_json_value_is_error() {
         let r = JsonStrAppend::parse(&[bs("k"), bs("$.a"), bs("42")]);
-        assert!(matches!(r, Err(SpinelDBError::InvalidRequest(_))));
+        assert!(matches!(r, Err(SpinelDBError::InvalidState(_))));
     }
 
     #[test]

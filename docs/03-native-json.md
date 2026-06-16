@@ -216,7 +216,7 @@ OK
 127.0.0.1:7878> JSON.NUMMULTBY user:1 $.score 2
 "192"
 ```
-**Note:** `JSON.NUMINCRBY` and `JSON.NUMMULTBY` will always return a float string (e.g., "50.0"), even if the result is a whole number.
+**Note:** `JSON.NUMINCRBY` and `JSON.NUMMULTBY` return the result as a string. If the result is a whole number, it is returned without a decimal point (e.g., `"50"`). If the result has a fractional part, the decimal is included (e.g., `"50.5"`).
 
 ---
 

@@ -118,7 +118,7 @@ impl CommandSpec for JsonNumMultBy {
         4
     }
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::MOVABLEKEYS
+        CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::MOVABLEKEYS
     }
     fn first_key(&self) -> i64 {
         1

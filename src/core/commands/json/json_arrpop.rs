@@ -47,7 +47,7 @@ impl ExecutableCommand for JsonArrPop {
         &self,
         ctx: &mut ExecutionContext<'a>,
     ) -> Result<(RespValue, WriteOutcome), SpinelDBError> {
-        let path_str = self.path.as_deref().unwrap_or(".");
+        let path_str = self.path.as_deref().unwrap_or("$");
         let path = helpers::parse_path(path_str)?;
 
         let (shard, guard) = ctx.get_single_shard_context_mut()?;
