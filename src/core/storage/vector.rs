@@ -37,7 +37,7 @@ impl DistanceMetric {
 
 /// Compute dot product with loop unrolling (8 elements per iteration).
 #[inline]
-fn dot_product_simd(a: &[f32], b: &[f32]) -> f32 {
+fn dot_product_unrolled(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     let len = a.len();
     let chunks8 = len / 8;
@@ -66,7 +66,7 @@ fn dot_product_simd(a: &[f32], b: &[f32]) -> f32 {
 
 /// Compute L2 squared distance with loop unrolling.
 #[inline]
-fn l2_squared_simd(a: &[f32], b: &[f32]) -> f32 {
+fn l2_squared_unrolled(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     let len = a.len();
     let chunks8 = len / 8;
@@ -105,23 +105,29 @@ fn l2_squared_simd(a: &[f32], b: &[f32]) -> f32 {
 /// Compute L2 (Euclidean) distance between two vectors.
 #[inline]
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    l2_squared_simd(a, b).sqrt()
+    l2_squared_unrolled(a, b).sqrt()
 }
 
-/// Compute squared L2 norm of a vector with SIMD acceleration.
+/// Compute squared L2 norm of a vector with loop unrolling.
 #[inline]
-fn norm_squared_simd(v: &[f32]) -> f32 {
-    dot_product_simd(v, v)
+fn norm_squared_unrolled(v: &[f32]) -> f32 {
+    dot_product_unrolled(v, v)
 }
 
 /// Normalize a vector to unit length (L2 norm = 1).
 /// Returns None if the vector is zero or contains NaN/Inf.
+/// Uses a single pass to compute norm and normalize.
 pub fn normalize_vector(v: &[f32]) -> Option<Vec<f32>> {
-    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let mut norm: f32 = 0.0;
+    for &x in v {
+        norm += x * x;
+    }
+    norm = norm.sqrt();
     if !norm.is_finite() || norm < f32::EPSILON {
         return None;
     }
-    Some(v.iter().map(|x| x / norm).collect())
+    let inv_norm = 1.0 / norm;
+    Some(v.iter().map(|&x| x * inv_norm).collect())
 }
 
 /// Validate that a vector contains only finite values (no NaN, no Inf).
@@ -290,6 +296,7 @@ impl ProductQuantizer {
     /// Encode a vector into PQ codes.
     pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
         let subspace_dim = vector.len() / self.num_subspaces;
+        let max_cluster = (1 << self.bits_per_code).min(256);
         let mut codes = Vec::with_capacity(self.num_subspaces);
 
         for s in 0..self.num_subspaces {
@@ -300,10 +307,13 @@ impl ProductQuantizer {
             }
 
             let sub = &vector[start..end];
-            let mut best_cluster = 0;
+            let mut best_cluster = 0usize;
             let mut best_dist = f32::MAX;
 
             for (c, centroid) in self.codebooks[s].centroids.iter().enumerate() {
+                if c >= max_cluster {
+                    break;
+                }
                 let dist: f32 = sub
                     .iter()
                     .zip(centroid.iter())
@@ -451,6 +461,7 @@ pub struct BM25Index {
     pub avg_doc_len: f32,
     pub doc_count: usize,
     pub idf: std::collections::HashMap<String, f32>,
+    pub df: std::collections::HashMap<String, usize>,
     pub k1: f32,
     pub b: f32,
 }
@@ -468,6 +479,7 @@ impl BM25Index {
             avg_doc_len: 0.0,
             doc_count: 0,
             idf: std::collections::HashMap::new(),
+            df: std::collections::HashMap::new(),
             k1: 1.5,
             b: 0.75,
         }
@@ -489,45 +501,37 @@ impl BM25Index {
         for term in &terms {
             *term_freq.entry(term.clone()).or_insert(0) += 1;
         }
+
+        // Incrementally update document frequency
+        let mut seen = std::collections::HashSet::new();
+        for term in &terms {
+            if seen.insert(term.clone()) {
+                *self.df.entry(term.clone()).or_insert(0) += 1;
+            }
+        }
+
         self.entries.push(BM25Entry {
             doc_id,
             terms: terms.clone(),
             term_freq,
         });
         self.doc_count += 1;
-        self.rebuild_idf();
-    }
 
-    /// Rebuild IDF values.
-    fn rebuild_idf(&mut self) {
-        self.idf.clear();
-        let mut total_len = 0u64;
-        for entry in &self.entries {
-            total_len += entry.terms.len() as u64;
-        }
+        // Update average document length incrementally
+        let total_len: usize = self.entries.iter().map(|e| e.terms.len()).sum();
         self.avg_doc_len = if self.doc_count > 0 {
             total_len as f32 / self.doc_count as f32
         } else {
             0.0
         };
 
-        // Count document frequency for each term
-        let mut df = std::collections::HashMap::new();
-        for entry in &self.entries {
-            let mut seen = std::collections::HashSet::new();
-            for term in &entry.terms {
-                if seen.insert(term.clone()) {
-                    *df.entry(term.clone()).or_insert(0) += 1;
-                }
+        // Incrementally update IDF for affected terms
+        let n = self.doc_count as f32;
+        for term in &seen {
+            if let Some(&df_val) = self.df.get(term) {
+                let idf = ((n - df_val as f32 + 0.5) / (df_val as f32 + 0.5) + 1.0).ln();
+                self.idf.insert(term.clone(), idf);
             }
-        }
-
-        // Compute IDF: log((N - df + 0.5) / (df + 0.5) + 1)
-        for (term, &freq) in &df {
-            let n = self.doc_count as f32;
-            let df_val = freq as f32;
-            let idf = ((n - df_val + 0.5) / (df_val + 0.5) + 1.0).ln();
-            self.idf.insert(term.clone(), idf);
         }
     }
 
@@ -592,9 +596,9 @@ pub fn reciprocal_rank_fusion(
 
 /// Compute cosine distance between two vectors. Returns a value in [0, 2].
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    let dot = dot_product_simd(a, b);
-    let norm_a = norm_squared_simd(a).sqrt();
-    let norm_b = norm_squared_simd(b).sqrt();
+    let dot = dot_product_unrolled(a, b);
+    let norm_a = norm_squared_unrolled(a).sqrt();
+    let norm_b = norm_squared_unrolled(b).sqrt();
     if norm_a == 0.0 || norm_b == 0.0 {
         return 1.0;
     }
@@ -605,7 +609,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// Compute negated inner product (for min-heap based search, lower = more similar).
 pub fn inner_product_distance(a: &[f32], b: &[f32]) -> f32 {
-    -dot_product_simd(a, b)
+    -dot_product_unrolled(a, b)
 }
 
 /// Compute distance between two vectors using the given metric.
@@ -875,6 +879,8 @@ pub struct VectorEntry {
     pub id: Bytes,
     pub vector: Vec<f32>,
     pub metadata: Option<Bytes>,
+    /// Tombstone flag: true if this entry has been logically deleted.
+    pub deleted: bool,
 }
 
 /// Statistics about the HNSW index.
@@ -913,10 +919,22 @@ impl PartialOrd for HeapEntry {
 impl Ord for HeapEntry {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for min-heap using BinaryHeap (which is max-heap)
-        other
-            .distance
-            .partial_cmp(&self.distance)
-            .unwrap_or(Ordering::Equal)
+        // Treat NaN as greater than any finite value for consistent ordering
+        match self.distance.partial_cmp(&other.distance) {
+            Some(ord) => ord.reverse(),
+            None => {
+                // NaN handling: NaN is considered greater than any finite value
+                if self.distance.is_nan() {
+                    if other.distance.is_nan() {
+                        Ordering::Equal
+                    } else {
+                        Ordering::Less // NaN < finite in reverse (so NaN pops first from max-heap)
+                    }
+                } else {
+                    Ordering::Greater
+                }
+            }
+        }
     }
 }
 
@@ -1238,6 +1256,7 @@ impl HnswIndex {
             let mut scored: Vec<(usize, f32)> = vectors
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| !self.deleted.contains(i))
                 .filter(|(i, _)| filter.is_none_or(|f| f(*i)))
                 .map(|(i, v)| (i, compute_distance(query, v, metric)))
                 .collect();
@@ -1531,15 +1550,74 @@ impl SpinelVector {
         self.hnsw.rebuild(&self.vectors_raw, self.metric);
     }
 
-    /// Optimize the index by removing deleted nodes and compacting.
+    /// Optimize the index by removing deleted nodes and compacting parallel arrays.
+    /// This is an O(N) operation that rebuilds all data structures.
     pub fn optimize(&mut self) -> usize {
         let deleted_count = self.hnsw.deleted_count();
         if deleted_count == 0 {
             return 0;
         }
 
-        // Rebuild HNSW to remove deleted nodes
+        // Compact parallel arrays: remove tombstoned entries
+        let mut new_entries = Vec::with_capacity(self.entries.len() - deleted_count);
+        let mut new_vectors_raw = Vec::with_capacity(self.entries.len() - deleted_count);
+        let mut new_quantized = Vec::new();
+        let mut new_quant_params = Vec::new();
+        let mut new_pq_codes = Vec::new();
+        let mut new_id_to_index = HashMap::with_capacity(self.entries.len() - deleted_count);
+
+        if self.quantization != QuantizationMethod::None {
+            new_quantized = Vec::with_capacity(self.entries.len() - deleted_count);
+            new_quant_params = Vec::with_capacity(self.entries.len() - deleted_count);
+        }
+        if self.pq.is_some() {
+            new_pq_codes = Vec::with_capacity(self.entries.len() - deleted_count);
+        }
+
+        for (old_idx, entry) in self.entries.iter().enumerate() {
+            if entry.deleted {
+                continue;
+            }
+            let new_idx = new_entries.len();
+            new_id_to_index.insert(entry.id.clone(), new_idx);
+            new_vectors_raw.push(self.vectors_raw[old_idx].clone());
+            new_entries.push(VectorEntry {
+                id: entry.id.clone(),
+                vector: entry.vector.clone(),
+                metadata: entry.metadata.clone(),
+                deleted: false,
+            });
+            if old_idx < self.quantized_vectors.len() {
+                new_quantized.push(self.quantized_vectors[old_idx].clone());
+            }
+            if old_idx < self.quantization_params.len() {
+                new_quant_params.push(self.quantization_params[old_idx].clone());
+            }
+            if old_idx < self.pq_codes.len() {
+                new_pq_codes.push(self.pq_codes[old_idx].clone());
+            }
+        }
+
+        self.entries = new_entries;
+        self.vectors_raw = new_vectors_raw;
+        self.quantized_vectors = new_quantized;
+        self.quantization_params = new_quant_params;
+        self.pq_codes = new_pq_codes;
+        self.id_to_index = new_id_to_index;
+
+        // Rebuild metadata inverted index with compacted indices
+        self.metadata_index.clear();
+        let entries_meta: Vec<Option<Bytes>> =
+            self.entries.iter().map(|e| e.metadata.clone()).collect();
+        for (i, meta) in entries_meta.into_iter().enumerate() {
+            if let Some(ref m) = meta {
+                self.index_metadata(i, m);
+            }
+        }
+
+        // Rebuild HNSW from scratch with compacted vectors
         self.hnsw.rebuild(&self.vectors_raw, self.metric);
+
         deleted_count
     }
 
@@ -1553,14 +1631,14 @@ impl SpinelVector {
         self.vectors_deleted
     }
 
-    /// Get the current number of vectors stored.
+    /// Get the current number of non-deleted vectors stored.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.iter().filter(|e| !e.deleted).count()
     }
 
-    /// Check if the index is empty.
+    /// Check if the index is empty (no non-deleted vectors).
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.iter().all(|e| e.deleted)
     }
 
     /// Get the vector dimension.
@@ -1710,11 +1788,11 @@ impl SpinelVector {
 
     // ─── Count with Filter ─────────────────────────────────────────────────
 
-    /// Count vectors matching a filter.
+    /// Count vectors matching a filter (excludes deleted).
     pub fn count_with_filter(&self, filter: &MetadataFilter) -> usize {
         self.entries
             .iter()
-            .filter(|e| filter.matches(e.metadata.as_ref()))
+            .filter(|e| !e.deleted && filter.matches(e.metadata.as_ref()))
             .count()
     }
 
@@ -1921,7 +1999,7 @@ impl SpinelVector {
         };
 
         if let Some(&idx) = self.id_to_index.get(&id) {
-            // Overwrite existing - need to rebuild HNSW since vector data changed
+            // Overwrite existing - use incremental HNSW update (avoids full rebuild)
             let old_metadata = self.entries[idx].metadata.take();
             self.remove_metadata_index(idx, &old_metadata);
             self.entries[idx].vector = final_vector.clone();
@@ -1953,12 +2031,12 @@ impl SpinelVector {
                 QuantizationMethod::None => {}
             }
 
-            // Rebuild HNSW to maintain correct graph structure
-            self.hnsw.rebuild(&self.vectors_raw, self.metric);
+            // Incrementally update HNSW (removes old connections, re-inserts with new vector)
+            self.hnsw.update_node(idx, &self.vectors_raw, self.metric);
             return Ok(false);
         }
 
-        if self.entries.len() as u64 >= self.max_capacity {
+        if self.entries.iter().filter(|e| !e.deleted).count() as u64 >= self.max_capacity {
             return Err("index is full".to_string());
         }
 
@@ -1967,6 +2045,7 @@ impl SpinelVector {
             id: id.clone(),
             vector: final_vector.clone(),
             metadata: metadata.clone(),
+            deleted: false,
         });
         self.vectors_raw.push(final_vector);
         self.id_to_index.insert(id, idx);
@@ -1993,54 +2072,36 @@ impl SpinelVector {
             .collect()
     }
 
-    /// Get a vector entry by ID.
+    /// Get a vector entry by ID. Returns None if not found or deleted.
     pub fn get(&self, id: &Bytes) -> Option<&VectorEntry> {
-        self.id_to_index.get(id).map(|&idx| &self.entries[idx])
+        self.id_to_index
+            .get(id)
+            .map(|&idx| &self.entries[idx])
+            .filter(|e| !e.deleted)
     }
 
     /// Remove a vector by ID. Returns true if found and removed.
+    /// Uses lazy deletion: marks the entry as deleted and removes from HNSW graph,
+    /// but does NOT shift indices or rebuild HNSW. Call `optimize()` to compact.
     pub fn del(&mut self, id: &Bytes) -> bool {
         if let Some(&idx) = self.id_to_index.get(id) {
-            // Lazy delete from HNSW
-            self.hnsw.remove_node(idx);
+            if self.entries[idx].deleted {
+                return false;
+            }
+
+            // Mark as tombstone
+            self.entries[idx].deleted = true;
             self.vectors_deleted += 1;
 
-            // Remove metadata from inverted index before removing the entry
+            // Remove from HNSW graph (lazy delete, no rebuild needed)
+            self.hnsw.remove_node(idx);
+
+            // Remove metadata from inverted index
             let old_metadata = self.entries[idx].metadata.take();
             self.remove_metadata_index(idx, &old_metadata);
 
-            // Remove from all parallel arrays
-            self.entries.remove(idx);
-            self.vectors_raw.remove(idx);
-            if idx < self.quantized_vectors.len() {
-                self.quantized_vectors.remove(idx);
-            }
-            if idx < self.quantization_params.len() {
-                self.quantization_params.remove(idx);
-            }
-            if idx < self.pq_codes.len() {
-                self.pq_codes.remove(idx);
-            }
+            // Remove from id_to_index so get() returns None for deleted entries
             self.id_to_index.remove(id);
-
-            // Rebuild id_to_index since indices shifted
-            self.id_to_index.clear();
-            for (i, entry) in self.entries.iter().enumerate() {
-                self.id_to_index.insert(entry.id.clone(), i);
-            }
-
-            // Rebuild metadata index since indices shifted
-            self.metadata_index.clear();
-            let entries_meta: Vec<Option<Bytes>> =
-                self.entries.iter().map(|e| e.metadata.clone()).collect();
-            for (i, meta) in entries_meta.into_iter().enumerate() {
-                if let Some(ref m) = meta {
-                    self.index_metadata(i, m);
-                }
-            }
-
-            // Always rebuild HNSW after shifting indices to keep node IDs aligned
-            self.hnsw.rebuild(&self.vectors_raw, self.metric);
 
             true
         } else {
@@ -2117,6 +2178,10 @@ impl SpinelVector {
             index_candidates.map(|v| v.into_iter().collect());
 
         let filter_fn = |idx: usize| -> bool {
+            // Skip deleted entries
+            if self.entries[idx].deleted {
+                return false;
+            }
             // Check threshold
             if let Some(t) = threshold {
                 let dist = compute_distance(&final_query, &self.vectors_raw[idx], self.metric);
@@ -2454,12 +2519,12 @@ impl SpinelVector {
         bytes.extend_from_slice(&self.hybrid_weight_vector.to_le_bytes());
         bytes.extend_from_slice(&self.hybrid_weight_bm25.to_le_bytes());
 
-        // Vector count
-        let count = self.entries.len() as u32;
+        // Vector count (only non-deleted)
+        let count = self.entries.iter().filter(|e| !e.deleted).count() as u32;
         bytes.extend_from_slice(&count.to_le_bytes());
 
-        // Vector entries
-        for entry in &self.entries {
+        // Vector entries (skip deleted)
+        for entry in self.entries.iter().filter(|e| !e.deleted) {
             bytes.extend_from_slice(&(entry.id.len() as u32).to_le_bytes());
             bytes.extend_from_slice(&entry.id);
             bytes.extend_from_slice(&(entry.vector.len() as u32).to_le_bytes());
@@ -2732,6 +2797,7 @@ impl SpinelVector {
                     avg_doc_len,
                     doc_count,
                     idf,
+                    df: std::collections::HashMap::new(),
                     k1: 1.5,
                     b: 0.75,
                 },
@@ -2816,6 +2882,7 @@ impl SpinelVector {
                 id: id.clone(),
                 vector: vector.clone(),
                 metadata: metadata.clone(),
+                deleted: false,
             });
             sv.vectors_raw.push(vector);
             sv.id_to_index.insert(id, idx);
