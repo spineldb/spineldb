@@ -127,7 +127,7 @@ impl CommandSpec for Bloom {
     /// The top-level `BF` command is marked as `WRITE` because some of its subcommands
     /// (like `BF.ADD` and `BF.RESERVE`) modify the dataset.
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::DENY_OOM | CommandFlags::READONLY
+        CommandFlags::WRITE | CommandFlags::DENY_OOM
     }
     /// Returns the position of the first key argument.
     ///

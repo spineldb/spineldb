@@ -9,7 +9,7 @@ use std::io::Cursor;
 pub struct BloomFilter {
     pub bits: Vec<u8>,
     pub num_hashes: u32,
-    pub seeds: [u64; 2], // Two seeds for double hashing
+    pub seeds: [u64; 2], // seeds[0] used for hashing; seeds[1] reserved for future use
     pub capacity: u64,
     pub error_rate: f64,
     pub items_added: u64,
@@ -37,7 +37,7 @@ impl BloomFilter {
         }
     }
 
-    /// Calculates the optimal number of bits (m).
+    /// Calculates the optimal number of bytes (m) for the bit array.
     fn optimal_m(capacity: u64, error_rate: f64) -> u64 {
         let m_bits = -((capacity as f64 * error_rate.ln()) / (2.0_f64.ln().powi(2)));
         // Return number of bytes, rounding up.
