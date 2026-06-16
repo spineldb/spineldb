@@ -66,7 +66,7 @@ impl HyperLogLog {
 
         let estimate = self.alpha * M * M / sum;
 
-        // Small range correction
+        // Small range correction (linear counting)
         if estimate <= 2.5 * M {
             let v = self.count_registers_with_value(0) as f64;
             if v > 0.0 {
@@ -239,5 +239,162 @@ mod tests {
         let hll = HyperLogLog::new();
         // The struct contains 16384 bytes for registers + alpha (f64).
         assert_eq!(hll.memory_usage(), std::mem::size_of::<HyperLogLog>());
+    }
+
+    #[test]
+    fn test_default_matches_new() {
+        let hll = HyperLogLog::default();
+        assert_eq!(hll, HyperLogLog::new());
+    }
+
+    #[test]
+    fn test_different_seeds_produce_different_registers() {
+        let mut a = HyperLogLog::new();
+        let mut b = HyperLogLog::new();
+        let item = Bytes::from_static(b"test-item");
+        a.add(&item, 0);
+        b.add(&item, 1);
+        // With different seeds the register index and rho should differ
+        // for at least some items over many additions.
+        let mut a_regs = HyperLogLog::new();
+        let mut b_regs = HyperLogLog::new();
+        for i in 0..500 {
+            let elem = Bytes::from(format!("seed-test-{i}"));
+            a_regs.add(&elem, 0);
+            b_regs.add(&elem, 42);
+        }
+        assert_ne!(
+            a_regs.registers, b_regs.registers,
+            "different seeds must produce different register states"
+        );
+    }
+
+    #[test]
+    fn test_merge_identical_hlls_preserves_count() {
+        let mut a = HyperLogLog::new();
+        for i in 0..200 {
+            a.add(&Bytes::from(format!("item-{i}")), 0);
+        }
+        let count_before = a.count();
+        let b = a.clone();
+        a.merge(&b);
+        assert_eq!(
+            a.count(),
+            count_before,
+            "merging identical HLLs must preserve the count"
+        );
+    }
+
+    #[test]
+    fn test_serialize_deserialize_empty_hll() {
+        let hll = HyperLogLog::new();
+        assert_eq!(hll.count(), 0);
+        let bytes = hll.serialize();
+        let restored = HyperLogLog::deserialize(&bytes).expect("deserialize should succeed");
+        assert_eq!(restored, hll);
+        assert_eq!(restored.count(), 0);
+    }
+
+    #[test]
+    fn test_small_range_correction_with_few_items() {
+        let mut hll = HyperLogLog::new();
+        // Add a small number of items so the estimate lands in the
+        // small-range correction path (estimate <= 2.5 * M and v > 0).
+        for i in 0..10 {
+            hll.add(&Bytes::from(format!("tiny-{i}")), 0);
+        }
+        let estimate = hll.count();
+        // With the corrected formula m*ln(2m/v), 10 distinct items
+        // should produce an estimate reasonably close to 10.
+        assert!(
+            (5..=20).contains(&estimate),
+            "small-range estimate {estimate} too far from 10"
+        );
+    }
+
+    #[test]
+    fn test_count_registers_with_value_nonzero() {
+        let mut hll = HyperLogLog::new();
+        // Add items so some registers get non-zero values.
+        for i in 0..500 {
+            hll.add(&Bytes::from(format!("reg-{i}")), 0);
+        }
+        let zero_count = hll.count_registers_with_value(0);
+        let one_count = hll.count_registers_with_value(1);
+        // There must be some registers with value 0 and some with value > 0.
+        assert!(
+            zero_count > 0,
+            "should have some zero registers for 500 items"
+        );
+        assert!(one_count > 0, "should have some registers with value 1");
+        // Total must equal register count.
+        let mut total = 0u64;
+        for v in 0..=65u8 {
+            total += hll.count_registers_with_value(v);
+        }
+        assert_eq!(total, HyperLogLog::HLL_REGISTER_COUNT as u64);
+    }
+
+    #[test]
+    fn test_add_returns_true_only_when_register_changes() {
+        let mut hll = HyperLogLog::new();
+        let item = Bytes::from_static(b"flip-flop");
+        // First add always returns true (register goes from 0 to rho).
+        assert!(hll.add(&item, 0));
+        // Second add of the same item: rho cannot exceed existing, so false.
+        assert!(!hll.add(&item, 0));
+        // Third add: still false.
+        assert!(!hll.add(&item, 0));
+    }
+
+    #[test]
+    fn test_merge_never_decreases_count() {
+        let mut rng_a = HyperLogLog::new();
+        let mut rng_b = HyperLogLog::new();
+        for i in 0..1000 {
+            rng_a.add(&Bytes::from(format!("a-{i}")), 0);
+            rng_b.add(&Bytes::from(format!("b-{i}")), 0);
+        }
+        let count_a = rng_a.count();
+        let count_b = rng_b.count();
+        let count_before_merge = count_a.max(count_b);
+        rng_a.merge(&rng_b);
+        assert!(
+            rng_a.count() >= count_before_merge,
+            "merge must not decrease the count"
+        );
+    }
+
+    #[test]
+    fn test_large_cardinality_estimate_is_reasonable() {
+        let mut hll = HyperLogLog::new();
+        for i in 0..100_000 {
+            hll.add(&Bytes::from(format!("big-{i}")), 0);
+        }
+        let estimate = hll.count();
+        // For 100k items with m=16384 registers, relative error should be small.
+        let error = (estimate as f64 - 100_000.0).abs() / 100_000.0;
+        assert!(
+            error < 0.05,
+            "estimate {estimate} has error {error:.4} (>5%) for 100k items"
+        );
+    }
+
+    #[test]
+    fn test_empty_hll_has_zero_registers() {
+        let hll = HyperLogLog::new();
+        assert!(hll.registers.iter().all(|&r| r == 0));
+    }
+
+    #[test]
+    fn test_serialize_roundtrip_preserves_registers() {
+        let mut hll = HyperLogLog::new();
+        for i in 0..2000 {
+            hll.add(&Bytes::from(format!("round-{i}")), 0);
+        }
+        let bytes = hll.serialize();
+        let restored = HyperLogLog::deserialize(&bytes).unwrap();
+        assert_eq!(restored.registers, hll.registers);
+        assert_eq!(restored.count(), hll.count());
     }
 }
